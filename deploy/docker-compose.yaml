@@ -31,7 +31,7 @@ services:
     depends_on:
       - sing-box-configurer
     volumes:
-      - ./sing-box.config.json:/etc/sing-box/config.json
+      - ./sing-box.json:/etc/sing-box/config.json
     cap_add:
       - NET_ADMIN
     devices:
