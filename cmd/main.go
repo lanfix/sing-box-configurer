@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -25,7 +26,10 @@ func main() {
 	log.Printf("Rules file: %s", appConfig.RulesPath)
 	log.Printf("Listen address: %s", appConfig.ListenAddr)
 
-	rulesManager := rules.NewManager(appConfig.RulesPath)
+	rulesManager, err := rules.NewManager(appConfig.RulesPath, appConfig.SourceListsProxyUrl)
+	if err != nil {
+		log.Fatal(fmt.Errorf("failed to initialize rules manager: %w", err))
+	}
 
 	if err := rulesManager.Load(); err != nil {
 		log.Printf("Warning: could not load rules: %v", err)

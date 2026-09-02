@@ -3,7 +3,10 @@ package rules
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -53,25 +56,40 @@ type SingBoxRuleSet struct {
 
 // Manager handles rules operations
 type Manager struct {
-	mu            sync.RWMutex
-	data          RulesData
-	rulesPath     string
-	urlRules      map[string]RuleSet // URL ID -> rules
-	urlRulesMu    sync.RWMutex
-	cancelFuncs   map[string]context.CancelFunc // URL ID -> cancel function
-	cancelFuncsMu sync.Mutex
+	mu               sync.RWMutex
+	data             RulesData
+	rulesPath        string
+	sourceListsProxy func(r *http.Request) (*url.URL, error)
+	urlRules         map[string]RuleSet // URL ID -> rules
+	urlRulesMu       sync.RWMutex
+	cancelFuncs      map[string]context.CancelFunc // URL ID -> cancel function
+	cancelFuncsMu    sync.Mutex
 }
 
-func NewManager(rulesPath string) *Manager {
+func NewManager(rulesPath string, sourceListsProxyUrl string) (*Manager, error) {
+	var sourceListsProxy func(r *http.Request) (*url.URL, error)
+
+	if sourceListsProxyUrl != "" {
+		proxyURL, err := url.Parse(sourceListsProxyUrl)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse source lists proxy url: %w", err)
+		}
+
+		sourceListsProxy = http.ProxyURL(proxyURL)
+
+		log.Printf("using http proxy for source lists: %s", sourceListsProxyUrl)
+	}
+
 	return &Manager{
-		rulesPath:   rulesPath,
-		urlRules:    map[string]RuleSet{},
-		cancelFuncs: map[string]context.CancelFunc{},
+		rulesPath:        rulesPath,
+		sourceListsProxy: sourceListsProxy,
+		urlRules:         map[string]RuleSet{},
+		cancelFuncs:      map[string]context.CancelFunc{},
 		data: RulesData{
 			Rules:      []Rule{},
 			URLSources: []URLSource{},
 		},
-	}
+	}, nil
 }
 
 func (rm *Manager) Load() error {

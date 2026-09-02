@@ -11,6 +11,7 @@ type AppConfig struct {
 	RulesPath           string `json:"rules_path"`
 	ListenAddr          string `json:"listen_addr"`
 	DockerControllerURL string `json:"docker_controller_url"`
+	SourceListsProxyUrl string `json:"source_lists_proxy_url"`
 }
 
 func LoadAppConfig(configPath string) (*AppConfig, error) {
@@ -18,6 +19,7 @@ func LoadAppConfig(configPath string) (*AppConfig, error) {
 		RulesPath:           "rules.json",
 		ListenAddr:          ":8080",
 		DockerControllerURL: "http://127.0.0.1:8081",
+		SourceListsProxyUrl: "",
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -53,6 +55,7 @@ func ParseFlags() (string, *AppConfig) {
 			RulesPath:           "rules.json",
 			ListenAddr:          ":8080",
 			DockerControllerURL: "http://127.0.0.1:8081",
+			SourceListsProxyUrl: "",
 		}
 	}
 

@@ -245,6 +245,9 @@ func (rm *Manager) GatherRuleSetFromURL(url string) (*RuleSet, error) {
 func (rm *Manager) scanAndHandleRowsFromURL(url string, f func(row string) error) error {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy: rm.sourceListsProxy,
+		},
 	}
 
 	resp, err := client.Get(url)

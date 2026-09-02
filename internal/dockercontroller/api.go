@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -38,7 +39,10 @@ func (api *API) doRequest(method, path string, body io.Reader) (*http.Response, 
 	req, err := http.NewRequest(method, api.baseUrl+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create request: %w", err)
+
 	}
+
+	log.Printf("Do request [%s] %s", req.Method, req.URL.String())
 
 	req.Header.Set("Content-Type", "application/json")
 
@@ -64,20 +68,16 @@ func (api *API) RestartContainersByLabels(labels map[string]string) error {
 		_ = resp.Body.Close()
 	}()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+
+		return fmt.Errorf("status code is %d: %s", resp.StatusCode, string(body))
+	}
+
 	var result map[string]interface{}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("cannot decode response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		errorMsg := "unknown error"
-
-		if errVal, ok := result["error"].(string); ok {
-			errorMsg = errVal
-		}
-
-		return fmt.Errorf("restart failed: %s", errorMsg)
 	}
 
 	success, _ := result["success"].(bool)
@@ -88,7 +88,7 @@ func (api *API) RestartContainersByLabels(labels map[string]string) error {
 			errorMsg = errVal
 		}
 
-		return fmt.Errorf("restart failed: %s", errorMsg)
+		return fmt.Errorf("cannot restart containers: %s", errorMsg)
 	}
 
 	return nil

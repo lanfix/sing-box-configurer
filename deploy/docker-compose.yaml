@@ -1,6 +1,6 @@
 services:
   sing-box-configurer:
-    image: docker.io/lanfix/sing-box-configurer:v0.0.3
+    image: docker.io/lanfix/sing-box-configurer:v0.0.7
     container_name: sing-box-configurer
     restart: always
     network_mode: host
