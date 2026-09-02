@@ -1,0 +1,95 @@
+package dockercontroller
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+type API struct {
+	baseUrl string
+	client  *http.Client
+}
+
+func NewAPI(baseUrl string) *API {
+	if strings.HasSuffix(baseUrl, "/") {
+		baseUrl = baseUrl[:len(baseUrl)-1]
+	}
+
+	client := &http.Client{
+		Timeout: time.Second * 30,
+	}
+
+	return &API{
+		baseUrl: baseUrl,
+		client:  client,
+	}
+}
+
+func (api *API) do(req *http.Request) (*http.Response, error) {
+	return api.client.Do(req)
+}
+
+func (api *API) doRequest(method, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, api.baseUrl+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	return api.do(req)
+}
+
+func (api *API) RestartContainersByLabels(labels map[string]string) error {
+	requestBody := map[string]interface{}{
+		"labels": labels,
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("cannot marshal request: %w", err)
+	}
+
+	resp, err := api.doRequest(http.MethodPost, "/api/restart", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("cannot do request: %w", err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	var result map[string]interface{}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("cannot decode response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		errorMsg := "unknown error"
+
+		if errVal, ok := result["error"].(string); ok {
+			errorMsg = errVal
+		}
+
+		return fmt.Errorf("restart failed: %s", errorMsg)
+	}
+
+	success, _ := result["success"].(bool)
+	if !success {
+		errorMsg := "unknown error"
+
+		if errVal, ok := result["error"].(string); ok {
+			errorMsg = errVal
+		}
+
+		return fmt.Errorf("restart failed: %s", errorMsg)
+	}
+
+	return nil
+}

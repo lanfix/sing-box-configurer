@@ -1,0 +1,5 @@
+{
+  "rules_path": "rules.json",
+  "listen_addr": ":8080",
+  "docker_controller_url": "http://127.0.0.1:8081"
+}

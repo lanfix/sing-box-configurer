@@ -5,10 +5,26 @@ services:
     restart: always
     network_mode: host
     environment:
-      - HTTP_PROXY=http://127.0.0.1:1080
+      - HTTP_PROXY=http://172.17.0.1:1080
+    dns:
+      - 172.17.0.1
+    ports:
+      - 8080:8080
     volumes:
-      - ./config.json:/app/config.json:ro
+      - ./sing-box-configurer.json:/app/config.json:ro
       - ./rules.json:/app/rules.json:rw
+    depends_on:
+      - docker-controller
+
+  docker-controller:
+    image: docker.io/lanfix/docker-controller:v0.0.1
+    container_name: docker-controller
+    restart: always
+    ports:
+      - 8081:8081
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker-controller.json:/app/config.json:ro
 
   sing-box:
     image: ghcr.io/sagernet/sing-box:v1.14.0
@@ -16,6 +32,9 @@ services:
     restart: always
     network_mode: host
     command: -D /var/lib/sing-box -C /etc/sing-box/ run
+    labels:
+      - app=sing-box
+      - managed=true
     depends_on:
       - sing-box-configurer
     volumes:

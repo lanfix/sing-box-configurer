@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/lanfix/sing-box-configurer/internal/config"
+	"github.com/lanfix/sing-box-configurer/internal/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
-	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
 
 //go:embed all:static
@@ -33,9 +33,9 @@ func main() {
 
 	rulesManager.StartAllURLSourceUpdates()
 
-	clashApi := singbox.NewClashAPI(appConfig.SingBoxClashAPI)
+	dockerControllerAPI := dockercontroller.NewAPI(appConfig.DockerControllerURL)
 
-	h := handler.NewHandler(rulesManager, clashApi)
+	h := handler.NewHandler(rulesManager, dockerControllerAPI)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {

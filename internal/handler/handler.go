@@ -7,19 +7,20 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+
+	"github.com/lanfix/sing-box-configurer/internal/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
-	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
 
 type Handler struct {
-	rulesManager *rules.Manager
-	clashApi     *singbox.ClashAPI
+	rulesManager        *rules.Manager
+	dockerControllerAPI *dockercontroller.API
 }
 
-func NewHandler(rulesManager *rules.Manager, clashApi *singbox.ClashAPI) *Handler {
+func NewHandler(rulesManager *rules.Manager, dockerControllerAPI *dockercontroller.API) *Handler {
 	return &Handler{
-		rulesManager: rulesManager,
-		clashApi:     clashApi,
+		rulesManager:        rulesManager,
+		dockerControllerAPI: dockerControllerAPI,
 	}
 }
 
@@ -333,13 +334,18 @@ func (h *Handler) GetURLSourceRules(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ReloadSingBox(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-
 		return
 	}
 
-	if err := h.clashApi.ReloadConfig(); err != nil {
-		log.Printf("Error reloading config: %v", err)
-		http.Error(w, "Failed to reload config", http.StatusInternalServerError)
+	// Лейблы с контейнера sing-box, по которым сервис управления контейнерами найдет его и перезапустит.
+	labels := map[string]string{
+		"app":     "sing-box",
+		"managed": "true",
+	}
+
+	if err := h.dockerControllerAPI.RestartContainersByLabels(labels); err != nil {
+		log.Printf("Error restarting sing-box: %v", err)
+		http.Error(w, "Failed to restart sing-box: "+err.Error(), http.StatusInternalServerError)
 
 		return
 	}
