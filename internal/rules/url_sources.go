@@ -284,6 +284,11 @@ func rowHandler(row string, rs *RuleSet) error {
 		return nil
 	}
 
+	// Пропускаем строки для конкретных регионов.
+	if strings.Contains(row, "@") {
+		return nil
+	}
+
 	// Обработка префикса full: (точное совпадение).
 	if strings.HasPrefix(row, "full:") {
 		domain := strings.TrimPrefix(row, "full:")
