@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -278,13 +279,25 @@ func (h *Handler) ValidateURLSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	valid, errMsg, count := h.rulesManager.ValidateURL(req.URL)
+	urlRuleSet, err := h.rulesManager.GatherRuleSetFromURL(req.URL)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"valid": false,
+			"error": err.Error(),
+			"count": 0,
+		})
+
+		return
+	}
+
+	fmt.Printf("%v\n", urlRuleSet)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"valid": valid,
-		"error": errMsg,
-		"count": count,
+		"valid": true,
+		"error": "",
+		"count": urlRuleSet.Total(),
 	})
 }
 
@@ -300,10 +313,16 @@ func (h *Handler) GetURLSourceRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rules := h.rulesManager.GetURLSourceRules(sourceID)
+	ruleSet, err := h.rulesManager.GetURLSourceRuleSet(sourceID)
+	if err != nil {
+		http.Error(w, "Error happened: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"rules": rules,
+		"cidrList":       ruleSet.CidrList,
+		"domains":        ruleSet.Domains,
+		"domainSuffixes": ruleSet.DomainSuffixes,
 	})
 }

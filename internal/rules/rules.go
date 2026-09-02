@@ -20,7 +20,7 @@ type Rule struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// URLSource represents a URL source for IP/CIDR lists
+// URLSource represents a URL source for rule lists
 type URLSource struct {
 	ID          string    `json:"id"`
 	URL         string    `json:"url"`
@@ -29,7 +29,7 @@ type URLSource struct {
 	LastUpdate  time.Time `json:"last_update"`
 	LastStatus  string    `json:"last_status"` // "success", "error"
 	LastError   string    `json:"last_error,omitempty"`
-	ItemsCount  int       `json:"items_count"`
+	ItemsCount  uint64    `json:"items_count"`
 	Applied     bool      `json:"applied"`
 	Deleted     bool      `json:"deleted"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -56,7 +56,7 @@ type Manager struct {
 	mu            sync.RWMutex
 	data          RulesData
 	rulesPath     string
-	urlRules      map[string][]string // URL ID -> list of IP/CIDR
+	urlRules      map[string]RuleSet // URL ID -> rules
 	urlRulesMu    sync.RWMutex
 	cancelFuncs   map[string]context.CancelFunc // URL ID -> cancel function
 	cancelFuncsMu sync.Mutex
@@ -65,7 +65,7 @@ type Manager struct {
 func NewManager(rulesPath string) *Manager {
 	return &Manager{
 		rulesPath:   rulesPath,
-		urlRules:    map[string][]string{},
+		urlRules:    map[string]RuleSet{},
 		cancelFuncs: map[string]context.CancelFunc{},
 		data: RulesData{
 			Rules:      []Rule{},
@@ -205,11 +205,13 @@ func (rm *Manager) GetRuleSet() SingBoxRuleSet {
 	// Sources marked as Deleted but Applied should still be included until changes are applied
 	rm.urlRulesMu.RLock()
 
-	for sourceID, items := range rm.urlRules {
-		// Check if this URL source is applied (regardless of Deleted flag)
+	for sourceID, ruleSet := range rm.urlRules {
 		for _, source := range rm.data.URLSources {
 			if source.ID == sourceID && source.Applied {
-				ipCidrs = append(ipCidrs, items...)
+				ipCidrs = append(ipCidrs, ruleSet.CidrList...)
+				domains = append(domains, ruleSet.Domains...)
+				domainSuffixes = append(domainSuffixes, ruleSet.DomainSuffixes...)
+
 				break
 			}
 		}

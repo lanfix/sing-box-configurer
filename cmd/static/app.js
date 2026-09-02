@@ -313,7 +313,7 @@ async function validateURL() {
         const data = await response.json();
         
         if (data.valid) {
-            showMessage(`URL валидный! Найдено ${data.count} IP/CIDR адресов`, 'success');
+            showMessage(`URL валидный! Найдено ${data.count} правил`, 'success');
         } else {
             showMessage(`Ошибка валидации: ${data.error}`, 'error');
         }
@@ -403,20 +403,37 @@ async function viewURLSourceRules(id) {
     try {
         const response = await fetch(`/api/url-sources/rules?id=${id}`);
         const data = await response.json();
-        
-        const rules = data.rules || [];
-        if (rules.length === 0) {
+
+        const cidrList = data.cidrList || [];
+        const domains = data.domains || [];
+        const domainSuffixes = data.domainSuffixes || []
+
+        if (cidrList.length === 0 && domains.length === 0 && domainSuffixes.length === 0) {
             showMessage('Нет загруженных правил для этого источника', 'error');
             return;
         }
-        
-        const rulesText = rules.join('\n');
+
+        const cidrListText = cidrList.join('\n');
+        const domainsText = domains.join('\n');
+        const domainSuffixesText = domainSuffixes.join('\n');
+
         const modal = `
             <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;" onclick="this.remove()">
                 <div style="background: white; padding: 20px; border-radius: 8px; max-width: 600px; max-height: 80vh; overflow: auto;" onclick="event.stopPropagation()">
-                    <h3>Загруженные правила (${rules.length})</h3>
-                    <pre style="background: #f5f5f5; padding: 15px; border-radius: 4px; overflow: auto; max-height: 400px;">${rulesText}</pre>
-                    <button class="btn btn-primary" onclick="this.closest('div[style*=fixed]').remove()">Закрыть</button>
+                    <h3>Загруженные правила</h3>
+                    <div style="display: ${cidrList.length===0?"none":"block"}">
+                        <h5 style="margin-top: 10px;">Префиксы CIDR (${cidrList.length})</h5>
+                        <pre style="margin-top: 5px; background: #f5f5f5; padding: 15px; border-radius: 4px; overflow: auto; max-height: 400px;">${cidrListText}</pre>
+                    </div>
+                    <div style="display: ${domains.length===0?"none":"block"}">
+                        <h5 style="margin-top: 10px;">Конкретные домены (${domains.length})</h5>
+                        <pre style="margin-top: 5px; background: #f5f5f5; padding: 15px; border-radius: 4px; overflow: auto; max-height: 400px;">${domainsText}</pre>
+                    </div>
+                    <div style="display: ${domainSuffixes.length===0?"none":"block"}">
+                        <h5 style="margin-top: 10px;">Суффиксы доменов (${domainSuffixes.length})</h5>
+                        <pre style="margin-top: 5px; background: #f5f5f5; padding: 15px; border-radius: 4px; overflow: auto; max-height: 400px;">${domainSuffixesText}</pre>
+                    </div>
+                    <button style="margin-top: 10px;" class="btn btn-primary" onclick="this.closest('div[style*=fixed]').remove()">Закрыть</button>
                 </div>
             </div>
         `;

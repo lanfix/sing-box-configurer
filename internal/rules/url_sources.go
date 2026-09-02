@@ -82,16 +82,16 @@ func (rm *Manager) ApplyURLSources() error {
 	return rm.save()
 }
 
-// GetURLSourceRules returns the rules loaded from a specific URL source
-func (rm *Manager) GetURLSourceRules(sourceID string) []string {
+// GetURLSourceRuleSet возвращает набор правил для указанного источника.
+func (rm *Manager) GetURLSourceRuleSet(sourceID string) (*RuleSet, error) {
 	rm.urlRulesMu.RLock()
 	defer rm.urlRulesMu.RUnlock()
 
-	if rules, exists := rm.urlRules[sourceID]; exists {
-		return append([]string{}, rules...) // return a copy
+	if ruleSet, exists := rm.urlRules[sourceID]; exists {
+		return &ruleSet, nil
 	}
 
-	return []string{}
+	return nil, fmt.Errorf("cannot find rule set for source %s", sourceID)
 }
 
 // stopURLSourceUpdates stops the periodic update goroutine for a URL source
@@ -127,8 +127,7 @@ func (rm *Manager) startURLSourceUpdates(source URLSource) {
 	rm.cancelFuncs[source.ID] = cancel
 	rm.cancelFuncsMu.Unlock()
 
-	// Fetch immediately
-	rm.fetchURLSource(source.ID)
+	rm.fetchRulesFromSource(source.ID)
 
 	ticker := time.NewTicker(time.Duration(source.Interval) * time.Minute)
 	defer ticker.Stop()
@@ -137,14 +136,15 @@ func (rm *Manager) startURLSourceUpdates(source URLSource) {
 		select {
 		case <-ctx.Done():
 			return
+
 		case <-ticker.C:
-			rm.fetchURLSource(source.ID)
+			rm.fetchRulesFromSource(source.ID)
 		}
 	}
 }
 
-// fetchURLSource fetches IP/CIDR list from URL
-func (rm *Manager) fetchURLSource(sourceID string) {
+// fetchRulesFromSource получает правила из источника и сохраняет их.
+func (rm *Manager) fetchRulesFromSource(sourceID string) {
 	rm.mu.Lock()
 
 	var source *URLSource
@@ -165,69 +165,33 @@ func (rm *Manager) fetchURLSource(sourceID string) {
 
 	log.Printf("Fetching URL source: %s (%s)", source.Description, source.URL)
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-		},
+	ruleSet := RuleSet{
+		CidrList:       make([]string, 0),
+		Domains:        make([]string, 0),
+		DomainSuffixes: make([]string, 0),
 	}
 
-	resp, err := client.Get(source.URL)
-	if err != nil {
-		rm.updateURLSourceStatus(sourceID, "error", err.Error(), 0)
-		log.Printf("Error fetching URL source %s: %v", source.Description, err)
+	handler := func(row string) error {
+		return rowHandler(row, &ruleSet)
+	}
+
+	if err := rm.scanAndHandleRowsFromURL(source.URL, handler); err != nil {
+		log.Printf("Error scanning and handling URL source %s: %s", source.URL, err)
 
 		return
 	}
 
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		errMsg := fmt.Sprintf("HTTP %d", resp.StatusCode)
-		rm.updateURLSourceStatus(sourceID, "error", errMsg, 0)
-		log.Printf("Error fetching URL source %s: %s", source.Description, errMsg)
-
-		return
-	}
-
-	var ipCidrList []string
-
-	scanner := bufio.NewScanner(resp.Body)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
-			continue
-		}
-
-		// Validate IP or CIDR
-		if isValidIPOrCIDR(line) {
-			ipCidrList = append(ipCidrList, line)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		rm.updateURLSourceStatus(sourceID, "error", err.Error(), 0)
-		log.Printf("Error reading URL source %s: %v", source.Description, err)
-		return
-	}
-
-	// Update in-memory rules
 	rm.urlRulesMu.Lock()
-	rm.urlRules[sourceID] = ipCidrList
+	rm.urlRules[sourceID] = ruleSet
 	rm.urlRulesMu.Unlock()
 
-	// Update status
-	rm.updateURLSourceStatus(sourceID, "success", "", len(ipCidrList))
-	log.Printf("Successfully fetched %d items from URL source: %s", len(ipCidrList), source.Description)
+	rm.updateURLSourceStatus(sourceID, "success", "", ruleSet.Total())
+
+	log.Printf("Successfully fetched %d items from URL source: %s", ruleSet.Total(), source.Description)
 }
 
 // updateURLSourceStatus updates the status of a URL source
-func (rm *Manager) updateURLSourceStatus(sourceID, status, errorMsg string, count int) {
+func (rm *Manager) updateURLSourceStatus(sourceID, status, errorMsg string, count uint64) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -237,38 +201,55 @@ func (rm *Manager) updateURLSourceStatus(sourceID, status, errorMsg string, coun
 			rm.data.URLSources[i].LastStatus = status
 			rm.data.URLSources[i].LastError = errorMsg
 			rm.data.URLSources[i].ItemsCount = count
+
 			break
 		}
 	}
 
-	// Save updated status
-	rm.save()
-}
-
-// isValidIPOrCIDR validates if a string is a valid IP address or CIDR
-func isValidIPOrCIDR(s string) bool {
-	// Try parsing as CIDR
-	if _, _, err := net.ParseCIDR(s); err == nil {
-		return true
+	if err := rm.save(); err != nil {
+		log.Printf("Error updating URL source status for %s: %s", sourceID, err)
 	}
 
-	// Try parsing as IP
-	if net.ParseIP(s) != nil {
-		return true
-	}
-
-	return false
 }
 
-// ValidateURL validates if a URL is accessible and returns valid IP/CIDR list
-func (rm *Manager) ValidateURL(url string) (bool, string, int) {
+type RuleSet struct {
+	CidrList       []string
+	Domains        []string
+	DomainSuffixes []string
+}
+
+// Total возвращает общее количество правил.
+func (rs *RuleSet) Total() uint64 {
+	return uint64(len(rs.CidrList) + len(rs.Domains) + len(rs.DomainSuffixes))
+}
+
+// GatherRuleSetFromURL запрашивает данные по url и собирает их в структуру.
+func (rm *Manager) GatherRuleSetFromURL(url string) (*RuleSet, error) {
+	ruleSet := RuleSet{
+		CidrList:       make([]string, 0),
+		Domains:        make([]string, 0),
+		DomainSuffixes: make([]string, 0),
+	}
+
+	handler := func(row string) error {
+		return rowHandler(row, &ruleSet)
+	}
+
+	if err := rm.scanAndHandleRowsFromURL(url, handler); err != nil {
+		return nil, fmt.Errorf("cannot scan and handle rows from url: %w", err)
+	}
+
+	return &ruleSet, nil
+}
+
+func (rm *Manager) scanAndHandleRowsFromURL(url string, f func(row string) error) error {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return false, err.Error(), 0
+		return fmt.Errorf("cannot get URL source %s: %v", url, err)
 	}
 
 	defer func() {
@@ -276,31 +257,82 @@ func (rm *Manager) ValidateURL(url string) (bool, string, int) {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Sprintf("HTTP %d", resp.StatusCode), 0
+		return fmt.Errorf("status code is %d", resp.StatusCode)
 	}
 
-	validCount := 0
 	scanner := bufio.NewScanner(resp.Body)
 
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		row := strings.TrimSpace(scanner.Text())
 
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
-			continue
-		}
-
-		if isValidIPOrCIDR(line) {
-			validCount++
+		if err := f(row); err != nil {
+			return fmt.Errorf("cannot handle row %s: %v", row, err)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return false, err.Error(), 0
+		return fmt.Errorf("cannot scan rows: %v", err)
 	}
 
-	if validCount == 0 {
-		return false, "No valid IP/CIDR found", 0
+	return nil
+}
+
+func rowHandler(row string, rs *RuleSet) error {
+	row = strings.TrimSpace(row)
+
+	if row == "" || strings.HasPrefix(row, "#") || strings.HasPrefix(row, "//") {
+		return nil
 	}
 
-	return true, "", validCount
+	// Обработка префикса full: (точное совпадение).
+	if strings.HasPrefix(row, "full:") {
+		domain := strings.TrimPrefix(row, "full:")
+		domain = strings.TrimSpace(domain)
+
+		if domain != "" {
+			rs.Domains = append(rs.Domains, domain)
+
+			return nil
+		}
+	}
+
+	// Обработка CIDR префикса.
+	if strings.Contains(row, "/") {
+		if _, _, err := net.ParseCIDR(row); err == nil {
+			rs.CidrList = append(rs.CidrList, row)
+		}
+
+		// Выходим даже если CIDR не добавился в список.
+		return nil
+	}
+
+	// Обработка одиночного IP адреса.
+	if ip := net.ParseIP(row); ip != nil {
+		rs.CidrList = append(rs.CidrList, row+"/32")
+
+		return nil
+	}
+
+	// Начинается с точки - это суффикс (все поддомены).
+	// Пример: ".google.com" -> все поддомены google.com.
+	if strings.HasPrefix(row, ".") {
+		suffix := strings.TrimPrefix(row, ".")
+		suffix = strings.TrimSpace(suffix)
+
+		if suffix != "" {
+			rs.DomainSuffixes = append(rs.DomainSuffixes, suffix)
+		}
+
+		// Выходим даже есть домен не добавился.
+		return nil
+	}
+
+	// Обычный домен - добавляем как суффикс для поддоменов.
+	if strings.Contains(row, ".") {
+		rs.DomainSuffixes = append(rs.DomainSuffixes, row)
+
+		return nil
+	}
+
+	return nil
 }
