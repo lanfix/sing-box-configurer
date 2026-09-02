@@ -40,6 +40,8 @@ function switchTab(tabName) {
         loadURLSources();
         // Start auto-refresh for URL sources (every 5 seconds)
         autoRefreshInterval = setInterval(loadURLSources, 5000);
+    } else if (tabName === 'control') {
+        // No auto-refresh needed for control tab
     }
 }
 
@@ -65,6 +67,8 @@ function restoreActiveTab() {
             loadURLSources();
             // Start auto-refresh
             autoRefreshInterval = setInterval(loadURLSources, 5000);
+        } else if (savedTab === 'control') {
+            // No auto-refresh needed for control tab
         }
     }
 }
@@ -440,6 +444,41 @@ async function viewURLSourceRules(id) {
         document.body.insertAdjacentHTML('beforeend', modal);
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+// Control functions
+
+async function reloadSingBox() {
+    const btn = document.getElementById('reloadBtn');
+    const statusDiv = document.getElementById('reloadStatus');
+    
+    btn.disabled = true;
+    btn.textContent = '⏳ Перезагрузка...';
+    statusDiv.textContent = '';
+    statusDiv.className = 'reload-status';
+    
+    try {
+        const response = await fetch('/api/control/reload', {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            showMessage('Sing-Box успешно перезагружен', 'success');
+            statusDiv.textContent = '✅ ' + data.message;
+            statusDiv.className = 'reload-status success';
+        } else {
+            throw new Error(data.error || 'Ошибка перезагрузки');
+        }
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+        statusDiv.textContent = '❌ Ошибка: ' + error.message;
+        statusDiv.className = 'reload-status error';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔄 Перезагрузить Sing-Box';
     }
 }
 

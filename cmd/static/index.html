@@ -17,6 +17,7 @@
         <div class="tabs">
             <button class="tab-btn active" onclick="switchTab('rules')">Правила</button>
             <button class="tab-btn" onclick="switchTab('url-sources')">URL Источники</button>
+            <button class="tab-btn" onclick="switchTab('control')">Управление</button>
         </div>
         
         <!-- Rules Tab -->
@@ -130,6 +131,27 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Control Tab -->
+        <div id="control-tab" class="tab-content">
+            <div class="control-section">
+                <h2 style="margin-bottom: 15px; color: #333;">Управление Sing-Box</h2>
+                <p style="color: #666; margin-bottom: 20px;">Используйте эту панель для управления сервисом Sing-Box.</p>
+                
+                <div class="control-card">
+                    <div class="control-card-header">
+                        <h3>🔄 Перезагрузка конфигурации</h3>
+                    </div>
+                    <div class="control-card-body">
+                        <p>Перезагрузить конфигурацию Sing-Box без перезапуска сервиса. Это применит все изменения правил маршрутизации.</p>
+                        <button id="reloadBtn" class="btn btn-primary" onclick="reloadSingBox()" style="margin-top: 15px;">
+                            🔄 Перезагрузить Sing-Box
+                        </button>
+                        <div id="reloadStatus" class="reload-status"></div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

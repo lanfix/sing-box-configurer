@@ -8,26 +8,27 @@ import (
 
 // AppConfig represents the application configuration
 type AppConfig struct {
-	RulesPath  string `json:"rules_path"`
-	ListenAddr string `json:"listen_addr"`
+	RulesPath       string `json:"rules_path"`
+	ListenAddr      string `json:"listen_addr"`
+	SingBoxClashAPI string `json:"singbox_clash_api"`
 }
 
 func LoadAppConfig(configPath string) (*AppConfig, error) {
-	// Default configuration
 	config := &AppConfig{
-		RulesPath:  "rules.json",
-		ListenAddr: ":8080",
+		RulesPath:       "rules.json",
+		ListenAddr:      ":8080",
+		SingBoxClashAPI: "http://127.0.0.1:9090",
 	}
 
-	// Try to load from file
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Create default config file
 			data, _ := json.MarshalIndent(config, "", "  ")
 			os.WriteFile(configPath, data, 0644)
+
 			return config, nil
 		}
+
 		return nil, err
 	}
 
@@ -49,8 +50,9 @@ func ParseFlags() (string, *AppConfig) {
 	config, err := LoadAppConfig(*configPath)
 	if err != nil {
 		config = &AppConfig{
-			RulesPath:  "rules.json",
-			ListenAddr: ":8080",
+			RulesPath:       "rules.json",
+			ListenAddr:      ":8080",
+			SingBoxClashAPI: "http://127.0.0.1:9090",
 		}
 	}
 

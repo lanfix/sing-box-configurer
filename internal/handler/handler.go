@@ -8,17 +8,20 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
+	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
 
 type Handler struct {
 	rulesManager *rules.Manager
+	clashApi     *singbox.ClashAPI
 }
 
-func NewHandler(rulesManager *rules.Manager) *Handler {
-	return &Handler{rulesManager: rulesManager}
+func NewHandler(rulesManager *rules.Manager, clashApi *singbox.ClashAPI) *Handler {
+	return &Handler{
+		rulesManager: rulesManager,
+		clashApi:     clashApi,
+	}
 }
-
-// Rules endpoints
 
 func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -324,5 +327,27 @@ func (h *Handler) GetURLSourceRules(w http.ResponseWriter, r *http.Request) {
 		"cidrList":       ruleSet.CidrList,
 		"domains":        ruleSet.Domains,
 		"domainSuffixes": ruleSet.DomainSuffixes,
+	})
+}
+
+func (h *Handler) ReloadSingBox(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	if err := h.clashApi.ReloadConfig(); err != nil {
+		log.Printf("Error reloading config: %v", err)
+		http.Error(w, "Failed to reload config", http.StatusInternalServerError)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Sing-box перезагружен успешно",
 	})
 }

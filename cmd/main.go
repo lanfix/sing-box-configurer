@@ -11,6 +11,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/config"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
+	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
 
 //go:embed all:static
@@ -32,7 +33,9 @@ func main() {
 
 	rulesManager.StartAllURLSourceUpdates()
 
-	h := handler.NewHandler(rulesManager)
+	clashApi := singbox.NewClashAPI(appConfig.SingBoxClashAPI)
+
+	h := handler.NewHandler(rulesManager, clashApi)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -76,7 +79,10 @@ func main() {
 	http.HandleFunc("/api/url-sources/validate", h.ValidateURLSource)
 	http.HandleFunc("/api/url-sources/rules", h.GetURLSourceRules)
 
+	http.HandleFunc("/api/control/reload", h.ReloadSingBox)
+
 	log.Printf("Server started on %s", appConfig.ListenAddr)
+
 	if err := http.ListenAndServe(appConfig.ListenAddr, nil); err != nil {
 		log.Fatal(err)
 	}
