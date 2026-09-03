@@ -700,41 +700,81 @@ function renderHighlight() {
     renderGutter(newLen);
 }
 
-// Вычисляет LCS (longest common subsequence) diff между двумя массивами строк.
-// Возвращает массив операций: { type: 'equal'|'insert'|'delete'|'modify', oldIndex, newIndex }
-function computeLCS(oldLines, newLines) {
+// Вычисляет Myers diff между двумя массивами строк.
+// Возвращает массив операций: { type: 'equal'|'insert'|'delete', oldIndex, newIndex }
+function computeMyersDiff(oldLines, newLines) {
     const m = oldLines.length;
     const n = newLines.length;
+    const max = m + n;
+    const v = {};
+    const trace = [];
     
-    // DP таблица для LCS длин
-    const dp = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0));
+    v[1] = 0;
     
-    for (let i = 1; i <= m; i++) {
-        for (let j = 1; j <= n; j++) {
-            if (oldLines[i - 1] === newLines[j - 1]) {
-                dp[i][j] = dp[i - 1][j - 1] + 1;
+    for (let d = 0; d <= max; d++) {
+        trace.push({ ...v });
+        
+        for (let k = -d; k <= d; k += 2) {
+            let x;
+            
+            if (k === -d || (k !== d && v[k - 1] < v[k + 1])) {
+                x = v[k + 1];
             } else {
-                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+                x = v[k - 1] + 1;
+            }
+            
+            let y = x - k;
+            
+            while (x < m && y < n && oldLines[x] === newLines[y]) {
+                x++;
+                y++;
+            }
+            
+            v[k] = x;
+            
+            if (x >= m && y >= n) {
+                // Найден путь, восстанавливаем diff.
+                return backtrackMyersDiff(oldLines, newLines, trace, m, n);
             }
         }
     }
     
-    // Восстанавливаем diff
+    return [];
+}
+
+function backtrackMyersDiff(oldLines, newLines, trace, m, n) {
     const diff = [];
-    let i = m;
-    let j = n;
+    let x = m;
+    let y = n;
     
-    while (i > 0 || j > 0) {
-        if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-            diff.push({ type: 'equal', oldIndex: i - 1, newIndex: j - 1 });
-            i--;
-            j--;
-        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-            diff.push({ type: 'insert', newIndex: j - 1 });
-            j--;
-        } else if (i > 0) {
-            diff.push({ type: 'delete', oldIndex: i - 1 });
-            i--;
+    for (let d = trace.length - 1; d >= 0; d--) {
+        const v = trace[d];
+        const k = x - y;
+        
+        let prevK;
+        if (k === -d || (k !== d && v[k - 1] < v[k + 1])) {
+            prevK = k + 1;
+        } else {
+            prevK = k - 1;
+        }
+        
+        const prevX = v[prevK];
+        const prevY = prevX - prevK;
+        
+        while (x > prevX && y > prevY) {
+            diff.push({ type: 'equal', oldIndex: x - 1, newIndex: y - 1 });
+            x--;
+            y--;
+        }
+        
+        if (d > 0) {
+            if (x === prevX) {
+                diff.push({ type: 'insert', newIndex: y - 1 });
+                y--;
+            } else {
+                diff.push({ type: 'delete', oldIndex: x - 1 });
+                x--;
+            }
         }
     }
     
@@ -750,7 +790,7 @@ function computeDiffHunks() {
     const hunks = [];
     let hunkId = 0;
     
-    const diff = computeLCS(original, current);
+    const diff = computeMyersDiff(original, current);
     
     let i = 0;
     let lastEqualNewIndex = -1;
@@ -767,6 +807,7 @@ function computeDiffHunks() {
         const deleteOps = [];
         const insertOps = [];
         
+        // Собираем все операции до следующего equal.
         while (i < diff.length && diff[i].type !== 'equal') {
             if (diff[i].type === 'delete') {
                 deleteOps.push(diff[i]);
@@ -776,7 +817,7 @@ function computeDiffHunks() {
             i++;
         }
         
-        // Если есть и удаления, и добавления - это modified.
+        // Если есть и удаления, и добавления в одном блоке - это modified.
         if (deleteOps.length > 0 && insertOps.length > 0) {
             const startLine = insertOps[0].newIndex;
             const endLine = insertOps[insertOps.length - 1].newIndex;
@@ -790,7 +831,6 @@ function computeDiffHunks() {
                 insertOps
             });
         } else if (insertOps.length > 0) {
-            // Только добавления.
             const startLine = insertOps[0].newIndex;
             const endLine = insertOps[insertOps.length - 1].newIndex;
             
@@ -803,7 +843,6 @@ function computeDiffHunks() {
                 insertOps
             });
         } else if (deleteOps.length > 0) {
-            // Только удаления.
             if (lastEqualNewIndex >= 0 && lastEqualNewIndex < current.length) {
                 hunks.push({
                     startLine: lastEqualNewIndex,
@@ -817,41 +856,7 @@ function computeDiffHunks() {
         }
     }
     
-    // Объединяем смежные deleted и added в modified.
-    const mergedHunks = [];
-    for (let i = 0; i < hunks.length; i++) {
-        const current = hunks[i];
-        const next = hunks[i + 1];
-        
-        // Если текущий deleted и следующий added, и они смежные - объединяем.
-        if (current.type === 'deleted' && next && next.type === 'added') {
-            // Проверяем смежность: added должен начинаться сразу после deleted.
-            // deleted.startLine - это позиция индикатора (lastEqualNewIndex)
-            // added.startLine - это первая добавленная строка
-            // Объединяем, если added начинается на следующей строке после deleted.
-            if (next.startLine === current.startLine + 1) {
-                mergedHunks.push({
-                    startLine: next.startLine,
-                    endLine: next.endLine,
-                    type: 'modified',
-                    hunkId: current.hunkId,
-                    deleteOps: current.deleteOps,
-                    insertOps: next.insertOps
-                });
-                i++; // Пропускаем next, так как уже объединили.
-                continue;
-            }
-        }
-        
-        mergedHunks.push(current);
-    }
-    
-    // Переназначаем hunkId после объединения.
-    mergedHunks.forEach((hunk, index) => {
-        hunk.hunkId = index;
-    });
-    
-    return mergedHunks;
+    return hunks;
 }
 
 // Вычисляет diff между оригиналом и текущим содержимым.
@@ -1281,6 +1286,28 @@ function handleGutterClick(e) {
     showDiffPopup(hunk, target);
 }
 
+// Получает оригинальный контент для hunk.
+function getOriginalContent(hunk, originalLines) {
+    if (hunk.type === 'deleted') {
+        return hunk.deleteOps.map(op => originalLines[op.oldIndex]);
+    } else if (hunk.type === 'modified') {
+        // Для modified берём диапазон по позициям insertOps в оригинале.
+        if (hunk.insertOps.length > 0) {
+            const firstInsertLine = Math.min(...hunk.insertOps.map(op => op.newIndex));
+            const lastInsertLine = Math.max(...hunk.insertOps.map(op => op.newIndex));
+            const insertCount = lastInsertLine - firstInsertLine + 1;
+            
+            // Берём из оригинала insertCount строк, начиная с firstInsertLine.
+            const lines = [];
+            for (let i = firstInsertLine; i < firstInsertLine + insertCount && i < originalLines.length; i++) {
+                lines.push(originalLines[i]);
+            }
+            return lines;
+        }
+    }
+    return [];
+}
+
 function showDiffPopup(hunk, targetElement) {
     const st = editorState;
     const originalLines = st.originalConfig.split('\n');
@@ -1295,14 +1322,15 @@ function showDiffPopup(hunk, targetElement) {
     let showContent = true;
     
     if (hunk.type === 'deleted') {
-        originalContent = hunk.deleteOps.map(op => originalLines[op.oldIndex]).join('\n');
+        const lines = getOriginalContent(hunk, originalLines);
+        originalContent = lines.join('\n');
     } else if (hunk.type === 'added') {
         // Для added показываем текущий код, который будет удалён.
         originalContent = hunk.insertOps.map(op => currentLines[op.newIndex]).join('\n');
         showContent = false;
     } else if (hunk.type === 'modified') {
-        const matchedCount = Math.min(hunk.deleteOps.length, hunk.insertOps.length);
-        originalContent = hunk.deleteOps.slice(0, matchedCount).map(op => originalLines[op.oldIndex]).join('\n');
+        const lines = getOriginalContent(hunk, originalLines);
+        originalContent = lines.join('\n');
     }
     
     if (!originalContent) {
@@ -1384,16 +1412,24 @@ function revertHunk(hunk) {
     
     if (hunk.type === 'deleted') {
         // Восстанавливаем удалённые строки после startLine.
-        const deletedContent = hunk.deleteOps.map(op => originalLines[op.oldIndex]);
-        currentLines.splice(hunk.startLine + 1, 0, ...deletedContent);
+        const lines = getOriginalContent(hunk, originalLines);
+        currentLines.splice(hunk.startLine + 1, 0, ...lines);
     } else if (hunk.type === 'added') {
         // Удаляем добавленные строки.
         currentLines.splice(hunk.startLine, hunk.endLine - hunk.startLine + 1);
     } else if (hunk.type === 'modified') {
-        // Для modified: удаляем текущие строки и вставляем оригинальные.
-        const deleteCount = hunk.endLine - hunk.startLine + 1;
-        const originalContent = hunk.deleteOps.map(op => originalLines[op.oldIndex]);
-        currentLines.splice(hunk.startLine, deleteCount, ...originalContent);
+        // Для modified: заменяем диапазон insertOps на оригинальные строки.
+        if (hunk.insertOps.length > 0) {
+            const firstInsertLine = Math.min(...hunk.insertOps.map(op => op.newIndex));
+            const lastInsertLine = Math.max(...hunk.insertOps.map(op => op.newIndex));
+            const currentCount = lastInsertLine - firstInsertLine + 1;
+            
+            // Получаем оригинальные строки той же функцией, что и для отображения.
+            const originalContent = getOriginalContent(hunk, originalLines);
+            
+            // Удаляем currentCount строк и вставляем оригинальные.
+            currentLines.splice(firstInsertLine, currentCount, ...originalContent);
+        }
     }
     
     const newValue = currentLines.join('\n');
@@ -1417,7 +1453,7 @@ function revertDiff(lineIndex, diffType) {
         currentLines.splice(lineIndex, 1);
     } else if (diffType === 'deleted') {
         // Восстановить удалённые строки после lineIndex
-        const diff = computeLCS(originalLines, currentLines);
+        const diff = computeMyersDiff(originalLines, currentLines);
         const deletedLines = [];
         
         let foundBlock = false;
