@@ -40,6 +40,8 @@ function switchTab(tabName) {
         loadURLSources();
         // Start auto-refresh for URL sources (every 5 seconds)
         autoRefreshInterval = setInterval(loadURLSources, 5000);
+    } else if (tabName === 'config') {
+        loadConfig();
     } else if (tabName === 'control') {
         // No auto-refresh needed for control tab
     }
@@ -67,6 +69,8 @@ function restoreActiveTab() {
             loadURLSources();
             // Start auto-refresh
             autoRefreshInterval = setInterval(loadURLSources, 5000);
+        } else if (savedTab === 'config') {
+            loadConfig();
         } else if (savedTab === 'control') {
             // No auto-refresh needed for control tab
         }
@@ -484,3 +488,180 @@ async function reloadSingBox() {
 
 // Load rules on page load
 restoreActiveTab();
+
+// Config Editor functionality
+let originalConfig = '';
+let currentConfig = '';
+let hasPendingChanges = false;
+
+function updateLineNumbers() {
+    const editor = document.getElementById('configEditor');
+    const lineNumbers = document.getElementById('lineNumbers');
+    if (!editor || !lineNumbers) return;
+    
+    const lines = editor.value.split('\n');
+    const numbers = lines.map((_, i) => i + 1).join('\n');
+    lineNumbers.textContent = numbers;
+}
+
+function updateConfigButtons() {
+    const saveBtn = document.getElementById('saveConfigBtn');
+    const applyBtn = document.getElementById('applyConfigBtn');
+    const discardBtn = document.getElementById('discardConfigBtn');
+    const statusSpan = document.getElementById('configStatus');
+    
+    if (!saveBtn || !applyBtn || !discardBtn || !statusSpan) return;
+    
+    const editor = document.getElementById('configEditor');
+    const isModified = editor && editor.value !== originalConfig;
+    
+    saveBtn.disabled = !isModified;
+    discardBtn.disabled = !isModified && !hasPendingChanges;
+    applyBtn.disabled = !hasPendingChanges;
+    
+    if (hasPendingChanges) {
+        statusSpan.textContent = '⚠️ Есть несохраненные изменения';
+        statusSpan.className = 'config-status saved';
+    } else if (isModified) {
+        statusSpan.textContent = '✏️ Редактируется';
+        statusSpan.className = 'config-status modified';
+    } else {
+        statusSpan.textContent = '';
+        statusSpan.className = 'config-status';
+    }
+}
+
+async function loadConfig() {
+    try {
+        const response = await fetch('/api/config/get');
+        const data = await response.json();
+        
+        const editor = document.getElementById('configEditor');
+        if (!editor) return;
+        
+        // Pretty print JSON
+        try {
+            const parsed = JSON.parse(data.config);
+            const formatted = JSON.stringify(parsed, null, 2);
+            editor.value = formatted;
+            originalConfig = formatted;
+            currentConfig = formatted;
+        } catch (e) {
+            editor.value = data.config;
+            originalConfig = data.config;
+            currentConfig = data.config;
+        }
+        
+        hasPendingChanges = data.hasPending || false;
+        
+        updateLineNumbers();
+        updateConfigButtons();
+        
+        // Add scroll sync
+        editor.addEventListener('scroll', () => {
+            const lineNumbers = document.getElementById('lineNumbers');
+            if (lineNumbers) {
+                lineNumbers.scrollTop = editor.scrollTop;
+            }
+        });
+        
+        // Add input listener
+        editor.addEventListener('input', () => {
+            updateLineNumbers();
+            updateConfigButtons();
+        });
+        
+    } catch (error) {
+        showMessage('Ошибка загрузки конфига: ' + error.message, 'error');
+    }
+}
+
+async function saveTempConfig() {
+    const editor = document.getElementById('configEditor');
+    if (!editor) return;
+    
+    const config = editor.value;
+    
+    // Validate JSON
+    try {
+        JSON.parse(config);
+    } catch (e) {
+        showMessage('Ошибка: некорректный JSON - ' + e.message, 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/config/save-temp', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ config })
+        });
+        
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.error || 'Ошибка при сохранении');
+        }
+        
+        showMessage('Конфиг сохранен временно. Нажмите "Применить" для активации.', 'success');
+        originalConfig = config;
+        hasPendingChanges = true;
+        updateConfigButtons();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function applyConfig() {
+    if (!confirm('Применить изменения и перезагрузить Sing-Box?\n\nТекущие соединения могут быть разорваны.')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/config/apply', {
+            method: 'POST'
+        });
+        
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.error || 'Ошибка при применении');
+        }
+        
+        const data = await response.json();
+        
+        if (data.warning) {
+            showMessage('⚠️ ' + data.message + ' Предупреждение: ' + data.warning, 'error');
+        } else {
+            showMessage('✅ ' + data.message, 'success');
+        }
+        
+        hasPendingChanges = false;
+        updateConfigButtons();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function discardConfig() {
+    if (!confirm('Отменить все несохраненные изменения?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/config/discard', {
+            method: 'POST'
+        });
+        
+        if (!response.ok) {
+            throw new Error('Ошибка при отмене изменений');
+        }
+        
+        showMessage('Изменения отменены', 'success');
+        
+        // Reload config from server
+        await loadConfig();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}

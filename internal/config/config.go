@@ -12,6 +12,7 @@ type AppConfig struct {
 	ListenAddr          string `json:"listen_addr"`
 	DockerControllerURL string `json:"docker_controller_url"`
 	SourceListsProxyUrl string `json:"source_lists_proxy_url"`
+	SingBoxConfigPath   string `json:"sing_box_config_path"`
 }
 
 func LoadAppConfig(configPath string) (*AppConfig, error) {
@@ -20,6 +21,7 @@ func LoadAppConfig(configPath string) (*AppConfig, error) {
 		ListenAddr:          ":8080",
 		DockerControllerURL: "http://127.0.0.1:8081",
 		SourceListsProxyUrl: "",
+		SingBoxConfigPath:   "/etc/sing-box/config.json",
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -56,6 +58,7 @@ func ParseFlags() (string, *AppConfig) {
 			ListenAddr:          ":8080",
 			DockerControllerURL: "http://127.0.0.1:8081",
 			SourceListsProxyUrl: "",
+			SingBoxConfigPath:   "/etc/sing-box/config.json",
 		}
 	}
 

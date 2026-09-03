@@ -17,6 +17,7 @@
         <div class="tabs">
             <button class="tab-btn active" onclick="switchTab('rules')">Правила</button>
             <button class="tab-btn" onclick="switchTab('url-sources')">URL Источники</button>
+            <button class="tab-btn" onclick="switchTab('config')">Конфиг</button>
             <button class="tab-btn" onclick="switchTab('control')">Управление</button>
         </div>
         
@@ -131,6 +132,34 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Config Tab -->
+        <div id="config-tab" class="tab-content">
+            <div class="config-editor-section">
+                <h2 style="margin-bottom: 15px; color: #333;">Редактор конфигурации Sing-Box</h2>
+                <p style="color: #666; margin-bottom: 20px;">Редактируйте конфигурацию в формате JSON. Изменения сохраняются временно и требуют подтверждения для применения.</p>
+                
+                <div class="config-actions">
+                    <button id="saveConfigBtn" class="btn btn-primary" onclick="saveTempConfig()" disabled>
+                        💾 Сохранить временно
+                    </button>
+                    <button id="applyConfigBtn" class="btn btn-warning" onclick="applyConfig()" disabled>
+                        ✅ Применить и перезагрузить
+                    </button>
+                    <button id="discardConfigBtn" class="btn btn-secondary" onclick="discardConfig()" disabled>
+                        ❌ Отменить изменения
+                    </button>
+                    <span id="configStatus" class="config-status"></span>
+                </div>
+                
+                <div class="editor-container">
+                    <div class="editor-wrapper">
+                        <div class="line-numbers" id="lineNumbers"></div>
+                        <textarea id="configEditor" class="config-editor" spellcheck="false"></textarea>
+                    </div>
+                </div>
             </div>
         </div>
 

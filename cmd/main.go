@@ -13,6 +13,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
+	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
 
 //go:embed all:static
@@ -39,7 +40,9 @@ func main() {
 
 	dockerControllerAPI := dockercontroller.NewAPI(appConfig.DockerControllerURL)
 
-	h := handler.NewHandler(rulesManager, dockerControllerAPI)
+	configManager := singbox.NewConfigManager(appConfig.SingBoxConfigPath)
+
+	h := handler.NewHandler(rulesManager, dockerControllerAPI, configManager)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -84,6 +87,11 @@ func main() {
 	http.HandleFunc("/api/url-sources/rules", h.GetURLSourceRules)
 
 	http.HandleFunc("/api/control/reload", h.ReloadSingBox)
+
+	http.HandleFunc("/api/config/get", h.GetSingBoxConfig)
+	http.HandleFunc("/api/config/save-temp", h.SaveTempConfig)
+	http.HandleFunc("/api/config/apply", h.ApplySingBoxConfig)
+	http.HandleFunc("/api/config/discard", h.DiscardTempConfig)
 
 	log.Printf("Server started on %s", appConfig.ListenAddr)
 

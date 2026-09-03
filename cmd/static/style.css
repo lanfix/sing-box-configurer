@@ -420,3 +420,98 @@ select:focus, input[type="text"]:focus, input[type="url"]:focus, input[type="num
     border: 1px solid #f5c6cb;
     display: block;
 }
+
+/* Config Editor styles */
+.config-editor-section {
+    padding: 20px 0;
+}
+
+.config-actions {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.config-status {
+    margin-left: auto;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.config-status.modified {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+
+.config-status.saved {
+    background: #d1ecf1;
+    color: #0c5460;
+    border: 1px solid #bee5eb;
+}
+
+.editor-container {
+    background: #1e1e1e;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.editor-wrapper {
+    display: flex;
+    min-height: 600px;
+    max-height: 80vh;
+    overflow: auto;
+}
+
+.line-numbers {
+    background: #252526;
+    color: #858585;
+    padding: 12px 8px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    text-align: right;
+    user-select: none;
+    min-width: 50px;
+    border-right: 1px solid #3e3e3e;
+}
+
+.config-editor {
+    flex: 1;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    border: none;
+    padding: 12px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    resize: none;
+    outline: none;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+    tab-size: 2;
+}
+
+.config-editor::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+.config-editor::-webkit-scrollbar-track {
+    background: #1e1e1e;
+}
+
+.config-editor::-webkit-scrollbar-thumb {
+    background: #424242;
+    border-radius: 6px;
+}
+
+.config-editor::-webkit-scrollbar-thumb:hover {
+    background: #4e4e4e;
+}

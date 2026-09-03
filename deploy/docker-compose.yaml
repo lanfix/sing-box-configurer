@@ -9,6 +9,7 @@ services:
     volumes:
       - ./sing-box-configurer.json:/app/config.json:ro
       - ./rules.json:/app/rules.json:rw
+      - ./sing-box.json:/etc/sing-box/config.json:rw
     depends_on:
       - docker-controller
 
@@ -34,7 +35,7 @@ services:
     depends_on:
       - sing-box-configurer
     volumes:
-      - ./sing-box.config.json:/etc/sing-box/config.json
+      - ./sing-box.json:/etc/sing-box/config.json
     cap_add:
       - NET_ADMIN
     devices:
