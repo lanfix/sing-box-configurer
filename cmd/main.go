@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -9,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/lanfix/sing-box-configurer/internal/config"
+	"github.com/lanfix/sing-box-configurer/cmd/config"
 	"github.com/lanfix/sing-box-configurer/internal/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
@@ -20,14 +21,18 @@ import (
 var staticFiles embed.FS
 
 func main() {
-	configPath, appConfig := config.ParseFlags()
+	configPath := flag.String("config", "config.json", "Path to configuration file")
+	flag.Parse()
+
+	cfg, err := config.Read[config.AppConfig](*configPath)
+	if err != nil {
+		log.Fatal(fmt.Errorf("cannot load configuration: %w", err))
+	}
 
 	log.Printf("Starting Sing-Box Configurer")
-	log.Printf("Config file: %s", configPath)
-	log.Printf("Rules file: %s", appConfig.RulesPath)
-	log.Printf("Listen address: %s", appConfig.ListenAddr)
+	log.Printf("Config [%s]: %+v", *configPath, cfg)
 
-	rulesManager, err := rules.NewManager(appConfig.RulesPath, appConfig.SourceListsProxyUrl)
+	rulesManager, err := rules.NewManager(cfg.RulesPath, cfg.SourceListsProxyUrl)
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize rules manager: %w", err))
 	}
@@ -38,9 +43,9 @@ func main() {
 
 	rulesManager.StartAllURLSourceUpdates()
 
-	dockerControllerAPI := dockercontroller.NewAPI(appConfig.DockerControllerURL)
+	dockerControllerAPI := dockercontroller.NewAPI(cfg.DockerControllerURL)
 
-	configManager := singbox.NewConfigManager(appConfig.SingBoxConfigPath)
+	configManager := singbox.NewConfigManager(cfg.SingBoxConfigPath)
 
 	h := handler.NewHandler(rulesManager, dockerControllerAPI, configManager)
 
@@ -93,9 +98,9 @@ func main() {
 	http.HandleFunc("/api/config/apply", h.ApplySingBoxConfig)
 	http.HandleFunc("/api/config/discard", h.DiscardTempConfig)
 
-	log.Printf("Server started on %s", appConfig.ListenAddr)
+	log.Printf("Server started on %s", cfg.ListenAddr)
 
-	if err := http.ListenAndServe(appConfig.ListenAddr, nil); err != nil {
+	if err := http.ListenAndServe(cfg.ListenAddr, nil); err != nil {
 		log.Fatal(err)
 	}
 }
