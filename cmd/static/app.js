@@ -604,6 +604,20 @@ function tokenizeLine(line, inBlock) {
     return { html, inBlock };
 }
 
+function highlightCode(code) {
+    const lines = code.split('\n');
+    let html = '';
+    let inBlock = false;
+    
+    for (const line of lines) {
+        const result = tokenizeLine(line, inBlock);
+        html += result.html + '\n';
+        inBlock = result.inBlock;
+    }
+    
+    return html;
+}
+
 function createLineElement(html) {
     const el = document.createElement('div');
     el.className = 'hl-line';
@@ -727,17 +741,17 @@ function computeLCS(oldLines, newLines) {
     return diff.reverse();
 }
 
-// Вычисляет diff между оригиналом и текущим содержимым.
-// Возвращает массив статусов для каждой строки: 'modified', 'added', 'deleted', null.
-function computeLineDiff() {
+// Группирует изменения в hunks (блоки).
+// Возвращает массив объектов { startLine, endLine, type, hunkId }.
+function computeDiffHunks() {
     const st = editorState;
     const original = st.originalConfig.split('\n');
     const current = st.editor.value.split('\n');
-    const result = new Array(current.length).fill(null);
+    const hunks = [];
+    let hunkId = 0;
     
     const diff = computeLCS(original, current);
     
-    // Проходим по diff и группируем соседние delete/insert блоки
     let i = 0;
     let lastEqualNewIndex = -1;
     
@@ -750,7 +764,6 @@ function computeLineDiff() {
             continue;
         }
         
-        // Собираем блок delete/insert операций
         const deleteOps = [];
         const insertOps = [];
         
@@ -763,25 +776,94 @@ function computeLineDiff() {
             i++;
         }
         
-        // Если есть хоть один insert, это замена/добавление, не чистое удаление
-        if (insertOps.length > 0) {
-            // Сопоставляем delete и insert в этом блоке
-            const matchedCount = Math.min(deleteOps.length, insertOps.length);
+        // Если есть и удаления, и добавления - это modified.
+        if (deleteOps.length > 0 && insertOps.length > 0) {
+            const startLine = insertOps[0].newIndex;
+            const endLine = insertOps[insertOps.length - 1].newIndex;
             
-            for (let j = 0; j < matchedCount; j++) {
-                result[insertOps[j].newIndex] = 'modified';
-            }
+            hunks.push({
+                startLine,
+                endLine,
+                type: 'modified',
+                hunkId: hunkId++,
+                deleteOps,
+                insertOps
+            });
+        } else if (insertOps.length > 0) {
+            // Только добавления.
+            const startLine = insertOps[0].newIndex;
+            const endLine = insertOps[insertOps.length - 1].newIndex;
             
-            // Оставшиеся insert — added
-            for (let j = matchedCount; j < insertOps.length; j++) {
-                result[insertOps[j].newIndex] = 'added';
-            }
+            hunks.push({
+                startLine,
+                endLine,
+                type: 'added',
+                hunkId: hunkId++,
+                deleteOps: [],
+                insertOps
+            });
         } else if (deleteOps.length > 0) {
-            // Чистый блок удалений без вставок
-            // Показываем deleted индикатор на последней equal строке перед блоком
+            // Только удаления.
             if (lastEqualNewIndex >= 0 && lastEqualNewIndex < current.length) {
-                result[lastEqualNewIndex] = 'deleted';
+                hunks.push({
+                    startLine: lastEqualNewIndex,
+                    endLine: lastEqualNewIndex,
+                    type: 'deleted',
+                    hunkId: hunkId++,
+                    deleteOps,
+                    insertOps: []
+                });
             }
+        }
+    }
+    
+    // Объединяем смежные deleted и added в modified.
+    const mergedHunks = [];
+    for (let i = 0; i < hunks.length; i++) {
+        const current = hunks[i];
+        const next = hunks[i + 1];
+        
+        // Если текущий deleted и следующий added, и они смежные - объединяем.
+        if (current.type === 'deleted' && next && next.type === 'added') {
+            // Проверяем смежность: added должен начинаться сразу после deleted.
+            // deleted.startLine - это позиция индикатора (lastEqualNewIndex)
+            // added.startLine - это первая добавленная строка
+            // Объединяем, если added начинается на следующей строке после deleted.
+            if (next.startLine === current.startLine + 1) {
+                mergedHunks.push({
+                    startLine: next.startLine,
+                    endLine: next.endLine,
+                    type: 'modified',
+                    hunkId: current.hunkId,
+                    deleteOps: current.deleteOps,
+                    insertOps: next.insertOps
+                });
+                i++; // Пропускаем next, так как уже объединили.
+                continue;
+            }
+        }
+        
+        mergedHunks.push(current);
+    }
+    
+    // Переназначаем hunkId после объединения.
+    mergedHunks.forEach((hunk, index) => {
+        hunk.hunkId = index;
+    });
+    
+    return mergedHunks;
+}
+
+// Вычисляет diff между оригиналом и текущим содержимым.
+// Возвращает массив статусов для каждой строки: 'modified', 'added', 'deleted', null.
+function computeLineDiff() {
+    const hunks = computeDiffHunks();
+    const current = editorState.editor.value.split('\n');
+    const result = new Array(current.length).fill(null);
+    
+    for (const hunk of hunks) {
+        for (let line = hunk.startLine; line <= hunk.endLine; line++) {
+            result[line] = hunk.type;
         }
     }
     
@@ -793,8 +875,17 @@ function renderGutter(count) {
     const gutter = st.gutterInner;
     const current = gutter.childElementCount;
 
-    // Вычисляем diff статусы.
+    // Вычисляем diff hunks и статусы.
+    const hunks = computeDiffHunks();
     const diff = computeLineDiff();
+    
+    // Мапа hunkId по индексу строки.
+    const lineToHunk = new Map();
+    for (const hunk of hunks) {
+        for (let line = hunk.startLine; line <= hunk.endLine; line++) {
+            lineToHunk.set(line, hunk.hunkId);
+        }
+    }
 
     if (count > current) {
         const fragment = document.createDocumentFragment();
@@ -804,6 +895,10 @@ function renderGutter(count) {
             el.className = 'gutter-line';
             if (diff[i - 1]) {
                 el.classList.add('line-' + diff[i - 1]);
+                el.style.cursor = 'pointer';
+                el.dataset.lineIndex = i - 1;
+                el.dataset.diffType = diff[i - 1];
+                el.dataset.hunkId = lineToHunk.get(i - 1);
             }
             fragment.appendChild(el);
         }
@@ -819,6 +914,15 @@ function renderGutter(count) {
         el.className = 'gutter-line';
         if (diff[i]) {
             el.classList.add('line-' + diff[i]);
+            el.style.cursor = 'pointer';
+            el.dataset.lineIndex = i;
+            el.dataset.diffType = diff[i];
+            el.dataset.hunkId = lineToHunk.get(i);
+        } else {
+            el.style.cursor = '';
+            delete el.dataset.lineIndex;
+            delete el.dataset.diffType;
+            delete el.dataset.hunkId;
         }
     }
 
@@ -1164,6 +1268,187 @@ function updateConfigButtons() {
     if (statusSpan.className !== cls) statusSpan.className = cls;
 }
 
+function handleGutterClick(e) {
+    const target = e.target;
+    if (!target.dataset.hunkId) return;
+    
+    const hunkId = parseInt(target.dataset.hunkId, 10);
+    const hunks = computeDiffHunks();
+    const hunk = hunks.find(h => h.hunkId === hunkId);
+    
+    if (!hunk) return;
+    
+    showDiffPopup(hunk, target);
+}
+
+function showDiffPopup(hunk, targetElement) {
+    const st = editorState;
+    const originalLines = st.originalConfig.split('\n');
+    const currentLines = st.editor.value.split('\n');
+    
+    // Удаляем старый попап, если есть.
+    const existing = document.querySelector('.diff-popup');
+    if (existing) existing.remove();
+    
+    // Собираем оригинальный код для hunk.
+    let originalContent = '';
+    let showContent = true;
+    
+    if (hunk.type === 'deleted') {
+        originalContent = hunk.deleteOps.map(op => originalLines[op.oldIndex]).join('\n');
+    } else if (hunk.type === 'added') {
+        // Для added показываем текущий код, который будет удалён.
+        originalContent = hunk.insertOps.map(op => currentLines[op.newIndex]).join('\n');
+        showContent = false;
+    } else if (hunk.type === 'modified') {
+        const matchedCount = Math.min(hunk.deleteOps.length, hunk.insertOps.length);
+        originalContent = hunk.deleteOps.slice(0, matchedCount).map(op => originalLines[op.oldIndex]).join('\n');
+    }
+    
+    if (!originalContent) {
+        return;
+    }
+    
+    const popup = document.createElement('div');
+    popup.className = 'diff-popup';
+    
+    // Применяем подсветку синтаксиса.
+    const highlightedContent = highlightCode(originalContent);
+    
+    const buttonText = hunk.type === 'added' ? '🗑' : '↶';
+    const buttonTitle = hunk.type === 'added' ? 'Удалить добавленные строки' : 'Вернуть оригинал';
+    
+    popup.innerHTML = `
+        ${showContent ? '<div class="diff-popup-content">' + highlightedContent + '</div>' : ''}
+        <div class="diff-popup-toolbar">
+            <button class="diff-popup-revert" title="${buttonTitle}">${buttonText}</button>
+            <button class="diff-popup-close" title="Закрыть">×</button>
+        </div>
+    `;
+    
+    // Добавляем попап в контейнер редактора.
+    st.container.appendChild(popup);
+    
+    // Сохраняем ссылку на строку для обновления позиции при скролле.
+    popup.dataset.lineIndex = targetElement.dataset.lineIndex;
+    
+    // Функция обновления позиции попапа.
+    function updatePopupPosition() {
+        const containerRect = st.container.getBoundingClientRect();
+        const targetRect = targetElement.getBoundingClientRect();
+        const gutterWidth = st.gutterInner.offsetWidth;
+        
+        const left = gutterWidth;
+        const top = targetRect.bottom - containerRect.top;
+        
+        popup.style.left = `${left}px`;
+        popup.style.top = `${top}px`;
+        popup.style.right = '0';
+    }
+    
+    updatePopupPosition();
+    
+    // Отслеживаем скролл редактора.
+    const scrollHandler = () => updatePopupPosition();
+    st.editor.addEventListener('scroll', scrollHandler);
+    
+    // Обработчики.
+    popup.querySelector('.diff-popup-close').onclick = (e) => {
+        e.stopPropagation();
+        st.editor.removeEventListener('scroll', scrollHandler);
+        popup.remove();
+    };
+    popup.querySelector('.diff-popup-revert').onclick = (e) => {
+        e.stopPropagation();
+        revertHunk(hunk);
+        st.editor.removeEventListener('scroll', scrollHandler);
+        popup.remove();
+    };
+    
+    // Закрытие при клике вне попапа.
+    setTimeout(() => {
+        document.addEventListener('click', function closePopup(e) {
+            if (!popup.contains(e.target) && !targetElement.contains(e.target)) {
+                st.editor.removeEventListener('scroll', scrollHandler);
+                popup.remove();
+                document.removeEventListener('click', closePopup);
+            }
+        });
+    }, 0);
+}
+
+function revertHunk(hunk) {
+    const st = editorState;
+    const originalLines = st.originalConfig.split('\n');
+    const currentLines = st.editor.value.split('\n');
+    
+    if (hunk.type === 'deleted') {
+        // Восстанавливаем удалённые строки после startLine.
+        const deletedContent = hunk.deleteOps.map(op => originalLines[op.oldIndex]);
+        currentLines.splice(hunk.startLine + 1, 0, ...deletedContent);
+    } else if (hunk.type === 'added') {
+        // Удаляем добавленные строки.
+        currentLines.splice(hunk.startLine, hunk.endLine - hunk.startLine + 1);
+    } else if (hunk.type === 'modified') {
+        // Для modified: удаляем текущие строки и вставляем оригинальные.
+        const deleteCount = hunk.endLine - hunk.startLine + 1;
+        const originalContent = hunk.deleteOps.map(op => originalLines[op.oldIndex]);
+        currentLines.splice(hunk.startLine, deleteCount, ...originalContent);
+    }
+    
+    const newValue = currentLines.join('\n');
+    const cursorPos = st.editor.selectionStart;
+    
+    applyEdit(newValue, cursorPos, cursorPos);
+    
+    showMessage('Изменение отменено', 'success');
+}
+
+function revertDiff(lineIndex, diffType) {
+    const st = editorState;
+    const originalLines = st.originalConfig.split('\n');
+    const currentLines = st.editor.value.split('\n');
+    
+    if (diffType === 'modified') {
+        // Вернуть оригинальную строку
+        currentLines[lineIndex] = originalLines[lineIndex] || '';
+    } else if (diffType === 'added') {
+        // Удалить добавленную строку
+        currentLines.splice(lineIndex, 1);
+    } else if (diffType === 'deleted') {
+        // Восстановить удалённые строки после lineIndex
+        const diff = computeLCS(originalLines, currentLines);
+        const deletedLines = [];
+        
+        let foundBlock = false;
+        for (const op of diff) {
+            if (op.type === 'equal' && op.newIndex === lineIndex) {
+                foundBlock = true;
+                continue;
+            }
+            if (foundBlock && op.type === 'delete') {
+                deletedLines.push(originalLines[op.oldIndex]);
+            }
+            if (foundBlock && op.type === 'equal') {
+                break;
+            }
+        }
+        
+        // Вставляем удалённые строки после lineIndex
+        currentLines.splice(lineIndex + 1, 0, ...deletedLines);
+    }
+    
+    const newValue = currentLines.join('\n');
+    const cursorPos = st.editor.selectionStart;
+    
+    applyEdit(newValue, cursorPos, cursorPos);
+    
+    // Закрываем модалку
+    document.querySelector('.diff-modal-overlay')?.remove();
+    
+    showMessage('Изменение отменено', 'success');
+}
+
 function initEditor() {
     const st = editorState;
     if (st.initialized) return true;
@@ -1184,6 +1469,9 @@ function initEditor() {
     editor.addEventListener('keydown', handleEditorKeydown);
     editor.addEventListener('input', handleEditorInput);
     editor.addEventListener('scroll', syncScroll, { passive: true });
+    
+    // Обработчик клика на gutter для показа diff
+    gutterInner.addEventListener('click', handleGutterClick);
 
     window.addEventListener('beforeunload', (e) => {
         if (isConfigModified()) {
