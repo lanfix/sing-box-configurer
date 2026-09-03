@@ -15,10 +15,10 @@
         
         <!-- Tabs -->
         <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('rules')">Правила</button>
-            <button class="tab-btn" onclick="switchTab('url-sources')">URL Источники</button>
-            <button class="tab-btn" onclick="switchTab('config')">Конфиг</button>
-            <button class="tab-btn" onclick="switchTab('control')">Управление</button>
+            <button class="tab-btn active" data-tab="rules" onclick="switchTab('rules')">Правила</button>
+            <button class="tab-btn" data-tab="url-sources" onclick="switchTab('url-sources')">URL Источники</button>
+            <button class="tab-btn" data-tab="config" onclick="switchTab('config')">Конфиг</button>
+            <button class="tab-btn" data-tab="control" onclick="switchTab('control')">Управление</button>
         </div>
         
         <!-- Rules Tab -->
@@ -154,13 +154,22 @@
                     <span id="configStatus" class="config-status"></span>
                 </div>
                 
-                <div class="editor-container">
-                    <div class="editor-wrapper" id="editorWrapper">
-                        <pre class="line-numbers" id="lineNumbers"></pre>
-                        <div class="editor-content">
-                            <div id="syntaxHighlight" class="syntax-highlight"></div>
-                            <textarea id="configEditor" class="config-editor" spellcheck="false"></textarea>
+                <div class="editor-container" id="editorContainer">
+                    <div class="editor-gutter">
+                        <div class="gutter-inner" id="lineNumbers"></div>
+                    </div>
+                    <div class="editor-main">
+                        <div class="highlight-layer">
+                            <div class="highlight-inner" id="syntaxHighlight"></div>
                         </div>
+                        <textarea 
+                            id="configEditor" 
+                            class="config-editor" 
+                            spellcheck="false"
+                            autocomplete="off"
+                            autocorrect="off"
+                            autocapitalize="off"
+                            wrap="off"></textarea>
                     </div>
                 </div>
             </div>

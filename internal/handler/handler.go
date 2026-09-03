@@ -369,24 +369,6 @@ func (h *Handler) GetSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Пытаемся получить временный конфиг, если он есть.
-	if h.configManager.HasPending() {
-		tempConfig, hasTempConfig, err := h.configManager.GetTemp()
-		if err != nil {
-			log.Printf("Error reading temp config: %v", err)
-		}
-
-		if hasTempConfig {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"config":     tempConfig,
-				"hasPending": true,
-			})
-
-			return
-		}
-	}
-
 	config, err := h.configManager.GetConfig()
 	if err != nil {
 		log.Printf("Error reading config: %v", err)
@@ -396,12 +378,26 @@ func (h *Handler) GetSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hasPending := h.configManager.HasPending()
+	response := map[string]interface{}{
+		"config":        config,
+		"appliedConfig": config,
+		"hasPending":    hasPending,
+	}
+
+	// Если есть временный конфиг, возвращаем его как текущий.
+	if hasPending {
+		tempConfig, hasTempConfig, err := h.configManager.GetTemp()
+		if err != nil {
+			log.Printf("Error reading temp config: %v", err)
+		}
+
+		if hasTempConfig {
+			response["config"] = tempConfig
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"config":     config,
-		"hasPending": hasPending,
-	})
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (h *Handler) SaveTempConfig(w http.ResponseWriter, r *http.Request) {
