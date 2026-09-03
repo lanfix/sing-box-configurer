@@ -155,9 +155,12 @@
                 </div>
                 
                 <div class="editor-container">
-                    <div class="editor-wrapper">
-                        <div class="line-numbers" id="lineNumbers"></div>
-                        <textarea id="configEditor" class="config-editor" spellcheck="false"></textarea>
+                    <div class="editor-wrapper" id="editorWrapper">
+                        <pre class="line-numbers" id="lineNumbers"></pre>
+                        <div class="editor-content">
+                            <div id="syntaxHighlight" class="syntax-highlight"></div>
+                            <textarea id="configEditor" class="config-editor" spellcheck="false"></textarea>
+                        </div>
                     </div>
                 </div>
             </div>

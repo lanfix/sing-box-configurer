@@ -369,6 +369,24 @@ func (h *Handler) GetSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Пытаемся получить временный конфиг, если он есть.
+	if h.configManager.HasPending() {
+		tempConfig, hasTempConfig, err := h.configManager.GetTemp()
+		if err != nil {
+			log.Printf("Error reading temp config: %v", err)
+		}
+
+		if hasTempConfig {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"config":     tempConfig,
+				"hasPending": true,
+			})
+
+			return
+		}
+	}
+
 	config, err := h.configManager.GetConfig()
 	if err != nil {
 		log.Printf("Error reading config: %v", err)
@@ -380,7 +398,6 @@ func (h *Handler) GetSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 	hasPending := h.configManager.HasPending()
 
 	w.Header().Set("Content-Type", "application/json")
-
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"config":     config,
 		"hasPending": hasPending,
@@ -410,6 +427,7 @@ func (h *Handler) SaveTempConfig(w http.ResponseWriter, r *http.Request) {
 	if err := h.configManager.SaveTemp(req.Config); err != nil {
 		log.Printf("Error saving temp config: %v", err)
 		http.Error(w, "Failed to save temp config: "+err.Error(), http.StatusInternalServerError)
+
 		return
 	}
 
@@ -434,10 +452,11 @@ func (h *Handler) ApplySingBoxConfig(w http.ResponseWriter, r *http.Request) {
 	if err := h.configManager.ApplyConfig(); err != nil {
 		log.Printf("Error applying config: %v", err)
 		http.Error(w, "Failed to apply config: "+err.Error(), http.StatusInternalServerError)
+
 		return
 	}
 
-	// Restart sing-box container
+	// Перезапускаем контейнер sing-box.
 	labels := map[string]string{
 		"app":     "sing-box",
 		"managed": "true",
@@ -451,6 +470,7 @@ func (h *Handler) ApplySingBoxConfig(w http.ResponseWriter, r *http.Request) {
 			"message": "Config applied but failed to restart sing-box. Please restart manually.",
 			"warning": err.Error(),
 		})
+
 		return
 	}
 
@@ -470,6 +490,7 @@ func (h *Handler) DiscardTempConfig(w http.ResponseWriter, r *http.Request) {
 	if err := h.configManager.DiscardTemp(); err != nil {
 		log.Printf("Error discarding temp config: %v", err)
 		http.Error(w, "Failed to discard temp config: "+err.Error(), http.StatusInternalServerError)
+
 		return
 	}
 

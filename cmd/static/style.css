@@ -466,9 +466,13 @@ select:focus, input[type="text"]:focus, input[type="url"]:focus, input[type="num
     min-height: 600px;
     max-height: 80vh;
     overflow: auto;
+    position: relative;
 }
 
 .line-numbers {
+    position: sticky;
+    left: 0;
+    top: 0;
     background: #252526;
     color: #858585;
     padding: 12px 8px;
@@ -479,12 +483,39 @@ select:focus, input[type="text"]:focus, input[type="url"]:focus, input[type="num
     user-select: none;
     min-width: 50px;
     border-right: 1px solid #3e3e3e;
+    white-space: pre;
+    flex-shrink: 0;
+    z-index: 10;
+    height: 100%;
+    align-self: flex-start;
+}
+
+.editor-content {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    background: #1e1e1e;
+}
+
+.syntax-highlight {
+    grid-area: 1 / 1 / 2 / 2;
+    padding: 12px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre;
+    pointer-events: none;
+    word-wrap: normal;
+    overflow-wrap: normal;
+    color: #d4d4d4;
 }
 
 .config-editor {
-    flex: 1;
-    background: #1e1e1e;
-    color: #d4d4d4;
+    grid-area: 1 / 1 / 2 / 2;
+    background: transparent;
+    color: transparent;
+    caret-color: #aeafad;
     border: none;
     padding: 12px;
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
@@ -493,9 +524,58 @@ select:focus, input[type="text"]:focus, input[type="url"]:focus, input[type="num
     resize: none;
     outline: none;
     white-space: pre;
+    word-wrap: normal;
     overflow-wrap: normal;
-    overflow-x: auto;
     tab-size: 2;
+    z-index: 1;
+    scrollbar-width: none;
+}
+
+.config-editor::-webkit-scrollbar {
+    display: none;
+}
+
+.config-editor::selection {
+    background: rgba(38, 79, 120, 0.99);
+    color: #d4d4d4;
+}
+
+.config-editor::-moz-selection {
+    background: rgba(38, 79, 120, 0.99);
+    color: #d4d4d4;
+}
+
+/* JSON syntax highlighting colors */
+.json-key {
+    color: #9cdcfe;
+    font-weight: 500;
+}
+
+.json-string {
+    color: #ce9178;
+}
+
+.json-number {
+    color: #b5cea8;
+}
+
+.json-boolean {
+    color: #569cd6;
+    font-weight: 500;
+}
+
+.json-null {
+    color: #569cd6;
+    font-weight: 500;
+}
+
+.json-punctuation {
+    color: #d4d4d4;
+}
+
+.json-comment {
+    color: #6a9955;
+    font-style: italic;
 }
 
 .config-editor::-webkit-scrollbar {

@@ -494,6 +494,278 @@ let originalConfig = '';
 let currentConfig = '';
 let hasPendingChanges = false;
 
+// Undo/Redo history
+let undoStack = [];
+let redoStack = [];
+let isUndoRedoAction = false;
+
+function saveToUndoStack(editor) {
+    if (isUndoRedoAction) return;
+    
+    undoStack.push({
+        value: editor.value,
+        selectionStart: editor.selectionStart,
+        selectionEnd: editor.selectionEnd
+    });
+    
+    // Limit stack size to 100
+    if (undoStack.length > 100) {
+        undoStack.shift();
+    }
+    
+    // Clear redo stack on new action
+    redoStack = [];
+}
+
+function undo(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        
+        const editor = document.getElementById('configEditor');
+        if (!editor || undoStack.length === 0) return;
+        
+        // Save current state to redo stack
+        redoStack.push({
+            value: editor.value,
+            selectionStart: editor.selectionStart,
+            selectionEnd: editor.selectionEnd
+        });
+        
+        // Restore previous state
+        const state = undoStack.pop();
+        isUndoRedoAction = true;
+        editor.value = state.value;
+        editor.selectionStart = state.selectionStart;
+        editor.selectionEnd = state.selectionEnd;
+        isUndoRedoAction = false;
+        
+        // Update display
+        updateLineNumbers();
+        resizeTextarea();
+        updateConfigButtons();
+        scrollToCursor(editor);
+    }
+}
+
+function redo(e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        
+        const editor = document.getElementById('configEditor');
+        if (!editor || redoStack.length === 0) return;
+        
+        // Save current state to undo stack
+        undoStack.push({
+            value: editor.value,
+            selectionStart: editor.selectionStart,
+            selectionEnd: editor.selectionEnd
+        });
+        
+        // Restore next state
+        const state = redoStack.pop();
+        isUndoRedoAction = true;
+        editor.value = state.value;
+        editor.selectionStart = state.selectionStart;
+        editor.selectionEnd = state.selectionEnd;
+        isUndoRedoAction = false;
+        
+        // Update display
+        updateLineNumbers();
+        resizeTextarea();
+        updateConfigButtons();
+        scrollToCursor(editor);
+    }
+}
+
+function highlightJSON(text) {
+    // Handle multi-line comments first
+    const parts = [];
+    let currentIndex = 0;
+    let inMultiLineComment = false;
+    
+    // Find all /* */ blocks
+    const multiLineCommentRegex = /\/\*[\s\S]*?\*\//g;
+    const multiLineMatches = [];
+    let match;
+    
+    while ((match = multiLineCommentRegex.exec(text)) !== null) {
+        multiLineMatches.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            text: match[0]
+        });
+    }
+    
+    // Split text by lines and process
+    const lines = text.split('\n');
+    const result = [];
+    let charIndex = 0;
+    
+    for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+        let line = lines[lineNum];
+        const lineStart = charIndex;
+        const lineEnd = charIndex + line.length;
+        
+        // Escape HTML
+        line = line
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+        
+        // Check if this line is inside a multi-line comment
+        let insideMultiLine = false;
+        let multiLineStart = -1;
+        let multiLineEnd = -1;
+        
+        for (const mlc of multiLineMatches) {
+            if (lineStart >= mlc.start && lineEnd <= mlc.end) {
+                insideMultiLine = true;
+                multiLineStart = Math.max(0, mlc.start - lineStart);
+                multiLineEnd = Math.min(line.length, mlc.end - lineStart);
+                break;
+            } else if (lineStart < mlc.start && lineEnd > mlc.start && lineEnd <= mlc.end) {
+                // Comment starts in this line
+                multiLineStart = mlc.start - lineStart;
+                multiLineEnd = line.length;
+                insideMultiLine = true;
+                break;
+            } else if (lineStart >= mlc.start && lineStart < mlc.end && lineEnd > mlc.end) {
+                // Comment ends in this line
+                multiLineStart = 0;
+                multiLineEnd = mlc.end - lineStart;
+                insideMultiLine = true;
+                break;
+            }
+        }
+        
+        if (insideMultiLine) {
+            // Split line into parts: before comment, comment, after comment
+            const before = line.substring(0, multiLineStart);
+            const comment = line.substring(multiLineStart, multiLineEnd);
+            const after = line.substring(multiLineEnd);
+            
+            let resultLine = '';
+            if (before) {
+                resultLine += highlightJSONLine(before);
+            }
+            if (comment) {
+                resultLine += '<span class="json-comment">' + comment + '</span>';
+            }
+            if (after) {
+                resultLine += highlightJSONLine(after);
+            }
+            
+            result.push(resultLine);
+            charIndex = lineEnd + 1;
+            continue;
+        }
+        
+        // Check if line is a single-line comment (starts with //, or #)
+        const trimmed = line.trim();
+        if (trimmed.startsWith('//') || trimmed.startsWith('#')) {
+            result.push('<span class="json-comment">' + line + '</span>');
+            charIndex = lineEnd + 1;
+            continue;
+        }
+        
+        // Check if line contains inline comment
+        const commentIndex = line.indexOf('//');
+        const hashIndex = line.indexOf('#');
+        let splitIndex = -1;
+        
+        if (commentIndex !== -1 && hashIndex !== -1) {
+            splitIndex = Math.min(commentIndex, hashIndex);
+        } else if (commentIndex !== -1) {
+            splitIndex = commentIndex;
+        } else if (hashIndex !== -1) {
+            splitIndex = hashIndex;
+        }
+        
+        if (splitIndex !== -1) {
+            // Check if comment is not inside a string
+            const beforeComment = line.substring(0, splitIndex);
+            const quotes = (beforeComment.match(/"/g) || []).length;
+            const escapedQuotes = (beforeComment.match(/\\"/g) || []).length;
+            const actualQuotes = quotes - escapedQuotes;
+            
+            // If odd number of quotes, comment is inside string
+            if (actualQuotes % 2 === 0) {
+                let codePart = highlightJSONLine(beforeComment);
+                let commentPart = '<span class="json-comment">' + line.substring(splitIndex) + '</span>';
+                result.push(codePart + commentPart);
+                charIndex = lineEnd + 1;
+                continue;
+            }
+        }
+        
+        // Regular JSON highlighting
+        result.push(highlightJSONLine(line));
+        charIndex = lineEnd + 1;
+    }
+    
+    return result.join('\n');
+}
+
+function highlightJSONLine(line) {
+    return line
+        .replace(/("(?:\\.|[^"\\])*")\s*:/g, '<span class="json-key">$1</span>:')
+        .replace(/:(\s*)("(?:\\.|[^"\\])*")/g, ':$1<span class="json-string">$2</span>')
+        .replace(/\b(-?\d+\.?\d*)\b/g, '<span class="json-number">$1</span>')
+        .replace(/\b(true|false)\b/g, '<span class="json-boolean">$1</span>')
+        .replace(/\bnull\b/g, '<span class="json-null">null</span>')
+        .replace(/([{}[\],:])/g, '<span class="json-punctuation">$1</span>');
+}
+
+function scrollToCursor(editor) {
+    const wrapper = document.getElementById('editorWrapper');
+    if (!wrapper) return;
+    
+    // Get cursor position
+    const cursorPos = editor.selectionStart;
+    const textBeforeCursor = editor.value.substring(0, cursorPos);
+    const lines = textBeforeCursor.split('\n');
+    const currentLine = lines.length - 1;
+    const currentColumn = lines[lines.length - 1].length;
+    
+    // Calculate pixel position
+    const lineHeight = 1.6 * 14; // line-height * font-size
+    const charWidth = 8.4; // approximate character width in Consolas 14px
+    
+    const cursorY = currentLine * lineHeight + 12; // +12 for padding
+    const cursorX = currentColumn * charWidth + 12 + 58; // +12 padding, +58 line numbers width
+    
+    // Get wrapper dimensions
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const scrollTop = wrapper.scrollTop;
+    const scrollLeft = wrapper.scrollLeft;
+    const viewportHeight = wrapper.clientHeight;
+    const viewportWidth = wrapper.clientWidth;
+    
+    // Scroll vertically if cursor is outside viewport
+    if (cursorY < scrollTop + 20) {
+        wrapper.scrollTop = Math.max(0, cursorY - 20);
+    } else if (cursorY > scrollTop + viewportHeight - 40) {
+        wrapper.scrollTop = cursorY - viewportHeight + 40;
+    }
+    
+    // Scroll horizontally if cursor is outside viewport
+    if (cursorX < scrollLeft + 70) {
+        wrapper.scrollLeft = Math.max(0, cursorX - 70);
+    } else if (cursorX > scrollLeft + viewportWidth - 20) {
+        wrapper.scrollLeft = cursorX - viewportWidth + 20;
+    }
+}
+
+function updateSyntaxHighlight() {
+    const editor = document.getElementById('configEditor');
+    const highlight = document.getElementById('syntaxHighlight');
+    
+    if (!editor || !highlight) return;
+    
+    const highlighted = highlightJSON(editor.value);
+    highlight.innerHTML = highlighted;
+}
+
 function updateLineNumbers() {
     const editor = document.getElementById('configEditor');
     const lineNumbers = document.getElementById('lineNumbers');
@@ -502,6 +774,178 @@ function updateLineNumbers() {
     const lines = editor.value.split('\n');
     const numbers = lines.map((_, i) => i + 1).join('\n');
     lineNumbers.textContent = numbers;
+}
+
+function resizeTextarea() {
+    const editor = document.getElementById('configEditor');
+    const highlight = document.getElementById('syntaxHighlight');
+    if (!editor || !highlight) return;
+    
+    // Sync content
+    highlight.textContent = editor.value;
+    
+    // Apply highlighting
+    const highlighted = highlightJSON(editor.value);
+    highlight.innerHTML = highlighted;
+}
+
+function handleTab(e) {
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        
+        const editor = e.target;
+        
+        // Save state before change
+        saveToUndoStack(editor);
+        
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        const value = editor.value;
+        
+        // Check if we have multiline selection
+        const selectedText = value.substring(start, end);
+        const hasNewline = selectedText.includes('\n');
+        
+        if (hasNewline || (start !== end && value.substring(start, end).includes('\n'))) {
+            // Multi-line indent
+            const lines = value.split('\n');
+            let currentPos = 0;
+            let newStart = start;
+            let newEnd = end;
+            let startLine = -1;
+            let endLine = -1;
+            
+            // Find which lines are selected
+            for (let i = 0; i < lines.length; i++) {
+                const lineStart = currentPos;
+                const lineEnd = currentPos + lines[i].length;
+                
+                if (startLine === -1 && start >= lineStart && start <= lineEnd) {
+                    startLine = i;
+                }
+                if (endLine === -1 && end >= lineStart && end <= lineEnd) {
+                    endLine = i;
+                }
+                
+                currentPos = lineEnd + 1; // +1 for newline
+            }
+            
+            // Indent selected lines
+            const tab = '  ';
+            for (let i = startLine; i <= endLine; i++) {
+                if (e.shiftKey) {
+                    // Unindent
+                    if (lines[i].startsWith(tab)) {
+                        lines[i] = lines[i].substring(tab.length);
+                        if (i === startLine) newStart -= tab.length;
+                        newEnd -= tab.length;
+                    } else if (lines[i].startsWith(' ')) {
+                        lines[i] = lines[i].substring(1);
+                        if (i === startLine) newStart -= 1;
+                        newEnd -= 1;
+                    }
+                } else {
+                    // Indent
+                    lines[i] = tab + lines[i];
+                    if (i === startLine) newStart += tab.length;
+                    newEnd += tab.length;
+                }
+            }
+            
+            editor.value = lines.join('\n');
+            editor.selectionStart = Math.max(0, newStart);
+            editor.selectionEnd = Math.max(0, newEnd);
+        } else {
+            // Single position or single-line selection - insert tab
+            const tab = '  ';
+            editor.value = value.substring(0, start) + tab + value.substring(end);
+            editor.selectionStart = editor.selectionEnd = start + tab.length;
+        }
+        
+        // Update display
+        updateLineNumbers();
+        resizeTextarea();
+        updateConfigButtons();
+    }
+}
+
+function toggleComment(e) {
+    if (e.key === '/' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        
+        const editor = e.target;
+        
+        // Save state before change
+        saveToUndoStack(editor);
+        
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        const value = editor.value;
+        const lines = value.split('\n');
+        
+        let currentPos = 0;
+        let startLine = -1;
+        let endLine = -1;
+        
+        // Find which lines are selected
+        for (let i = 0; i < lines.length; i++) {
+            const lineStart = currentPos;
+            const lineEnd = currentPos + lines[i].length;
+            
+            if (startLine === -1 && start >= lineStart && start <= lineEnd) {
+                startLine = i;
+            }
+            if (endLine === -1 && end >= lineStart && end <= lineEnd) {
+                endLine = i;
+            }
+            
+            currentPos = lineEnd + 1;
+        }
+        
+        // Check if all selected lines are commented
+        let allCommented = true;
+        for (let i = startLine; i <= endLine; i++) {
+            if (!lines[i].trim().startsWith('//')) {
+                allCommented = false;
+                break;
+            }
+        }
+        
+        let offsetStart = 0;
+        let offsetEnd = 0;
+        
+        // Toggle comments
+        for (let i = startLine; i <= endLine; i++) {
+            if (allCommented) {
+                // Uncomment
+                const match = lines[i].match(/^(\s*)\/\/\s?/);
+                if (match) {
+                    lines[i] = lines[i].replace(/^(\s*)\/\/\s?/, '$1');
+                    const removed = match[0].length - match[1].length;
+                    if (i === startLine) offsetStart -= removed;
+                    offsetEnd -= removed;
+                }
+            } else {
+                // Comment
+                const match = lines[i].match(/^(\s*)/);
+                if (match) {
+                    const indent = match[1];
+                    lines[i] = indent + '// ' + lines[i].substring(indent.length);
+                    if (i === startLine) offsetStart += 3;
+                    offsetEnd += 3;
+                }
+            }
+        }
+        
+        editor.value = lines.join('\n');
+        editor.selectionStart = start + offsetStart;
+        editor.selectionEnd = end + offsetEnd;
+        
+        // Update display
+        updateLineNumbers();
+        resizeTextarea();
+        updateConfigButtons();
+    }
 }
 
 function updateConfigButtons() {
@@ -555,19 +999,49 @@ async function loadConfig() {
         hasPendingChanges = data.hasPending || false;
         
         updateLineNumbers();
+        resizeTextarea();
         updateConfigButtons();
         
-        // Add scroll sync
-        editor.addEventListener('scroll', () => {
-            const lineNumbers = document.getElementById('lineNumbers');
-            if (lineNumbers) {
-                lineNumbers.scrollTop = editor.scrollTop;
+        // Initialize undo stack with initial state
+        undoStack = [{
+            value: editor.value,
+            selectionStart: 0,
+            selectionEnd: 0
+        }];
+        redoStack = [];
+        
+        // Add undo/redo handlers
+        editor.addEventListener('keydown', undo);
+        editor.addEventListener('keydown', redo);
+        
+        // Add tab handler
+        editor.addEventListener('keydown', handleTab);
+        
+        // Add comment toggle handler
+        editor.addEventListener('keydown', toggleComment);
+        
+        // Add scrollIntoView on cursor movement
+        editor.addEventListener('keyup', (e) => {
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
+                scrollToCursor(editor);
             }
         });
         
+        editor.addEventListener('click', () => {
+            scrollToCursor(editor);
+        });
+        
         // Add input listener
+        let inputTimeout;
         editor.addEventListener('input', () => {
+            // Save to undo stack after a short delay (debounce)
+            clearTimeout(inputTimeout);
+            inputTimeout = setTimeout(() => {
+                saveToUndoStack(editor);
+            }, 500);
+            
             updateLineNumbers();
+            resizeTextarea();
             updateConfigButtons();
         });
         
@@ -582,13 +1056,7 @@ async function saveTempConfig() {
     
     const config = editor.value;
     
-    // Validate JSON
-    try {
-        JSON.parse(config);
-    } catch (e) {
-        showMessage('Ошибка: некорректный JSON - ' + e.message, 'error');
-        return;
-    }
+    // Не валидируем JSON на клиенте - сервер сделает это с поддержкой комментариев
     
     try {
         const response = await fetch('/api/config/save-temp', {
