@@ -48,6 +48,8 @@ function activateTab(tabName) {
     } else if (tabName === 'url-sources') {
         loadURLSources();
         autoRefreshInterval = setInterval(loadURLSources, 5000);
+    } else if (tabName === 'outbounds') {
+        loadOutbounds();
     } else if (tabName === 'config') {
         openConfigTab();
     }
@@ -1248,6 +1250,7 @@ function updateConfigButtons() {
     const applyBtn = document.getElementById('applyConfigBtn');
     const discardBtn = document.getElementById('discardConfigBtn');
     const statusSpan = document.getElementById('configStatus');
+    const badge = document.getElementById('configTabBadge');
 
     if (!saveBtn || !applyBtn || !discardBtn || !statusSpan) return;
 
@@ -1271,6 +1274,11 @@ function updateConfigButtons() {
 
     if (statusSpan.textContent !== text) statusSpan.textContent = text;
     if (statusSpan.className !== cls) statusSpan.className = cls;
+    
+    // Показываем/скрываем индикатор на вкладке.
+    if (badge) {
+        badge.style.display = (isModified || st.hasPendingChanges) ? 'inline-block' : 'none';
+    }
 }
 
 function handleGutterClick(e) {
@@ -1688,3 +1696,305 @@ async function discardConfig() {
 }
 
 restoreActiveTab();
+
+// ============================================================================
+// Outbounds Management
+// ============================================================================
+
+// Парсит share-ссылку и возвращает outbound объект для sing-box.
+function parseShareUrl(url) {
+    try {
+        if (url.startsWith('vless://')) {
+            return parseVless(url);
+        } else if (url.startsWith('hysteria2://') || url.startsWith('hy2://')) {
+            return parseHysteria2(url);
+        } else if (url.startsWith('vmess://')) {
+            return parseVmess(url);
+        } else if (url.startsWith('trojan://')) {
+            return parseTrojan(url);
+        } else if (url.startsWith('ss://')) {
+            return parseShadowsocks(url);
+        } else {
+            throw new Error('Неподдерживаемый протокол. Поддерживаются: vless, hysteria2, vmess, trojan, ss');
+        }
+    } catch (error) {
+        throw new Error('Ошибка парсинга: ' + error.message);
+    }
+}
+
+function parseVless(url) {
+    const u = new URL(url);
+    const uuid = u.username;
+    const server = u.hostname;
+    const port = parseInt(u.port) || 443;
+    const params = new URLSearchParams(u.search);
+    const tag = decodeURIComponent(u.hash.slice(1)) || `vless-${server}`;
+    
+    const outbound = {
+        type: 'vless',
+        tag: tag,
+        server: server,
+        server_port: port,
+        uuid: uuid,
+        flow: params.get('flow') || '',
+        network: params.get('type') || 'tcp',
+        tls: {}
+    };
+    
+    if (params.get('security') === 'tls' || params.get('security') === 'reality') {
+        outbound.tls.enabled = true;
+        outbound.tls.server_name = params.get('sni') || server;
+        
+        if (params.get('fp')) {
+            outbound.tls.utls = {
+                enabled: true,
+                fingerprint: params.get('fp')
+            };
+        }
+        
+        if (params.get('security') === 'reality') {
+            outbound.tls.reality = {
+                enabled: true,
+                public_key: params.get('pbk') || '',
+                short_id: params.get('sid') || ''
+            };
+        }
+    }
+    
+    // Transport настройки.
+    if (outbound.network === 'ws') {
+        outbound.transport = {
+            type: 'ws',
+            path: params.get('path') || '/',
+            headers: params.get('host') ? { Host: params.get('host') } : {}
+        };
+    } else if (outbound.network === 'grpc') {
+        outbound.transport = {
+            type: 'grpc',
+            service_name: params.get('serviceName') || params.get('path') || ''
+        };
+    } else if (outbound.network === 'xhttp' || outbound.network === 'splithttp') {
+        outbound.transport = {
+            type: outbound.network,
+            path: params.get('path') || '/',
+            host: params.get('host') || server
+        };
+    }
+    
+    return outbound;
+}
+
+function parseHysteria2(url) {
+    const u = new URL(url);
+    const password = u.username || decodeURIComponent(u.pathname.split('@')[0].slice(2));
+    const serverPart = u.username ? u.hostname : u.pathname.split('@')[1].split(':')[0];
+    const portPart = u.username ? u.port : u.pathname.split('@')[1].split(':')[1];
+    const server = serverPart;
+    const port = parseInt(portPart) || 443;
+    const params = new URLSearchParams(u.search);
+    const tag = decodeURIComponent(u.hash.slice(1)) || `hy2-${server}`;
+    
+    const outbound = {
+        type: 'hysteria2',
+        tag: tag,
+        server: server,
+        server_port: port,
+        password: password,
+        tls: {
+            enabled: true,
+            server_name: params.get('sni') || server
+        }
+    };
+    
+    if (params.get('obfs')) {
+        outbound.obfs = {
+            type: params.get('obfs'),
+            password: params.get('obfs-password') || ''
+        };
+    }
+    
+    return outbound;
+}
+
+function parseVmess(url) {
+    const base64 = url.slice(8);
+    const json = JSON.parse(atob(base64));
+    
+    const outbound = {
+        type: 'vmess',
+        tag: json.ps || `vmess-${json.add}`,
+        server: json.add,
+        server_port: parseInt(json.port),
+        uuid: json.id,
+        security: json.scy || 'auto',
+        alter_id: parseInt(json.aid) || 0
+    };
+    
+    if (json.net && json.net !== 'tcp') {
+        outbound.transport = {
+            type: json.net,
+            path: json.path || '/'
+        };
+        
+        if (json.host) {
+            outbound.transport.host = json.host;
+        }
+    }
+    
+    if (json.tls === 'tls') {
+        outbound.tls = {
+            enabled: true,
+            server_name: json.sni || json.host || json.add
+        };
+    }
+    
+    return outbound;
+}
+
+function parseTrojan(url) {
+    const u = new URL(url);
+    const password = u.username;
+    const server = u.hostname;
+    const port = parseInt(u.port) || 443;
+    const params = new URLSearchParams(u.search);
+    const tag = decodeURIComponent(u.hash.slice(1)) || `trojan-${server}`;
+    
+    const outbound = {
+        type: 'trojan',
+        tag: tag,
+        server: server,
+        server_port: port,
+        password: password,
+        tls: {
+            enabled: true,
+            server_name: params.get('sni') || server
+        }
+    };
+    
+    if (params.get('type') && params.get('type') !== 'tcp') {
+        outbound.transport = {
+            type: params.get('type'),
+            path: params.get('path') || '/'
+        };
+    }
+    
+    return outbound;
+}
+
+function parseShadowsocks(url) {
+    const u = new URL(url);
+    const userinfo = atob(u.username);
+    const [method, password] = userinfo.split(':');
+    const server = u.hostname;
+    const port = parseInt(u.port);
+    const tag = decodeURIComponent(u.hash.slice(1)) || `ss-${server}`;
+    
+    return {
+        type: 'shadowsocks',
+        tag: tag,
+        server: server,
+        server_port: port,
+        method: method,
+        password: password
+    };
+}
+
+async function addOutbound(event) {
+    event.preventDefault();
+    
+    const urlInput = document.getElementById('outboundUrl');
+    const shareUrl = urlInput.value.trim();
+    
+    if (!shareUrl) {
+        showMessage('Введите share-ссылку', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/outbounds/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shareUrl: shareUrl })
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(result.error || 'Не удалось добавить outbound');
+        }
+        
+        showMessage(result.message || `Outbound "${result.outbound.tag}" добавлен`, 'success');
+        urlInput.value = '';
+        
+        await loadOutbounds();
+        
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function loadOutbounds() {
+    const tbody = document.getElementById('outboundsTableBody');
+    if (!tbody) return;
+    
+    try {
+        const response = await fetch('/api/outbounds');
+        if (!response.ok) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">Не удалось загрузить outbounds</td></tr>';
+            return;
+        }
+        
+        const data = await response.json();
+        const outbounds = data.outbounds || [];
+        
+        tbody.innerHTML = '';
+        
+        if (outbounds.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">Нет добавленных outbounds</td></tr>';
+            return;
+        }
+        
+        outbounds.forEach(outbound => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${escapeHTML(outbound.tag)}</td>
+                <td><span class="badge badge-${escapeHTML(outbound.type)}">${escapeHTML(outbound.type)}</span></td>
+                <td>${escapeHTML(outbound.server || '-')}</td>
+                <td>${outbound.port || '-'}</td>
+                <td>
+                    <button class="btn btn-danger" onclick="deleteOutbound('${escapeHTML(outbound.tag)}')">Удалить</button>
+                </td>
+            `;
+            tbody.appendChild(row);
+        });
+        
+    } catch (error) {
+        console.error('Ошибка загрузки outbounds:', error);
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #999;">Ошибка загрузки</td></tr>';
+    }
+}
+
+async function deleteOutbound(tag) {
+    if (!confirm(`Удалить outbound "${tag}"?`)) return;
+    
+    try {
+        const response = await fetch('/api/outbounds/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tag: tag })
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(result.error || 'Не удалось удалить outbound');
+        }
+        
+        showMessage(result.message || `Outbound "${tag}" удалён`, 'success');
+        
+        await loadOutbounds();
+        
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/cmd/config"
 	"github.com/lanfix/sing-box-configurer/internal/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
+	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
@@ -46,8 +47,9 @@ func main() {
 	dockerControllerAPI := dockercontroller.NewAPI(cfg.DockerControllerURL)
 
 	configManager := singbox.NewConfigManager(cfg.SingBoxConfigPath)
+	outboundManager := outbound.NewManager(configManager)
 
-	h := handler.NewHandler(rulesManager, dockerControllerAPI, configManager)
+	h := handler.NewHandler(rulesManager, dockerControllerAPI, configManager, outboundManager)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -97,6 +99,10 @@ func main() {
 	http.HandleFunc("/api/config/save-temp", h.SaveTempConfig)
 	http.HandleFunc("/api/config/apply", h.ApplySingBoxConfig)
 	http.HandleFunc("/api/config/discard", h.DiscardTempConfig)
+
+	http.HandleFunc("/api/outbounds", h.GetOutbounds)
+	http.HandleFunc("/api/outbounds/add", h.AddOutbound)
+	http.HandleFunc("/api/outbounds/delete", h.DeleteOutbound)
 
 	log.Printf("Server started on %s", cfg.ListenAddr)
 

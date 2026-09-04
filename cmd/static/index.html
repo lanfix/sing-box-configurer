@@ -17,7 +17,11 @@
         <div class="tabs">
             <button class="tab-btn active" data-tab="rules" onclick="switchTab('rules')">Правила</button>
             <button class="tab-btn" data-tab="url-sources" onclick="switchTab('url-sources')">URL Источники</button>
-            <button class="tab-btn" data-tab="config" onclick="switchTab('config')">Конфиг</button>
+            <button class="tab-btn" data-tab="outbounds" onclick="switchTab('outbounds')">Outbounds</button>
+            <button class="tab-btn" data-tab="config" onclick="switchTab('config')">
+                Конфиг
+                <span id="configTabBadge" class="tab-badge" style="display: none;">●</span>
+            </button>
             <button class="tab-btn" data-tab="control" onclick="switchTab('control')">Управление</button>
         </div>
         
@@ -134,7 +138,52 @@
                 </table>
             </div>
         </div>
-
+        
+        <!-- Outbounds Tab -->
+        <div id="outbounds-tab" class="tab-content">
+            <div class="outbounds-section">
+                <h2 style="margin-bottom: 15px; color: #333;">Управление VPN Outbounds</h2>
+                <p style="color: #666; margin-bottom: 20px;">Добавляйте VPN конфиги через share-ссылки (vless://, hysteria2://, и др.)</p>
+                
+                <div class="add-outbound-form">
+                    <h3 style="margin-bottom: 10px; color: #333;">Добавить Outbound</h3>
+                    <form id="addOutboundForm" onsubmit="addOutbound(event)">
+                        <div class="form-row">
+                            <div class="form-group" style="flex: 3;">
+                                <label for="outboundUrl">Share-ссылка</label>
+                                <input type="text" id="outboundUrl" placeholder="vless://... или hysteria2://..." required>
+                            </div>
+                            <div class="form-group" style="flex: 0; display: flex; align-items: flex-end;">
+                                <button type="submit" class="btn btn-primary">Добавить</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                
+                <div class="outbounds-list">
+                    <h3 style="margin-bottom: 10px; color: #333;">Существующие Outbounds</h3>
+                    <div id="outboundsContainer">
+                        <table class="outbounds-table">
+                            <thead>
+                                <tr>
+                                    <th>Тег</th>
+                                    <th>Тип</th>
+                                    <th>Сервер</th>
+                                    <th>Порт</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="outboundsTableBody">
+                                <tr>
+                                    <td colspan="5" style="text-align: center; color: #999;">Загрузка...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <!-- Config Tab -->
         <div id="config-tab" class="tab-content">
             <div class="config-editor-section">

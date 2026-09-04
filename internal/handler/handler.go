@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lanfix/sing-box-configurer/internal/dockercontroller"
+	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
@@ -17,13 +18,15 @@ type Handler struct {
 	rulesManager        *rules.Manager
 	dockerControllerAPI *dockercontroller.API
 	configManager       *singbox.ConfigManager
+	outboundManager     *outbound.Manager
 }
 
-func NewHandler(rulesManager *rules.Manager, dockerControllerAPI *dockercontroller.API, configManager *singbox.ConfigManager) *Handler {
+func NewHandler(rulesManager *rules.Manager, dockerControllerAPI *dockercontroller.API, configManager *singbox.ConfigManager, outboundManager *outbound.Manager) *Handler {
 	return &Handler{
 		rulesManager:        rulesManager,
 		dockerControllerAPI: dockerControllerAPI,
 		configManager:       configManager,
+		outboundManager:     outboundManager,
 	}
 }
 
@@ -494,5 +497,100 @@ func (h *Handler) DiscardTempConfig(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "Temporary config discarded",
+	})
+}
+
+// Outbounds endpoints
+
+// GetOutbounds возвращает список всех VPN outbounds.
+func (h *Handler) GetOutbounds(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	outbounds, err := h.outboundManager.GetOutbounds()
+	if err != nil {
+		log.Printf("Error getting outbounds: %v", err)
+		http.Error(w, "Failed to get outbounds: "+err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"outbounds": outbounds,
+	})
+}
+
+// AddOutbound добавляет новый outbound из share-ссылки.
+func (h *Handler) AddOutbound(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ShareURL string `json:"shareUrl"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ShareURL == "" {
+		http.Error(w, "Share URL is required", http.StatusBadRequest)
+		return
+	}
+
+	outbound, err := h.outboundManager.AddOutboundFromShare(req.ShareURL)
+	if err != nil {
+		log.Printf("Error adding outbound: %v", err)
+		http.Error(w, "Failed to add outbound: "+err.Error(), http.StatusBadRequest)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"outbound": outbound,
+		"message":  "Outbound добавлен успешно",
+	})
+}
+
+// DeleteOutbound удаляет outbound по тегу.
+func (h *Handler) DeleteOutbound(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Tag string `json:"tag"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Tag == "" {
+		http.Error(w, "Tag is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.outboundManager.DeleteOutbound(req.Tag); err != nil {
+		log.Printf("Error deleting outbound: %v", err)
+		http.Error(w, "Failed to delete outbound: "+err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Outbound удален успешно",
 	})
 }

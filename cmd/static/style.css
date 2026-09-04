@@ -932,3 +932,87 @@ select:focus, input[type="text"]:focus, input[type="url"]:focus, input[type="num
     color: #6a9955;
     font-style: italic;
 }
+
+/* Outbounds Tab */
+.outbounds-section {
+    padding: 20px 0;
+}
+
+.add-outbound-form {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-bottom: 30px;
+}
+
+.outbounds-list {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.outbounds-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+.outbounds-table thead {
+    background: #f5f5f5;
+}
+
+.outbounds-table th {
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    color: #333;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.outbounds-table td {
+    padding: 12px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.outbounds-table tr:hover {
+    background: #f9f9f9;
+}
+
+.btn-small {
+    padding: 4px 12px;
+    font-size: 13px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-danger {
+    background: #dc3545;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #c82333;
+}
+
+.tab-badge {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ffc107;
+    margin-left: 6px;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
