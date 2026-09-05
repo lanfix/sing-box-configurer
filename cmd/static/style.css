@@ -999,20 +999,26 @@ select:focus, input[type="text"]:focus, input[type="url"]:focus, input[type="num
 }
 
 .tab-badge {
+    position: relative;
     display: inline-block;
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #ffc107;
-    margin-left: 6px;
-    animation: pulse 2s infinite;
+    background: #ff4444;
+    margin-left: 8px;
+    vertical-align: middle;
+    top: -1px;
+    box-shadow: 0 0 0 2px rgba(255, 68, 68, 0.3);
+    animation: pulse 1.5s ease-in-out infinite;
 }
 
 @keyframes pulse {
     0%, 100% {
+        transform: scale(1);
         opacity: 1;
     }
     50% {
-        opacity: 0.5;
+        transform: scale(1.1);
+        opacity: 0.8;
     }
 }

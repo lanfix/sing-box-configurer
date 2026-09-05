@@ -8,31 +8,37 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/lanfix/sing-box-configurer/internal/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
+	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
+	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
-	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
 
 type Handler struct {
-	rulesManager        *rules.Manager
-	dockerControllerAPI *dockercontroller.API
-	configManager       *singbox.ConfigManager
-	outboundManager     *outbound.Manager
+	rulesManager             *rules.Manager
+	dockerControllerProvider *dockercontroller.Provider
+	singBoxConfigProvider    *singboxconfig.Provider
+	outboundManager          *outbound.Manager
 }
 
-func NewHandler(rulesManager *rules.Manager, dockerControllerAPI *dockercontroller.API, configManager *singbox.ConfigManager, outboundManager *outbound.Manager) *Handler {
+func NewHandler(
+	rulesManager *rules.Manager,
+	dockerControllerProvider *dockercontroller.Provider,
+	singBoxConfigProvider *singboxconfig.Provider,
+	outboundManager *outbound.Manager,
+) *Handler {
 	return &Handler{
-		rulesManager:        rulesManager,
-		dockerControllerAPI: dockerControllerAPI,
-		configManager:       configManager,
-		outboundManager:     outboundManager,
+		rulesManager:             rulesManager,
+		dockerControllerProvider: dockerControllerProvider,
+		singBoxConfigProvider:    singBoxConfigProvider,
+		outboundManager:          outboundManager,
 	}
 }
 
 func (h *Handler) GetRules(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
 		return
 	}
 
@@ -349,7 +355,7 @@ func (h *Handler) ReloadSingBox(w http.ResponseWriter, r *http.Request) {
 		"managed": "true",
 	}
 
-	if err := h.dockerControllerAPI.RestartContainersByLabels(labels); err != nil {
+	if err := h.dockerControllerProvider.RestartContainersByLabels(labels); err != nil {
 		log.Printf("Error restarting sing-box: %v", err)
 		http.Error(w, "Failed to restart sing-box: "+err.Error(), http.StatusInternalServerError)
 
@@ -361,142 +367,6 @@ func (h *Handler) ReloadSingBox(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "Sing-box перезагружен успешно",
-	})
-}
-
-// Sing-Box Config Editor endpoints
-
-func (h *Handler) GetSingBoxConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	config, err := h.configManager.GetConfig()
-	if err != nil {
-		log.Printf("Error reading config: %v", err)
-		http.Error(w, "Failed to read config: "+err.Error(), http.StatusInternalServerError)
-
-		return
-	}
-
-	hasPending := h.configManager.HasPending()
-	response := map[string]interface{}{
-		"config":        config,
-		"appliedConfig": config,
-		"hasPending":    hasPending,
-	}
-
-	// Если есть временный конфиг, возвращаем его как текущий.
-	if hasPending {
-		tempConfig, hasTempConfig, err := h.configManager.GetTemp()
-		if err != nil {
-			log.Printf("Error reading temp config: %v", err)
-		}
-
-		if hasTempConfig {
-			response["config"] = tempConfig
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(response)
-}
-
-func (h *Handler) SaveTempConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req struct {
-		Config string `json:"config"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if req.Config == "" {
-		http.Error(w, "Config is required", http.StatusBadRequest)
-		return
-	}
-
-	if err := h.configManager.SaveTemp(req.Config); err != nil {
-		log.Printf("Error saving temp config: %v", err)
-		http.Error(w, "Failed to save temp config: "+err.Error(), http.StatusInternalServerError)
-
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Config saved to temporary storage",
-	})
-}
-
-func (h *Handler) ApplySingBoxConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if !h.configManager.HasPending() {
-		http.Error(w, "No pending config to apply", http.StatusBadRequest)
-		return
-	}
-
-	if err := h.configManager.ApplyConfig(); err != nil {
-		log.Printf("Error applying config: %v", err)
-		http.Error(w, "Failed to apply config: "+err.Error(), http.StatusInternalServerError)
-
-		return
-	}
-
-	// Перезапускаем контейнер sing-box.
-	labels := map[string]string{
-		"app":     "sing-box",
-		"managed": "true",
-	}
-
-	if err := h.dockerControllerAPI.RestartContainersByLabels(labels); err != nil {
-		log.Printf("Warning: config applied but failed to restart sing-box: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"message": "Config applied but failed to restart sing-box. Please restart manually.",
-			"warning": err.Error(),
-		})
-
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Config applied and sing-box restarted successfully",
-	})
-}
-
-func (h *Handler) DiscardTempConfig(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if err := h.configManager.DiscardTemp(); err != nil {
-		log.Printf("Error discarding temp config: %v", err)
-		http.Error(w, "Failed to discard temp config: "+err.Error(), http.StatusInternalServerError)
-
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Temporary config discarded",
 	})
 }
 

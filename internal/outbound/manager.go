@@ -7,17 +7,17 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/lanfix/sing-box-configurer/internal/singbox"
+	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 )
 
 // Manager управляет VPN outbounds в sing-box конфиге.
 type Manager struct {
-	configManager *singbox.ConfigManager
+	configManager *singboxconfig.Provider
 	mu            sync.RWMutex
 }
 
 // NewManager создает новый менеджер outbounds.
-func NewManager(configManager *singbox.ConfigManager) *Manager {
+func NewManager(configManager *singboxconfig.Provider) *Manager {
 	return &Manager{
 		configManager: configManager,
 	}
@@ -28,21 +28,23 @@ func (m *Manager) GetOutbounds() ([]Outbound, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	configStr, err := m.configManager.GetConfig()
+	configData, err := m.configManager.GetConfig()
 	if err != nil {
-		return nil, fmt.Errorf("cannot read config: %w", err)
+		return nil, fmt.Errorf("cannot get config: %w", err)
 	}
 
 	if m.configManager.HasPending() {
-		tempConfig, hasTemp, err := m.configManager.GetTemp()
-		if err == nil && hasTemp {
-			configStr = tempConfig
+		tempConfigData, err := m.configManager.GetTemp()
+		if err != nil {
+			return nil, fmt.Errorf("cannot get temp config: %w", err)
 		}
+
+		configData = tempConfigData
 	}
 
 	var config map[string]interface{}
 
-	if err := json.Unmarshal([]byte(configStr), &config); err != nil {
+	if err := json.Unmarshal(configData, &config); err != nil {
 		return nil, fmt.Errorf("cannot parse config json: %w", err)
 	}
 
@@ -237,7 +239,7 @@ func (m *Manager) addEndpoint(config map[string]interface{}, outbound *Outbound)
 		return nil, fmt.Errorf("cannot marshal config: %w", err)
 	}
 
-	if err := m.configManager.SaveTemp(string(newData)); err != nil {
+	if err := m.configManager.SaveTemp(newData); err != nil {
 		return nil, fmt.Errorf("cannot save temp config: %w", err)
 	}
 
@@ -327,7 +329,7 @@ func (m *Manager) addOutboundToConfig(config map[string]interface{}, outbound *O
 		return nil, fmt.Errorf("cannot marshal config: %w", err)
 	}
 
-	if err := m.configManager.SaveTemp(string(newData)); err != nil {
+	if err := m.configManager.SaveTemp(newData); err != nil {
 		return nil, fmt.Errorf("cannot save temp config: %w", err)
 	}
 
@@ -469,7 +471,7 @@ func (m *Manager) DeleteOutbound(tag string) error {
 		return fmt.Errorf("cannot marshal config: %w", err)
 	}
 
-	if err := m.configManager.SaveTemp(string(newData)); err != nil {
+	if err := m.configManager.SaveTemp(newData); err != nil {
 		return fmt.Errorf("cannot save temp config: %w", err)
 	}
 

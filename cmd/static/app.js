@@ -1627,9 +1627,11 @@ async function saveTempConfig() {
             throw new Error(message || 'Ошибка при сохранении');
         }
 
+        const responseData = JSON.parse(await response.text())
+
         showMessage('Конфиг сохранён временно. Нажмите "Применить" для активации.', 'success');
         st.loadedConfig = config; // Обновляем loaded для сравнения
-        st.hasPendingChanges = true;
+        st.hasPendingChanges = responseData.hasPending;
         updateConfigButtons();
         renderGutter(st.lines.length); // Обновляем индикаторы изменений
     } catch (error) {
@@ -1695,6 +1697,25 @@ async function discardConfig() {
     }
 }
 
+// Проверяет наличие несохраненных изменений конфига при загрузке страницы.
+async function checkPendingConfig() {
+    try {
+        const response = await fetch('/api/config/check-pending');
+        const data = await response.json();
+
+        if (data.hasPending) {
+            const badge = document.getElementById('configTabBadge');
+
+            if (badge) {
+                badge.style.display = 'inline-block';
+            }
+        }
+    } catch (error) {
+        console.error('Failed to check pending config:', error);
+    }
+}
+
+checkPendingConfig();
 restoreActiveTab();
 
 // ============================================================================

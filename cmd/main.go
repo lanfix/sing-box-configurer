@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/lanfix/sing-box-configurer/cmd/config"
-	"github.com/lanfix/sing-box-configurer/internal/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
+	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
+	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
-	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
 
 //go:embed all:static
@@ -44,12 +44,12 @@ func main() {
 
 	rulesManager.StartAllURLSourceUpdates()
 
-	dockerControllerAPI := dockercontroller.NewAPI(cfg.DockerControllerURL)
+	dockerControllerProvider := dockercontroller.NewProvider(cfg.DockerControllerURL)
+	singBoxConfigProvider := singboxconfig.NewProvider(cfg.SingBoxConfigPath)
 
-	configManager := singbox.NewConfigManager(cfg.SingBoxConfigPath)
-	outboundManager := outbound.NewManager(configManager)
+	outboundManager := outbound.NewManager(singBoxConfigProvider)
 
-	h := handler.NewHandler(rulesManager, dockerControllerAPI, configManager, outboundManager)
+	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -99,6 +99,7 @@ func main() {
 	http.HandleFunc("/api/config/save-temp", h.SaveTempConfig)
 	http.HandleFunc("/api/config/apply", h.ApplySingBoxConfig)
 	http.HandleFunc("/api/config/discard", h.DiscardTempConfig)
+	http.HandleFunc("/api/config/check-pending", h.CheckPendingConfig)
 
 	http.HandleFunc("/api/outbounds", h.GetOutbounds)
 	http.HandleFunc("/api/outbounds/add", h.AddOutbound)

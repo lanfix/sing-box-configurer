@@ -11,12 +11,12 @@ import (
 	"time"
 )
 
-type API struct {
+type Provider struct {
 	baseUrl string
 	client  *http.Client
 }
 
-func NewAPI(baseUrl string) *API {
+func NewProvider(baseUrl string) *Provider {
 	if strings.HasSuffix(baseUrl, "/") {
 		baseUrl = baseUrl[:len(baseUrl)-1]
 	}
@@ -25,18 +25,18 @@ func NewAPI(baseUrl string) *API {
 		Timeout: time.Second * 30,
 	}
 
-	return &API{
+	return &Provider{
 		baseUrl: baseUrl,
 		client:  client,
 	}
 }
 
-func (api *API) do(req *http.Request) (*http.Response, error) {
-	return api.client.Do(req)
+func (p *Provider) do(req *http.Request) (*http.Response, error) {
+	return p.client.Do(req)
 }
 
-func (api *API) doRequest(method, path string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequest(method, api.baseUrl+path, body)
+func (p *Provider) doRequest(method, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, p.baseUrl+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create request: %w", err)
 
@@ -46,10 +46,10 @@ func (api *API) doRequest(method, path string, body io.Reader) (*http.Response, 
 
 	req.Header.Set("Content-Type", "application/json")
 
-	return api.do(req)
+	return p.do(req)
 }
 
-func (api *API) RestartContainersByLabels(labels map[string]string) error {
+func (p *Provider) RestartContainersByLabels(labels map[string]string) error {
 	requestBody := map[string]interface{}{
 		"labels": labels,
 	}
@@ -59,7 +59,7 @@ func (api *API) RestartContainersByLabels(labels map[string]string) error {
 		return fmt.Errorf("cannot marshal request: %w", err)
 	}
 
-	resp, err := api.doRequest(http.MethodPost, "/api/restart", bytes.NewBuffer(jsonData))
+	resp, err := p.doRequest(http.MethodPost, "/api/restart", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("cannot do request: %w", err)
 	}

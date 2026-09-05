@@ -1,4 +1,4 @@
-package singbox
+package singboxclashapi
 
 import (
 	"fmt"
