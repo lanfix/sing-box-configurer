@@ -62,6 +62,7 @@ func (h *Handler) AddRule(w http.ResponseWriter, r *http.Request) {
 		Type        string `json:"type"`
 		Value       string `json:"value"`
 		Description string `json:"description"`
+		Group       string `json:"group"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -79,16 +80,22 @@ func (h *Handler) AddRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Если группа не указана, используем default.
+	if req.Group == "" {
+		req.Group = "default"
+	}
+
 	rule := rules.Rule{
 		ID:          uuid.New().String(),
 		Type:        req.Type,
 		Value:       req.Value,
 		Description: req.Description,
+		Group:       req.Group,
 	}
 
 	if err := h.rulesManager.AddRule(rule); err != nil {
 		log.Printf("Error adding rule: %v", err)
-		http.Error(w, "Failed to add rule", http.StatusInternalServerError)
+		http.Error(w, "Failed to add rule: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -156,10 +163,118 @@ func (h *Handler) GetRuleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Deprecated: используйте /api/ruleset/{group} вместо этого.
 	ruleSet := h.rulesManager.GetRuleSet()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ruleSet)
+}
+
+// GetRuleSetByGroup возвращает ruleset для конкретной группы.
+func (h *Handler) GetRuleSetByGroup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	groupName := r.URL.Query().Get("group")
+	if groupName == "" {
+		http.Error(w, "Group parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	ruleSet := h.rulesManager.GetRuleSetByGroup(groupName)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ruleSet)
+}
+
+// GetGroups возвращает список всех групп.
+func (h *Handler) GetGroups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	groups := h.rulesManager.GetGroups()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"groups": groups,
+	})
+}
+
+// AddGroup добавляет новую группу.
+func (h *Handler) AddGroup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
+		return
+	}
+
+	group := rules.Group{
+		Name:        req.Name,
+		Description: req.Description,
+	}
+
+	if err := h.rulesManager.AddGroup(group); err != nil {
+		log.Printf("Error adding group: %v", err)
+		http.Error(w, "Failed to add group: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"group":   group,
+	})
+}
+
+// DeleteGroup удаляет группу.
+func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.rulesManager.DeleteGroup(req.Name); err != nil {
+		log.Printf("Error deleting group: %v", err)
+		http.Error(w, "Failed to delete group: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
 }
 
 // URL Sources endpoints
@@ -188,6 +303,7 @@ func (h *Handler) AddURLSource(w http.ResponseWriter, r *http.Request) {
 		URL         string `json:"url"`
 		Description string `json:"description"`
 		Interval    int    `json:"interval"`
+		Group       string `json:"group"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -204,16 +320,22 @@ func (h *Handler) AddURLSource(w http.ResponseWriter, r *http.Request) {
 		req.Interval = 60 // default 60 minutes
 	}
 
+	// Если группа не указана, используем default.
+	if req.Group == "" {
+		req.Group = "default"
+	}
+
 	source := rules.URLSource{
 		ID:          uuid.New().String(),
 		URL:         req.URL,
 		Description: req.Description,
 		Interval:    req.Interval,
+		Group:       req.Group,
 	}
 
 	if err := h.rulesManager.AddURLSource(source); err != nil {
 		log.Printf("Error adding URL source: %v", err)
-		http.Error(w, "Failed to add URL source", http.StatusInternalServerError)
+		http.Error(w, "Failed to add URL source: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 

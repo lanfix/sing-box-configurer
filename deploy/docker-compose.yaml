@@ -7,7 +7,7 @@ services:
       - 8080:8080
     volumes:
       - ./sing-box-configurer.json:/app/config.json:ro
-      - ./rules.json:/app/rules.json:rw
+      - ./app.json:/app/app.json:rw
       - ./sing-box.json:/etc/sing-box/config.json:rw
     depends_on:
       - docker-controller

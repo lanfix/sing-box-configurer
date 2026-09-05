@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,6 +19,7 @@ type Rule struct {
 	Type        string    `json:"type"` // "domain", "domain_suffix", "ip", "cidr"
 	Value       string    `json:"value"`
 	Description string    `json:"description"`
+	Group       string    `json:"group"` // группа, к которой привязано правило
 	Applied     bool      `json:"applied"`
 	Deleted     bool      `json:"deleted"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -28,6 +30,7 @@ type URLSource struct {
 	ID          string    `json:"id"`
 	URL         string    `json:"url"`
 	Description string    `json:"description"`
+	Group       string    `json:"group"`    // группа, к которой привязан источник
 	Interval    int       `json:"interval"` // in minutes
 	LastUpdate  time.Time `json:"last_update"`
 	LastStatus  string    `json:"last_status"` // "success", "error"
@@ -38,10 +41,18 @@ type URLSource struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// Group представляет логическую группу для правил.
+type Group struct {
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 // RulesData stores the rules and URL sources
 type RulesData struct {
 	Rules      []Rule      `json:"rules"`
 	URLSources []URLSource `json:"url_sources,omitempty"`
+	Groups     []Group     `json:"groups,omitempty"`
 }
 
 // RuleVersion пятая версия формата правил.
@@ -58,15 +69,16 @@ type SingBoxRuleSet struct {
 type Manager struct {
 	mu               sync.RWMutex
 	data             RulesData
-	rulesPath        string
+	appDataPath      string
 	sourceListsProxy func(r *http.Request) (*url.URL, error)
 	urlRules         map[string]RuleSet // URL ID -> rules
 	urlRulesMu       sync.RWMutex
 	cancelFuncs      map[string]context.CancelFunc // URL ID -> cancel function
 	cancelFuncsMu    sync.Mutex
+	migrated         bool // флаг, что была выполнена миграция
 }
 
-func NewManager(rulesPath string, sourceListsProxyUrl string) (*Manager, error) {
+func NewManager(appDataPath, sourceListsProxyUrl string) (*Manager, error) {
 	var sourceListsProxy func(r *http.Request) (*url.URL, error)
 
 	if sourceListsProxyUrl != "" {
@@ -81,13 +93,21 @@ func NewManager(rulesPath string, sourceListsProxyUrl string) (*Manager, error) 
 	}
 
 	return &Manager{
-		rulesPath:        rulesPath,
+		appDataPath:      appDataPath,
 		sourceListsProxy: sourceListsProxy,
 		urlRules:         map[string]RuleSet{},
 		cancelFuncs:      map[string]context.CancelFunc{},
+		migrated:         false,
 		data: RulesData{
 			Rules:      []Rule{},
 			URLSources: []URLSource{},
+			Groups: []Group{
+				{
+					Name:        "default",
+					Description: "Группа по умолчанию",
+					CreatedAt:   time.Now(),
+				},
+			},
 		},
 	}, nil
 }
@@ -96,11 +116,12 @@ func (rm *Manager) Load() error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	data, err := os.ReadFile(rm.rulesPath)
+	data, err := os.ReadFile(rm.appDataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return rm.save()
 		}
+
 		return err
 	}
 
@@ -110,15 +131,63 @@ func (rm *Manager) Load() error {
 		return err
 	}
 
-	// Migration: if URLSources is nil, initialize it
+	migrationOccurred := false
+
 	if newData.URLSources == nil {
 		newData.URLSources = []URLSource{}
+		migrationOccurred = true
+
 		log.Println("Migrated rules data: added URLSources field")
+	}
+
+	if newData.Groups == nil {
+		newData.Groups = []Group{
+			{
+				Name:        "default",
+				Description: "Группа по умолчанию",
+				CreatedAt:   time.Now(),
+			},
+		}
+
+		migrationOccurred = true
+
+		log.Println("Migrated rules data: added Groups field with default group")
+	}
+
+	for i := range newData.Rules {
+		if newData.Rules[i].Group == "" {
+			newData.Rules[i].Group = "default"
+			migrationOccurred = true
+		}
+	}
+
+	for i := range newData.URLSources {
+		if newData.URLSources[i].Group == "" {
+			newData.URLSources[i].Group = "default"
+			migrationOccurred = true
+		}
 	}
 
 	rm.data = newData
 
+	if migrationOccurred {
+		rm.migrated = true
+
+		// Сохраняем изменения после миграции.
+		if err := rm.save(); err != nil {
+			log.Printf("Warning: failed to save migrated data: %v", err)
+		}
+	}
+
 	return nil
+}
+
+// WasMigrated возвращает true, если при загрузке была выполнена миграция.
+func (rm *Manager) WasMigrated() bool {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	return rm.migrated
 }
 
 func (rm *Manager) save() error {
@@ -127,7 +196,7 @@ func (rm *Manager) save() error {
 		return err
 	}
 
-	return os.WriteFile(rm.rulesPath, data, 0644)
+	return os.WriteFile(rm.appDataPath, data, 0644)
 }
 
 func (rm *Manager) GetRules() []Rule {
@@ -140,6 +209,16 @@ func (rm *Manager) GetRules() []Rule {
 func (rm *Manager) AddRule(rule Rule) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
+
+	// Проверяем, что группа существует.
+	if !rm.groupExists(rule.Group) {
+		return fmt.Errorf("группа %s не существует", rule.Group)
+	}
+
+	// Проверяем конфликты с существующими правилами.
+	if err := rm.validateRuleConflicts(rule); err != nil {
+		return err
+	}
 
 	rule.Applied = false
 	rule.CreatedAt = time.Now()
@@ -192,6 +271,21 @@ func (rm *Manager) GetRuleSet() SingBoxRuleSet {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
+	// Deprecated: этот метод оставлен для обратной совместимости.
+	// Используйте GetRuleSetByGroup для получения правил конкретной группы.
+	return rm.getRuleSetByGroupLocked("default")
+}
+
+// GetRuleSetByGroup возвращает набор правил для указанной группы.
+func (rm *Manager) GetRuleSetByGroup(groupName string) SingBoxRuleSet {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	return rm.getRuleSetByGroupLocked(groupName)
+}
+
+// getRuleSetByGroupLocked возвращает набор правил для указанной группы (без блокировки).
+func (rm *Manager) getRuleSetByGroupLocked(groupName string) SingBoxRuleSet {
 	// Build rule set from applied rules only
 	var rules []map[string]interface{}
 
@@ -200,11 +294,15 @@ func (rm *Manager) GetRuleSet() SingBoxRuleSet {
 	var domainSuffixes []string
 	var ipCidrs []string
 
+	// Создаем карту для отслеживания конфликтов между ручными и автоматическими правилами.
+	manualDomains := make(map[string]bool)
+	manualSuffixes := make(map[string]bool)
+
 	// Add manual rules (only applied rules, including those marked for deletion)
 	for _, rule := range rm.data.Rules {
-		// Skip only unapplied rules
+		// Skip only unapplied rules and rules from other groups
 		// Rules marked as Deleted but Applied should still be included until changes are applied
-		if !rule.Applied {
+		if !rule.Applied || rule.Group != groupName {
 			continue
 		}
 
@@ -212,8 +310,10 @@ func (rm *Manager) GetRuleSet() SingBoxRuleSet {
 		switch rule.Type {
 		case "domain":
 			domains = append(domains, rule.Value)
+			manualDomains[rule.Value] = true
 		case "domain_suffix":
 			domainSuffixes = append(domainSuffixes, rule.Value)
+			manualSuffixes[rule.Value] = true
 		case "ip", "cidr":
 			ipCidrs = append(ipCidrs, rule.Value)
 		}
@@ -225,10 +325,23 @@ func (rm *Manager) GetRuleSet() SingBoxRuleSet {
 
 	for sourceID, ruleSet := range rm.urlRules {
 		for _, source := range rm.data.URLSources {
-			if source.ID == sourceID && source.Applied {
+			if source.ID == sourceID && source.Applied && source.Group == groupName {
+				// Добавляем IP/CIDR без проверки конфликтов.
 				ipCidrs = append(ipCidrs, ruleSet.CidrList...)
-				domains = append(domains, ruleSet.Domains...)
-				domainSuffixes = append(domainSuffixes, ruleSet.DomainSuffixes...)
+
+				// Проверяем конфликты для доменов.
+				for _, domain := range ruleSet.Domains {
+					if !manualDomains[domain] && !hasConflictWithManualRules(domain, "domain", manualDomains, manualSuffixes) {
+						domains = append(domains, domain)
+					}
+				}
+
+				// Проверяем конфликты для суффиксов.
+				for _, suffix := range ruleSet.DomainSuffixes {
+					if !manualSuffixes[suffix] && !hasConflictWithManualRules(suffix, "domain_suffix", manualDomains, manualSuffixes) {
+						domainSuffixes = append(domainSuffixes, suffix)
+					}
+				}
 
 				break
 			}
@@ -262,6 +375,36 @@ func (rm *Manager) GetRuleSet() SingBoxRuleSet {
 	}
 }
 
+// hasConflictWithManualRules проверяет, конфликтует ли правило с ручными правилами.
+func hasConflictWithManualRules(value, ruleType string, manualDomains, manualSuffixes map[string]bool) bool {
+	if ruleType == "domain" {
+		// Проверяем, есть ли суффикс, который покрывает этот домен.
+		for suffix := range manualSuffixes {
+			if isDomainMatchesSuffix(value, suffix) {
+				return true
+			}
+		}
+	}
+
+	if ruleType == "domain_suffix" {
+		// Проверяем, есть ли домен, который конфликтует с этим суффиксом.
+		for domain := range manualDomains {
+			if isDomainMatchesSuffix(domain, value) {
+				return true
+			}
+		}
+
+		// Проверяем, есть ли суффикс, который конфликтует с этим суффиксом.
+		for suffix := range manualSuffixes {
+			if isDomainMatchesSuffix(value, suffix) || isDomainMatchesSuffix(suffix, value) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func (rm *Manager) GetPendingCount() int {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
@@ -273,4 +416,137 @@ func (rm *Manager) GetPendingCount() int {
 		}
 	}
 	return count
+}
+
+// GetGroups возвращает список всех групп.
+func (rm *Manager) GetGroups() []Group {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	return rm.data.Groups
+}
+
+// AddGroup добавляет новую группу.
+func (rm *Manager) AddGroup(group Group) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	// Проверяем, что группа с таким именем не существует.
+	for _, g := range rm.data.Groups {
+		if g.Name == group.Name {
+			return fmt.Errorf("группа с именем %s уже существует", group.Name)
+		}
+	}
+
+	group.CreatedAt = time.Now()
+	rm.data.Groups = append(rm.data.Groups, group)
+
+	return rm.save()
+}
+
+// DeleteGroup удаляет группу.
+func (rm *Manager) DeleteGroup(name string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	if name == "default" {
+		return fmt.Errorf("нельзя удалить группу default")
+	}
+
+	// Проверяем, что в группе нет правил и источников.
+	for _, rule := range rm.data.Rules {
+		if rule.Group == name && !rule.Deleted {
+			return fmt.Errorf("в группе %s есть правила, удалите их сначала", name)
+		}
+	}
+
+	for _, source := range rm.data.URLSources {
+		if source.Group == name && !source.Deleted {
+			return fmt.Errorf("в группе %s есть источники, удалите их сначала", name)
+		}
+	}
+
+	// Удаляем группу.
+	newGroups := []Group{}
+
+	for _, g := range rm.data.Groups {
+		if g.Name != name {
+			newGroups = append(newGroups, g)
+		}
+	}
+
+	rm.data.Groups = newGroups
+
+	return rm.save()
+}
+
+// groupExists проверяет, существует ли группа с заданным именем.
+func (rm *Manager) groupExists(name string) bool {
+	for _, g := range rm.data.Groups {
+		if g.Name == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// validateRuleConflicts проверяет конфликты правил domain и domain_suffix глобально.
+func (rm *Manager) validateRuleConflicts(newRule Rule) error {
+	// Проверяем только для domain и domain_suffix.
+	if newRule.Type != "domain" && newRule.Type != "domain_suffix" {
+		return nil
+	}
+
+	for _, rule := range rm.data.Rules {
+		// Пропускаем удаленные правила.
+		if rule.Deleted {
+			continue
+		}
+
+		// Проверяем дубликаты глобально.
+		if rule.Type == newRule.Type && rule.Value == newRule.Value {
+			if rule.Group == newRule.Group {
+				return fmt.Errorf("правило %s %s уже существует в группе %s", newRule.Type, newRule.Value, newRule.Group)
+			}
+
+			return fmt.Errorf("правило %s %s уже существует в другой группе %s", newRule.Type, newRule.Value, rule.Group)
+		}
+
+		// Проверяем конфликты domain и domain_suffix глобально.
+		if newRule.Type == "domain" && rule.Type == "domain_suffix" {
+			if isDomainMatchesSuffix(newRule.Value, rule.Value) {
+				return fmt.Errorf("домен %s конфликтует с существующим суффиксом %s в группе %s", newRule.Value, rule.Value, rule.Group)
+			}
+		}
+
+		if newRule.Type == "domain_suffix" && rule.Type == "domain" {
+			if isDomainMatchesSuffix(rule.Value, newRule.Value) {
+				return fmt.Errorf("суффикс %s конфликтует с существующим доменом %s в группе %s", newRule.Value, rule.Value, rule.Group)
+			}
+		}
+
+		if newRule.Type == "domain_suffix" && rule.Type == "domain_suffix" {
+			if isDomainMatchesSuffix(newRule.Value, rule.Value) || isDomainMatchesSuffix(rule.Value, newRule.Value) {
+				return fmt.Errorf("суффикс %s конфликтует с существующим суффиксом %s в группе %s", newRule.Value, rule.Value, rule.Group)
+			}
+		}
+	}
+
+	return nil
+}
+
+// isDomainMatchesSuffix проверяет, является ли домен поддоменом суффикса.
+func isDomainMatchesSuffix(domain, suffix string) bool {
+	// example.com совпадает с суффиксом example.com.
+	if domain == suffix {
+		return true
+	}
+
+	// test.example.com совпадает с суффиксом example.com.
+	if strings.HasSuffix(domain, "."+suffix) {
+		return true
+	}
+
+	return false
 }

@@ -24,6 +24,11 @@ func (rm *Manager) AddURLSource(source URLSource) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
+	// Проверяем, что группа существует.
+	if !rm.groupExists(source.Group) {
+		return fmt.Errorf("группа %s не существует", source.Group)
+	}
+
 	source.Applied = false
 	source.CreatedAt = time.Now()
 	source.LastStatus = "pending"

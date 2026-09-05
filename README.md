@@ -62,7 +62,7 @@ go build -o sing-box-configurer ./cmd
 
 ```json
 {
-  "rules_path": "rules.json",
+  "app_data_path": "app.json",
   "listen_addr": ":8080",
   "docker_controller_url": "http://127.0.0.1:8081",
   "source_lists_proxy_url": "",
@@ -72,7 +72,7 @@ go build -o sing-box-configurer ./cmd
 
 ### Параметры конфигурации
 
-- **rules_path** - путь к файлу с правилами (по умолчанию: `rules.json`)
+- **app_data_path** - путь к файлу с данными приложения (по умолчанию: `app.json`)
 - **listen_addr** - адрес для веб-интерфейса и API (по умолчанию: `:8080`)
 - **docker_controller_url** - URL docker-controller для управления контейнерами (по умолчанию: `http://127.0.0.1:8081`)
 - **source_lists_proxy_url** - прокси для загрузки URL источников (опционально)
@@ -84,8 +84,6 @@ go build -o sing-box-configurer ./cmd
 
 ```bash
 ./sing-box-configurer -config /path/to/config.json
-./sing-box-configurer -rules /path/to/rules.json
-./sing-box-configurer -listen :9090
 ```
 
 Флаги имеют приоритет над параметрами из config.json.
@@ -126,36 +124,6 @@ go build -o sing-box-configurer ./cmd
 - `format: "source"` - правильный формат для JSON rule-set
 - `update_interval: "1m"` - sing-box будет автоматически проверять обновления каждую минуту
 - Версия rule-set автоматически увеличивается при применении правил
-
-### Развертывание в Docker
-
-Пример docker-compose.yml:
-
-```yaml
-version: '3'
-services:
-  configurer:
-    image: debian:bookworm-slim
-    restart: always
-    command: /app/sing-box-configurer
-    volumes:
-      - ./sing-box-configurer:/app/sing-box-configurer:ro
-      - ./config.json:/app/config.json:ro
-      - ./rules.json:/app/rules.json:rw
-    ports:
-      - "8080:8080"
-    working_dir: /app
-
-  sing-box:
-    image: ghcr.io/sagernet/sing-box
-    network_mode: host
-    volumes:
-      - ./sing-box-config.json:/etc/sing-box/config.json
-    depends_on:
-      - configurer
-```
-
-Статические файлы встроены в бинарник `sing-box-configurer`, поэтому монтировать папку `web/` не требуется.
 
 ### Работа с интерфейсом
 
@@ -437,45 +405,3 @@ services:
   "message": "Sing-box перезагружен успешно"
 }
 ```
-
-## Структура проекта
-
-```
-.
-├── cmd/
-│   ├── main.go              # Точка входа приложения
-│   └── static/              # Статические файлы (встраиваются в бинарник)
-│       ├── index.html
-│       ├── style.css
-│       └── app.js
-├── internal/
-│   ├── config/
-│   │   └── config.go        # Управление конфигурацией приложения
-│   ├── rules/
-│   │   ├── rules.go         # Управление правилами маршрутизации
-│   │   └── url_sources.go   # Управление URL источниками
-│   ├── singboxconfig/
-│   │   └── config.go        # Управление конфигом Sing-Box
-│   ├── dockercontroller/
-│   │   └── api.go           # API для управления Docker контейнерами
-│   └── handler/
-│       └── handler.go       # HTTP обработчики API
-├── go.mod                   # Go модули
-├── config.json              # Конфигурация приложения
-├── rules.json               # Правила маршрутизации
-├── sing-box.json            # Конфиг Sing-Box (для редактирования)
-└── README.md                # Документация
-```
-
-## Рабочий процесс
-
-1. **Добавление правил** - правила сохраняются в `rules.json` со статусом `applied: false`
-2. **Применение правил** - при нажатии "Применить правила":
-   - Статус правил меняется на `applied: true`
-   - Удаленные правила окончательно удаляются из `rules.json`
-   - Правила становятся доступны через `/api/ruleset`
-3. **Автоматическое обновление** - sing-box периодически запрашивает `/api/ruleset` и обновляет правила маршрутизации
-
-## Лицензия
-
-MIT

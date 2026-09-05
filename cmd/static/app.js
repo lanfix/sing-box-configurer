@@ -1,6 +1,7 @@
 let pendingCount = 0;
 let urlPendingCount = 0;
 let autoRefreshInterval = null;
+let groups = []; // Список групп
 
 function escapeHTML(text) {
     return String(text)
@@ -48,6 +49,8 @@ function activateTab(tabName) {
     } else if (tabName === 'url-sources') {
         loadURLSources();
         autoRefreshInterval = setInterval(loadURLSources, 5000);
+    } else if (tabName === 'groups') {
+        loadGroups();
     } else if (tabName === 'outbounds') {
         loadOutbounds();
     } else if (tabName === 'config') {
@@ -96,6 +99,137 @@ function updateApplyURLButton() {
     updatePendingButton('applyUrlBtn', urlPendingCount);
 }
 
+// Groups helpers
+
+async function loadGroupsForSelect() {
+    try {
+        const response = await fetch('/api/groups');
+        const data = await response.json();
+        groups = data.groups || [];
+        
+        // Обновляем выпадающий список для правил
+        const ruleGroupSelect = document.getElementById('ruleGroup');
+        if (ruleGroupSelect) {
+            ruleGroupSelect.innerHTML = groups.map(g => 
+                `<option value="${escapeHTML(g.name)}">${escapeHTML(g.name)}</option>`
+            ).join('');
+        }
+        
+        // Обновляем выпадающий список для URL источников
+        const urlSourceGroupSelect = document.getElementById('urlSourceGroup');
+        if (urlSourceGroupSelect) {
+            urlSourceGroupSelect.innerHTML = groups.map(g => 
+                `<option value="${escapeHTML(g.name)}">${escapeHTML(g.name)}</option>`
+            ).join('');
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки групп для селекта:', error);
+    }
+}
+
+async function loadGroups() {
+    try {
+        const response = await fetch('/api/groups');
+        const data = await response.json();
+        groups = data.groups || [];
+        displayGroups(groups);
+    } catch (error) {
+        showMessage('Ошибка загрузки групп: ' + error.message, 'error');
+    }
+}
+
+function displayGroups(groups) {
+    const tbody = document.getElementById('groupsBody');
+
+    if (groups.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Нет групп.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = groups.map(group => {
+        const createdAt = new Date(group.created_at).toLocaleString('ru-RU');
+        const isDefault = group.name === 'default';
+        
+        return `
+            <tr>
+                <td>
+                    <strong>${escapeHTML(group.name)}</strong>
+                    ${isDefault ? '<span class="badge badge-group" style="margin-left: 10px;">По умолчанию</span>' : ''}
+                </td>
+                <td class="description-cell">${escapeHTML(group.description || '')}</td>
+                <td class="date-cell">${createdAt}</td>
+                <td class="actions-cell">
+                    <button class="btn btn-danger" onclick="deleteGroup('${escapeHTML(group.name)}')" ${isDefault ? 'disabled' : ''}>
+                        ${isDefault ? 'Нельзя удалить' : 'Удалить'}
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+async function addGroup(event) {
+    event.preventDefault();
+
+    const name = document.getElementById('groupName').value.trim();
+    const description = document.getElementById('groupDescription').value;
+
+    if (!name) {
+        showMessage('Введите имя группы', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/groups/add', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ name, description })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(errorData || 'Ошибка при добавлении группы');
+        }
+
+        showMessage('Группа успешно добавлена', 'success');
+        document.getElementById('groupName').value = '';
+        document.getElementById('groupDescription').value = '';
+        await loadGroups();
+        await loadGroupsForSelect();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function deleteGroup(name) {
+    if (!confirm(`Удалить группу "${name}"?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/groups/delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ name })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(errorData || 'Ошибка при удалении группы');
+        }
+
+        showMessage('Группа успешно удалена', 'success');
+        await loadGroups();
+        await loadGroupsForSelect();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
 // Rules
 
 async function loadRules() {
@@ -105,6 +239,9 @@ async function loadRules() {
         pendingCount = data.pending_count || 0;
         displayRules(data.rules || []);
         updateApplyButton();
+        
+        // Загружаем группы для выпадающего списка
+        await loadGroupsForSelect();
     } catch (error) {
         showMessage('Ошибка загрузки правил: ' + error.message, 'error');
     }
@@ -114,7 +251,7 @@ function displayRules(rules) {
     const tbody = document.getElementById('rulesBody');
 
     if (rules.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Нет правил. Добавьте первое правило выше.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Нет правил. Добавьте первое правило выше.</td></tr>';
         return;
     }
 
@@ -125,6 +262,7 @@ function displayRules(rules) {
                     ${rule.deleted ? 'К удалению' : (rule.applied ? 'Применено' : 'Ожидает')}
                 </span>
             </td>
+            <td><span class="badge badge-group">${escapeHTML(rule.group || 'default')}</span></td>
             <td><span class="badge badge-${escapeHTML(rule.type)}">${getTypeLabel(rule.type)}</span></td>
             <td><code>${escapeHTML(rule.value)}</code></td>
             <td class="description-cell">${escapeHTML(rule.description || '')}</td>
@@ -153,6 +291,7 @@ async function addRule(event) {
     const type = document.getElementById('ruleType').value;
     const value = document.getElementById('ruleValue').value;
     const description = document.getElementById('ruleDescription').value;
+    const group = document.getElementById('ruleGroup').value;
 
     try {
         const response = await fetch('/api/rules/add', {
@@ -160,11 +299,12 @@ async function addRule(event) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ type, value, description })
+            body: JSON.stringify({ type, value, description, group })
         });
 
         if (!response.ok) {
-            throw new Error('Ошибка при добавлении правила');
+            const errorData = await response.text();
+            throw new Error(errorData || 'Ошибка при добавлении правила');
         }
 
         showMessage('Правило успешно добавлено', 'success');
@@ -234,6 +374,9 @@ async function loadURLSources() {
 
         urlPendingCount = sources.filter(s => !s.applied || s.deleted).length;
         updateApplyURLButton();
+        
+        // Загружаем группы для выпадающего списка
+        await loadGroupsForSelect();
     } catch (error) {
         showMessage('Ошибка загрузки URL источников: ' + error.message, 'error');
     }
@@ -243,7 +386,7 @@ function displayURLSources(sources) {
     const tbody = document.getElementById('urlSourcesBody');
 
     if (sources.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Нет URL источников. Добавьте первый источник выше.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Нет URL источников. Добавьте первый источник выше.</td></tr>';
         return;
     }
 
@@ -267,6 +410,7 @@ function displayURLSources(sources) {
                     </div>
                     ${source.last_error ? `<div class="source-error">${escapeHTML(source.last_error)}</div>` : ''}
                 </td>
+                <td><span class="badge badge-group">${escapeHTML(source.group || 'default')}</span></td>
                 <td class="url-cell" title="${url}">${url}</td>
                 <td class="description-cell">${escapeHTML(source.description || '')}</td>
                 <td>${escapeHTML(source.interval)} мин</td>
@@ -320,6 +464,7 @@ async function addURLSource(event) {
     const url = document.getElementById('urlSourceURL').value;
     const interval = parseInt(document.getElementById('urlSourceInterval').value, 10);
     const description = document.getElementById('urlSourceDescription').value;
+    const group = document.getElementById('urlSourceGroup').value;
 
     try {
         const response = await fetch('/api/url-sources/add', {
@@ -327,11 +472,12 @@ async function addURLSource(event) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ url, interval, description })
+            body: JSON.stringify({ url, interval, description, group })
         });
 
         if (!response.ok) {
-            throw new Error('Ошибка при добавлении URL источника');
+            const errorData = await response.text();
+            throw new Error(errorData || 'Ошибка при добавлении URL источника');
         }
 
         showMessage('URL источник успешно добавлен', 'success');

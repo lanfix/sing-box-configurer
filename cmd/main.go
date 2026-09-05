@@ -33,19 +33,50 @@ func main() {
 	log.Printf("Starting Sing-Box Configurer")
 	log.Printf("Config [%s]: %+v", *configPath, cfg)
 
-	rulesManager, err := rules.NewManager(cfg.RulesPath, cfg.SourceListsProxyUrl)
+	if cfg.AppDataPath == "" {
+		log.Fatalf("Field app_data_path required in config")
+	}
+
+	rulesManager, err := rules.NewManager(cfg.AppDataPath, cfg.SourceListsProxyUrl)
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize rules manager: %w", err))
 	}
 
+	singBoxConfigProvider := singboxconfig.NewProvider(cfg.SingBoxConfigPath)
+
+	migrationPerformed := false
+
 	if err := rulesManager.Load(); err != nil {
 		log.Printf("Warning: could not load rules: %v", err)
+	} else {
+		// Проверяем, была ли выполнена миграция.
+		migrationPerformed = rulesManager.WasMigrated()
+	}
+
+	// Если была выполнена миграция, синхронизируем группы в конфиг sing-box.
+	if migrationPerformed {
+		log.Println("Syncing groups to sing-box config after migration...")
+
+		groups := rulesManager.GetGroups()
+		var configGroups []singboxconfig.Group
+
+		for _, g := range groups {
+			configGroups = append(configGroups, singboxconfig.Group{
+				Name:        g.Name,
+				Description: g.Description,
+			})
+		}
+
+		if err := singBoxConfigProvider.SyncGroupsToConfig(cfg.SingBoxConfigPath, configGroups); err != nil {
+			log.Printf("Warning: failed to sync groups to config after migration: %v", err)
+		} else {
+			log.Println("Successfully synced groups to sing-box config")
+		}
 	}
 
 	rulesManager.StartAllURLSourceUpdates()
 
 	dockerControllerProvider := dockercontroller.NewProvider(cfg.DockerControllerURL)
-	singBoxConfigProvider := singboxconfig.NewProvider(cfg.SingBoxConfigPath)
 
 	outboundManager := outbound.NewManager(singBoxConfigProvider)
 
@@ -85,6 +116,11 @@ func main() {
 	http.HandleFunc("/api/rules/delete", h.DeleteRule)
 	http.HandleFunc("/api/apply", h.ApplyRules)
 	http.HandleFunc("/api/ruleset", h.GetRuleSet)
+	http.HandleFunc("/api/ruleset/group", h.GetRuleSetByGroup)
+
+	http.HandleFunc("/api/groups", h.GetGroups)
+	http.HandleFunc("/api/groups/add", h.AddGroup)
+	http.HandleFunc("/api/groups/delete", h.DeleteGroup)
 
 	http.HandleFunc("/api/url-sources", h.GetURLSources)
 	http.HandleFunc("/api/url-sources/add", h.AddURLSource)

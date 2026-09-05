@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"slices"
+
+	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 )
 
 func (h *Handler) GetSingBoxConfig(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +123,24 @@ func (h *Handler) ApplySingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to apply config: "+err.Error(), http.StatusInternalServerError)
 
 		return
+	}
+
+	// Синхронизируем группы в конфиг sing-box.
+	groups := h.rulesManager.GetGroups()
+
+	// Преобразуем группы в формат для singboxconfig.
+	var configGroups []singboxconfig.Group
+
+	for _, g := range groups {
+		configGroups = append(configGroups, singboxconfig.Group{
+			Name:        g.Name,
+			Description: g.Description,
+		})
+	}
+
+	actualConfigPath := h.singBoxConfigProvider.GetActualPath()
+	if err := h.singBoxConfigProvider.SyncGroupsToConfig(actualConfigPath, configGroups); err != nil {
+		log.Printf("Warning: failed to sync groups to config: %v", err)
 	}
 
 	// Перезапускаем контейнер sing-box.

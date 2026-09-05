@@ -6,7 +6,7 @@ import (
 )
 
 type AppConfig struct {
-	RulesPath           string `json:"rules_path"`
+	AppDataPath         string `json:"app_data_path"` // Новый путь для app.json
 	ListenAddr          string `json:"listen_addr"`
 	DockerControllerURL string `json:"docker_controller_url"`
 	SourceListsProxyUrl string `json:"source_lists_proxy_url"`
