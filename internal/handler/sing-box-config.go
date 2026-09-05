@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -133,8 +134,9 @@ func (h *Handler) ApplySingBoxConfig(w http.ResponseWriter, r *http.Request) {
 
 	for _, g := range groups {
 		configGroups = append(configGroups, singboxconfig.Group{
-			Name:        g.Name,
-			Description: g.Description,
+			Name:            g.Name,
+			Description:     g.Description,
+			DefaultOutbound: g.DefaultOutbound,
 		})
 	}
 
@@ -201,5 +203,143 @@ func (h *Handler) CheckPendingConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"hasPending": hasPending,
+	})
+}
+
+// SyncGroups синхронизирует группы в временный конфиг sing-box.
+func (h *Handler) SyncGroups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	var req struct {
+		GroupName string `json:"group_name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.GroupName == "" {
+		http.Error(w, "Group name is required", http.StatusBadRequest)
+		return
+	}
+
+	groups := h.rulesManager.GetGroups()
+
+	// Находим запрошенную группу.
+	var targetGroup *singboxconfig.Group
+
+	for _, g := range groups {
+		if g.Name == req.GroupName {
+			targetGroup = &singboxconfig.Group{
+				Name:            g.Name,
+				Description:     g.Description,
+				DefaultOutbound: g.DefaultOutbound,
+			}
+
+			break
+		}
+	}
+
+	if targetGroup == nil {
+		http.Error(w, "Group not found", http.StatusNotFound)
+		return
+	}
+
+	// Синхронизируем во временный конфиг.
+	var targetPath string
+
+	if h.singBoxConfigProvider.HasPending() {
+		targetPath = h.singBoxConfigProvider.GetTempPath()
+	} else {
+		// Копируем актуальный конфиг во временный.
+		configData, err := h.singBoxConfigProvider.GetConfig()
+		if err != nil {
+			log.Printf("Error reading config: %v", err)
+			http.Error(w, "Failed to read config: "+err.Error(), http.StatusInternalServerError)
+
+			return
+		}
+
+		if err := h.singBoxConfigProvider.SaveTemp(configData); err != nil {
+			log.Printf("Error saving temp config: %v", err)
+			http.Error(w, "Failed to save temp config: "+err.Error(), http.StatusInternalServerError)
+
+			return
+		}
+
+		targetPath = h.singBoxConfigProvider.GetTempPath()
+	}
+
+	// Преобразуем все группы в формат для singboxconfig (сохраняем порядок).
+	var configGroups []singboxconfig.Group
+
+	for _, g := range groups {
+		configGroups = append(configGroups, singboxconfig.Group{
+			Name:            g.Name,
+			Description:     g.Description,
+			DefaultOutbound: g.DefaultOutbound,
+		})
+	}
+
+	if err := h.singBoxConfigProvider.SyncSingleGroupToConfig(targetPath, *targetGroup, configGroups); err != nil {
+		log.Printf("Error syncing group to config: %v", err)
+		http.Error(w, "Failed to sync group to config: "+err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Group %s synced to temporary config successfully", req.GroupName),
+	})
+}
+
+// CheckGroupsSync проверяет состояние синхронизации групп.
+func (h *Handler) CheckGroupsSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	groups := h.rulesManager.GetGroups()
+
+	// Преобразуем группы в формат для singboxconfig.
+	var configGroups []singboxconfig.Group
+
+	for _, g := range groups {
+		configGroups = append(configGroups, singboxconfig.Group{
+			Name:            g.Name,
+			Description:     g.Description,
+			DefaultOutbound: g.DefaultOutbound,
+		})
+	}
+
+	// Проверяем статус в актуальном или временном конфиге.
+	var targetPath string
+
+	if h.singBoxConfigProvider.HasPending() {
+		targetPath = h.singBoxConfigProvider.GetTempPath()
+	} else {
+		targetPath = h.singBoxConfigProvider.GetActualPath()
+	}
+
+	statuses, err := h.singBoxConfigProvider.CheckGroupsSync(targetPath, configGroups)
+	if err != nil {
+		log.Printf("Error checking groups sync: %v", err)
+		http.Error(w, "Failed to check groups sync: "+err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"statuses": statuses,
 	})
 }

@@ -212,8 +212,9 @@ func (h *Handler) AddGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
+		Name            string `json:"name"`
+		Description     string `json:"description"`
+		DefaultOutbound string `json:"default_outbound"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -227,8 +228,9 @@ func (h *Handler) AddGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	group := rules.Group{
-		Name:        req.Name,
-		Description: req.Description,
+		Name:            req.Name,
+		Description:     req.Description,
+		DefaultOutbound: req.DefaultOutbound,
 	}
 
 	if err := h.rulesManager.AddGroup(group); err != nil {

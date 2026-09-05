@@ -16,8 +16,9 @@ type Provider struct {
 
 // Group представляет информацию о группе для синхронизации.
 type Group struct {
-	Name        string
-	Description string
+	Name            string
+	Description     string
+	DefaultOutbound string
 }
 
 func NewProvider(actualConfigPath string) *Provider {
@@ -123,9 +124,12 @@ func (p *Provider) SyncGroupsToConfig(configPath string, groups []Group) error {
 		return fmt.Errorf("cannot read config: %w", err)
 	}
 
+	// Удаляем комментарии перед парсингом.
+	cleanedConfigData := removeComments(configData)
+
 	var config map[string]interface{}
 
-	if err := json.Unmarshal(configData, &config); err != nil {
+	if err := json.Unmarshal(cleanedConfigData, &config); err != nil {
 		return fmt.Errorf("cannot parse config: %w", err)
 	}
 
@@ -276,8 +280,8 @@ func (p *Provider) SyncGroupsToConfig(configPath string, groups []Group) error {
 		serviceRules = append(serviceRules, groupRule)
 	}
 
-	// Объединяем служебные и пользовательские правила.
-	finalRules := append(serviceRules, newRules...)
+	// Объединяем пользовательские и служебные правила.
+	finalRules := append(newRules, serviceRules...)
 	route["rules"] = finalRules
 
 	// Проверяем наличие селекторов для групп в outbounds.
@@ -362,8 +366,13 @@ func ensureSelectorsInConfig(config map[string]interface{}, groups []Group) erro
 		selectorTag := "select-" + group.Name
 
 		if !existingSelectors[selectorTag] {
+			defaultOutbound := group.DefaultOutbound
+			if defaultOutbound == "" {
+				defaultOutbound = "direct"
+			}
+
 			selector := map[string]interface{}{
-				"default":                     "direct",
+				"default":                     defaultOutbound,
 				"interrupt_exist_connections": true,
 				"outbounds":                   availableOutbounds,
 				"tag":                         selectorTag,

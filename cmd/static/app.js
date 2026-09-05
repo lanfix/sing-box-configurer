@@ -142,13 +142,14 @@ function displayGroups(groups) {
     const tbody = document.getElementById('groupsBody');
 
     if (groups.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Нет групп.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Нет групп.</td></tr>';
         return;
     }
 
     tbody.innerHTML = groups.map(group => {
         const createdAt = new Date(group.created_at).toLocaleString('ru-RU');
         const isDefault = group.name === 'default';
+        const defaultOutbound = group.default_outbound || 'direct';
         
         return `
             <tr>
@@ -157,6 +158,7 @@ function displayGroups(groups) {
                     ${isDefault ? '<span class="badge badge-group" style="margin-left: 10px;">По умолчанию</span>' : ''}
                 </td>
                 <td class="description-cell">${escapeHTML(group.description || '')}</td>
+                <td>${escapeHTML(defaultOutbound)}</td>
                 <td class="date-cell">${createdAt}</td>
                 <td class="actions-cell">
                     <button class="btn btn-danger" onclick="deleteGroup('${escapeHTML(group.name)}')" ${isDefault ? 'disabled' : ''}>
@@ -173,6 +175,7 @@ async function addGroup(event) {
 
     const name = document.getElementById('groupName').value.trim();
     const description = document.getElementById('groupDescription').value;
+    const defaultOutbound = document.getElementById('groupDefaultOutbound').value.trim();
 
     if (!name) {
         showMessage('Введите имя группы', 'error');
@@ -185,7 +188,11 @@ async function addGroup(event) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ name, description })
+            body: JSON.stringify({ 
+                name, 
+                description,
+                default_outbound: defaultOutbound || ''
+            })
         });
 
         if (!response.ok) {
@@ -196,6 +203,7 @@ async function addGroup(event) {
         showMessage('Группа успешно добавлена', 'success');
         document.getElementById('groupName').value = '';
         document.getElementById('groupDescription').value = '';
+        document.getElementById('groupDefaultOutbound').value = '';
         await loadGroups();
         await loadGroupsForSelect();
     } catch (error) {
@@ -228,6 +236,91 @@ async function deleteGroup(name) {
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');
     }
+}
+
+async function syncGroups(groupName) {
+    try {
+        const response = await fetch('/api/config/sync-groups', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ group_name: groupName })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(errorData || 'Ошибка при синхронизации группы');
+        }
+
+        showMessage(`Группа "${groupName}" синхронизирована во временный конфиг.`, 'success');
+        
+        // Обновляем бейдж на вкладке конфига и проверяем статус групп
+        checkPendingConfig();
+        checkGroupsSync();
+        
+        // Перезагружаем конфиг в редакторе, если он открыт
+        if (document.getElementById('config-tab').classList.contains('active')) {
+            await loadConfig();
+        }
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function checkGroupsSync() {
+    try {
+        const response = await fetch('/api/config/check-groups-sync');
+        if (!response.ok) {
+            console.error('Failed to check groups sync');
+            return;
+        }
+
+        const data = await response.json();
+        const statuses = data.statuses || [];
+
+        displayGroupSyncWarnings(statuses);
+    } catch (error) {
+        console.error('Failed to check groups sync:', error);
+    }
+}
+
+function displayGroupSyncWarnings(statuses) {
+    const container = document.getElementById('groupSyncWarnings');
+    if (!container) return;
+
+    const unsyncedGroups = statuses.filter(s => !s.synced);
+
+    if (unsyncedGroups.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+
+    container.innerHTML = unsyncedGroups.map(status => {
+        const issues = [];
+        if (!status.has_rule_set) issues.push('отсутствует rule_set');
+        if (!status.has_rule) issues.push('отсутствует rule');
+        if (!status.has_selector) issues.push('отсутствует selector');
+        if (status.has_selector && status.actual_outbound !== status.default_outbound) {
+            issues.push(`outbound: ${status.actual_outbound} → ${status.default_outbound}`);
+        }
+
+        return `
+            <div class="warning-box" style="background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <strong>⚠️ Группа "${escapeHTML(status.name)}" не синхронизирована</strong>
+                        <div style="margin-top: 5px; color: #856404; font-size: 14px;">
+                            Проблемы: ${escapeHTML(issues.join(', '))}
+                        </div>
+                    </div>
+                    <button class="btn btn-warning" onclick="syncGroups('${escapeHTML(status.name)}')" style="white-space: nowrap;">
+                        🔄 Синхронизировать
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
 }
 
 // Rules
@@ -1700,6 +1793,7 @@ function openConfigTab() {
     }
 
     loadConfig();
+    checkGroupsSync();
 }
 
 async function loadConfig() {

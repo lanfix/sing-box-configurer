@@ -168,6 +168,10 @@
                             <label for="groupDescription">Описание</label>
                             <textarea id="groupDescription" placeholder="Описание группы"></textarea>
                         </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label for="groupDefaultOutbound">Default Outbound</label>
+                            <input type="text" id="groupDefaultOutbound" placeholder="direct (по умолчанию)">
+                        </div>
                         <div class="form-group" style="flex: 0; display: flex; align-items: flex-end;">
                             <button type="submit" class="btn btn-primary">Добавить</button>
                         </div>
@@ -183,13 +187,14 @@
                         <tr>
                             <th>Имя</th>
                             <th>Описание</th>
+                            <th>Default Outbound</th>
                             <th>Создана</th>
                             <th style="width: 150px; text-align: center;">Действия</th>
                         </tr>
                     </thead>
                     <tbody id="groupsBody">
                         <tr>
-                            <td colspan="4" class="empty-state">Загрузка...</td>
+                            <td colspan="5" class="empty-state">Загрузка...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -246,6 +251,9 @@
             <div class="config-editor-section">
                 <h2 style="margin-bottom: 15px; color: #333;">Редактор конфигурации Sing-Box</h2>
                 <p style="color: #666; margin-bottom: 20px;">Редактируйте конфигурацию в формате JSON. Изменения сохраняются временно и требуют подтверждения для применения.</p>
+                
+                <!-- Предупреждения о несинхронизированных группах -->
+                <div id="groupSyncWarnings" style="margin-bottom: 20px;"></div>
                 
                 <div class="config-actions">
                     <button id="saveConfigBtn" class="btn btn-primary" onclick="saveTempConfig()" disabled>

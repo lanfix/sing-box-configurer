@@ -43,9 +43,10 @@ type URLSource struct {
 
 // Group представляет логическую группу для правил.
 type Group struct {
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
+	Name            string    `json:"name"`
+	Description     string    `json:"description"`
+	DefaultOutbound string    `json:"default_outbound,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // RulesData stores the rules and URL sources

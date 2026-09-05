@@ -136,6 +136,8 @@ func main() {
 	http.HandleFunc("/api/config/apply", h.ApplySingBoxConfig)
 	http.HandleFunc("/api/config/discard", h.DiscardTempConfig)
 	http.HandleFunc("/api/config/check-pending", h.CheckPendingConfig)
+	http.HandleFunc("/api/config/sync-groups", h.SyncGroups)
+	http.HandleFunc("/api/config/check-groups-sync", h.CheckGroupsSync)
 
 	http.HandleFunc("/api/outbounds", h.GetOutbounds)
 	http.HandleFunc("/api/outbounds/add", h.AddOutbound)
