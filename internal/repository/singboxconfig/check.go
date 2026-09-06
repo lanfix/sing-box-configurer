@@ -28,34 +28,34 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 	// Удаляем комментарии перед парсингом.
 	cleanedConfigData := removeComments(configData)
 
-	var config map[string]interface{}
+	var config map[string]any
 
 	if err := json.Unmarshal(cleanedConfigData, &config); err != nil {
 		return nil, fmt.Errorf("cannot parse config: %w", err)
 	}
 
 	// Получаем секцию route.
-	route, ok := config["route"].(map[string]interface{})
+	route, ok := config["route"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("route section not found in config")
 	}
 
 	// Получаем rule_set.
-	var ruleSets []interface{}
+	var ruleSets []any
 
-	if rs, ok := route["rule_set"].([]interface{}); ok {
+	if rs, ok := route["rule_set"].([]any); ok {
 		ruleSets = rs
 	}
 
 	// Получаем rules.
-	var rules []interface{}
+	var rules []any
 
-	if r, ok := route["rules"].([]interface{}); ok {
+	if r, ok := route["rules"].([]any); ok {
 		rules = r
 	}
 
 	// Получаем outbounds.
-	outbounds, ok := config["outbounds"].([]interface{})
+	outbounds, ok := config["outbounds"].([]any)
 	if !ok {
 		return nil, fmt.Errorf("outbounds section not found in config")
 	}
@@ -64,7 +64,7 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 	existingRuleSets := make(map[string]bool)
 
 	for _, rs := range ruleSets {
-		rsMap, ok := rs.(map[string]interface{})
+		rsMap, ok := rs.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -81,7 +81,7 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 	existingRules := make(map[string]bool)
 
 	for _, rule := range rules {
-		ruleMap, ok := rule.(map[string]interface{})
+		ruleMap, ok := rule.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -99,7 +99,7 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 	existingOutboundTags := make(map[string]bool)
 
 	for _, ob := range outbounds {
-		obMap, ok := ob.(map[string]interface{})
+		obMap, ok := ob.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -119,23 +119,6 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 			existingOutboundTags[tag] = true
 		}
 
-		// Регистрируем endpoints, если есть.
-		if endpoints, ok := obMap["endpoints"].([]interface{}); ok {
-			for _, ep := range endpoints {
-				epMap, ok := ep.(map[string]interface{})
-				if !ok {
-					continue
-				}
-
-				epTag, ok := epMap["tag"].(string)
-				if !ok {
-					continue
-				}
-
-				existingOutboundTags[epTag] = true
-			}
-		}
-
 		if obType == "selector" {
 			defaultOutbound := ""
 
@@ -147,8 +130,27 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 		}
 	}
 
+	// Регистрируем endpoints, если есть.
+	if endpoints, ok := config["endpoints"].([]any); ok {
+		for _, ep := range endpoints {
+			epMap, ok := ep.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			epTag, ok := epMap["tag"].(string)
+			if !ok {
+				continue
+			}
+
+			existingOutboundTags[epTag] = true
+		}
+	}
+
 	// Проверяем каждую группу.
 	statuses := make([]GroupSyncStatus, 0, len(groups))
+
+	fmt.Printf("%v", groups)
 
 	for _, group := range groups {
 		ruleSetTag := "configurer-" + group.Name
@@ -157,6 +159,11 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 		hasRuleSet := existingRuleSets[ruleSetTag]
 		hasRule := existingRules[ruleSetTag]
 		actualOutbound, hasSelector := existingSelectors[selectorTag]
+
+		// Нормализуем actualOutbound так же, как и при создании selector.
+		if actualOutbound == "" {
+			actualOutbound = "direct"
+		}
 
 		defaultOutbound := group.DefaultOutbound
 		if defaultOutbound == "" {

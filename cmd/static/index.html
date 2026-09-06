@@ -7,308 +7,346 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="container">
-        <h1>Sing-Box Конфигуратор</h1>
-        <p class="subtitle">Управление правилами маршрутизации VPN</p>
-        
-        <div id="message" class="message"></div>
-        
-        <!-- Tabs -->
-        <div class="tabs">
-            <button class="tab-btn active" data-tab="rules" onclick="switchTab('rules')">Правила</button>
-            <button class="tab-btn" data-tab="url-sources" onclick="switchTab('url-sources')">URL Источники</button>
-            <button class="tab-btn" data-tab="groups" onclick="switchTab('groups')">Группы</button>
-            <button class="tab-btn" data-tab="outbounds" onclick="switchTab('outbounds')">Outbounds</button>
-            <button class="tab-btn" data-tab="config" onclick="switchTab('config')">
-                Конфиг
-                <span id="configTabBadge" class="tab-badge" style="display: none;"></span>
-            </button>
-            <button class="tab-btn" data-tab="control" onclick="switchTab('control')">Управление</button>
-        </div>
-        
-        <!-- Rules Tab -->
-        <div id="rules-tab" class="tab-content active">
-            <div class="action-buttons">
-                <button id="applyBtn" class="btn btn-warning" onclick="applyRules()">
-                    📋 Применить правила
-                </button>
+    <div class="app-container">
+        <!-- Левая навигация -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M13 3L4 14h7l-1 7 9-11h-7l1-7z"/>
+                    </svg>
+                </div>
+                <div class="logo-text">
+                    <span class="title">Sing-Box</span>
+                    <span class="subtitle">Configurer</span>
+                </div>
             </div>
-            
-            <div class="add-rule-form">
-                <h2 style="margin-bottom: 15px; color: #333;">Добавить правило</h2>
-                <form id="addRuleForm" onsubmit="addRule(event)">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="ruleGroup">Группа</label>
-                            <select id="ruleGroup" required>
-                                <option value="default">default</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="ruleType">Тип</label>
-                            <select id="ruleType" required>
-                                <option value="domain">Домен</option>
-                                <option value="domain_suffix">Суффикс домена</option>
-                                <option value="ip">IP адрес</option>
-                                <option value="cidr">CIDR</option>
-                            </select>
-                        </div>
-                        <div class="form-group" style="flex: 2;">
-                            <label for="ruleValue">Значение</label>
-                            <input type="text" id="ruleValue" placeholder="example.com или 192.168.1.0/24" required>
-                        </div>
+            <nav class="nav-menu">
+                <div class="nav-item active" data-tab="rules" onclick="switchTab('rules')">
+                    <div class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <rect x="3" y="5" width="18" height="2" rx="1"/>
+                            <rect x="3" y="11" width="18" height="2" rx="1"/>
+                            <rect x="3" y="17" width="18" height="2" rx="1"/>
+                        </svg>
                     </div>
-                    <div class="form-row">
-                        <div class="form-group" style="flex: 3;">
-                            <label for="ruleDescription">Описание (необязательно)</label>
-                            <textarea id="ruleDescription" placeholder="Краткое описание правила"></textarea>
-                        </div>
-                        <div class="form-group" style="flex: 0; display: flex; align-items: flex-end;">
-                            <button type="submit" class="btn btn-primary">Добавить</button>
-                        </div>
+                    <span>Правила</span>
+                </div>
+                <div class="nav-item" data-tab="url-sources" onclick="switchTab('url-sources')">
+                    <div class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/>
+                        </svg>
                     </div>
-                </form>
-            </div>
-            
-            <div id="rulesContainer">
-                <table class="rules-table">
-                    <thead>
-                        <tr>
-                            <th>Статус</th>
-                            <th>Группа</th>
-                            <th>Тип</th>
-                            <th>Значение</th>
-                            <th>Описание</th>
-                            <th style="width: 100px; text-align: center;">Действия</th>
-                        </tr>
-                    </thead>
-                    <tbody id="rulesBody">
-                        <tr>
-                            <td colspan="6" class="empty-state">Загрузка...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
+                    <span>URL Источники</span>
+                </div>
+                <div class="nav-item" data-tab="groups" onclick="switchTab('groups')">
+                    <div class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V6h5.17l2 2H20v10z"/>
+                        </svg>
+                    </div>
+                    <span>Группы</span>
+                </div>
+                <div class="nav-item" data-tab="outbounds" onclick="switchTab('outbounds')">
+                    <div class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                        </svg>
+                    </div>
+                    <span>Outbounds</span>
+                </div>
+                <div class="nav-item" data-tab="config" onclick="switchTab('config')">
+                    <div class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                        </svg>
+                    </div>
+                    <span>Конфиг</span>
+                    <span id="configTabBadge" class="badge-pending" style="display: none;"></span>
+                </div>
+                <div class="nav-item" data-tab="control" onclick="switchTab('control')">
+                    <div class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M12 2C8.14 2 5 5.14 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.86-3.14-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                        </svg>
+                    </div>
+                    <span>Управление</span>
+                </div>
+            </nav>
+        </aside>
 
-        <!-- URL Sources Tab -->
-        <div id="url-sources-tab" class="tab-content">
-            <div class="action-buttons">
-                <button id="applyUrlBtn" class="btn btn-warning" onclick="applyURLSources()">
-                    📋 Применить URL источники
-                </button>
+        <!-- Основной контент -->
+        <main class="main-content">
+            <div class="top-bar">
+                <h2 class="page-title" id="pageTitle">Правила маршрутизации</h2>
+                <div class="action-buttons" id="topBarActions"></div>
             </div>
-            
-            <div class="add-rule-form">
-                <h2 style="margin-bottom: 15px; color: #333;">Добавить URL источник</h2>
-                <form id="addURLSourceForm" onsubmit="addURLSource(event)">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="urlSourceGroup">Группа</label>
-                            <select id="urlSourceGroup" required>
-                                <option value="default">default</option>
-                            </select>
-                        </div>
-                        <div class="form-group" style="flex: 3;">
-                            <label for="urlSourceURL">URL</label>
-                            <input type="url" id="urlSourceURL" placeholder="https://example.com/ips.txt" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="urlSourceInterval">Интервал (мин)</label>
-                            <input type="number" id="urlSourceInterval" placeholder="60" min="1" value="60" required>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group" style="flex: 3;">
-                            <label for="urlSourceDescription">Описание</label>
-                            <textarea id="urlSourceDescription" placeholder="Описание источника"></textarea>
-                        </div>
-                        <div class="form-group" style="flex: 0; display: flex; align-items: flex-end;">
-                            <button type="button" class="btn btn-secondary" onclick="validateURL()" style="margin-right: 10px;">Проверить</button>
-                            <button type="submit" class="btn btn-primary">Добавить</button>
-                        </div>
-                    </div>
-                </form>
-            </div>
-            
-            <div id="urlSourcesContainer">
-                <table class="rules-table">
-                    <thead>
-                        <tr>
-                            <th>Статус</th>
-                            <th>Группа</th>
-                            <th>URL</th>
-                            <th>Описание</th>
-                            <th>Интервал</th>
-                            <th>Обновлено</th>
-                            <th>Элементов</th>
-                            <th style="width: 150px; text-align: center;">Действия</th>
-                        </tr>
-                    </thead>
-                    <tbody id="urlSourcesBody">
-                        <tr>
-                            <td colspan="8" class="empty-state">Загрузка...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
+
+            <div class="content-area">
+                <div id="message" class="message"></div>
         
-        <!-- Groups Tab -->
-        <div id="groups-tab" class="tab-content">
-            <div class="add-rule-form">
-                <h2 style="margin-bottom: 15px; color: #333;">Добавить группу</h2>
-                <form id="addGroupForm" onsubmit="addGroup(event)">
-                    <div class="form-row">
-                        <div class="form-group" style="flex: 1;">
-                            <label for="groupName">Имя группы</label>
-                            <input type="text" id="groupName" placeholder="work, personal, etc." required pattern="[a-zA-Z0-9_\-]+" title="Только латинские буквы, цифры, дефис и подчеркивание">
-                        </div>
-                        <div class="form-group" style="flex: 2;">
-                            <label for="groupDescription">Описание</label>
-                            <textarea id="groupDescription" placeholder="Описание группы"></textarea>
-                        </div>
-                        <div class="form-group" style="flex: 1;">
-                            <label for="groupDefaultOutbound">Default Outbound</label>
-                            <input type="text" id="groupDefaultOutbound" placeholder="direct (по умолчанию)">
-                        </div>
-                        <div class="form-group" style="flex: 0; display: flex; align-items: flex-end;">
-                            <button type="submit" class="btn btn-primary">Добавить</button>
-                        </div>
-                    </div>
-                </form>
-            </div>
-            
-            <div id="groupsContainer">
-                <h3 style="margin-bottom: 10px; color: #333;">Существующие группы</h3>
-                <p style="color: #666; margin-bottom: 15px;">Группы используются для логического объединения правил и источников. Каждая группа создает свой ruleset и selector в конфиге sing-box.</p>
-                <table class="rules-table">
-                    <thead>
-                        <tr>
-                            <th>Имя</th>
-                            <th>Описание</th>
-                            <th>Default Outbound</th>
-                            <th>Создана</th>
-                            <th style="width: 150px; text-align: center;">Действия</th>
-                        </tr>
-                    </thead>
-                    <tbody id="groupsBody">
-                        <tr>
-                            <td colspan="5" class="empty-state">Загрузка...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <!-- Outbounds Tab -->
-        <div id="outbounds-tab" class="tab-content">
-            <div class="outbounds-section">
-                <h2 style="margin-bottom: 15px; color: #333;">Управление VPN Outbounds</h2>
-                <p style="color: #666; margin-bottom: 20px;">Добавляйте VPN конфиги через share-ссылки (vless://, hysteria2://, и др.)</p>
-                
-                <div class="add-outbound-form">
-                    <h3 style="margin-bottom: 10px; color: #333;">Добавить Outbound</h3>
-                    <form id="addOutboundForm" onsubmit="addOutbound(event)">
-                        <div class="form-row">
-                            <div class="form-group" style="flex: 3;">
-                                <label for="outboundUrl">Share-ссылка</label>
-                                <input type="text" id="outboundUrl" placeholder="vless://... или hysteria2://..." required>
+                <!-- Rules Tab -->
+                <div id="rules-tab" class="tab-content active">
+                    <div class="add-form-card">
+                        <div class="form-header">Добавить правило</div>
+                        <form id="addRuleForm" onsubmit="addRule(event)">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label" for="ruleGroup">Группа</label>
+                                    <select class="form-select" id="ruleGroup" required>
+                                        <option value="default">default</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="ruleType">Тип</label>
+                                    <select class="form-select" id="ruleType" required>
+                                        <option value="domain">Домен</option>
+                                        <option value="domain_suffix">Суффикс домена</option>
+                                        <option value="ip">IP адрес</option>
+                                        <option value="cidr">CIDR</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex: 2;">
+                                    <label class="form-label" for="ruleValue">Значение</label>
+                                    <input class="form-input" type="text" id="ruleValue" placeholder="example.com или 192.168.1.0/24" required>
+                                </div>
                             </div>
-                            <div class="form-group" style="flex: 0; display: flex; align-items: flex-end;">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label" for="ruleDescription">Описание (необязательно)</label>
+                                    <textarea class="form-textarea" id="ruleDescription" placeholder="Краткое описание правила"></textarea>
+                                </div>
+                            </div>
+                            <div class="form-actions">
                                 <button type="submit" class="btn btn-primary">Добавить</button>
                             </div>
-                        </div>
-                    </form>
-                </div>
-                
-                <div class="outbounds-list">
-                    <h3 style="margin-bottom: 10px; color: #333;">Существующие Outbounds</h3>
-                    <div id="outboundsContainer">
-                        <table class="outbounds-table">
+                        </form>
+                    </div>
+
+                    <div class="data-table">
+                        <table class="table">
                             <thead>
                                 <tr>
-                                    <th>Тег</th>
+                                    <th>Статус</th>
+                                    <th>Группа</th>
                                     <th>Тип</th>
-                                    <th>Сервер</th>
-                                    <th>Порт</th>
-                                    <th>Действия</th>
+                                    <th>Значение</th>
+                                    <th>Описание</th>
+                                    <th style="width: 100px; text-align: center;">Действия</th>
                                 </tr>
                             </thead>
-                            <tbody id="outboundsTableBody">
+                            <tbody id="rulesBody">
                                 <tr>
-                                    <td colspan="5" style="text-align: center; color: #999;">Загрузка...</td>
+                                    <td colspan="6" class="empty-state">Загрузка...</td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                 </div>
-            </div>
-        </div>
-        
-        <!-- Config Tab -->
-        <div id="config-tab" class="tab-content">
-            <div class="config-editor-section">
-                <h2 style="margin-bottom: 15px; color: #333;">Редактор конфигурации Sing-Box</h2>
-                <p style="color: #666; margin-bottom: 20px;">Редактируйте конфигурацию в формате JSON. Изменения сохраняются временно и требуют подтверждения для применения.</p>
-                
-                <!-- Предупреждения о несинхронизированных группах -->
-                <div id="groupSyncWarnings" style="margin-bottom: 20px;"></div>
-                
-                <div class="config-actions">
-                    <button id="saveConfigBtn" class="btn btn-primary" onclick="saveTempConfig()" disabled>
-                        💾 Сохранить временно
-                    </button>
-                    <button id="applyConfigBtn" class="btn btn-warning" onclick="applyConfig()" disabled>
-                        ✅ Применить и перезагрузить
-                    </button>
-                    <button id="discardConfigBtn" class="btn btn-secondary" onclick="discardConfig()" disabled>
-                        ❌ Отменить изменения
-                    </button>
-                    <span id="configStatus" class="config-status"></span>
-                </div>
-                
-                <div class="editor-container" id="editorContainer">
-                    <div class="editor-gutter">
-                        <div class="gutter-inner" id="lineNumbers"></div>
-                    </div>
-                    <div class="editor-main">
-                        <div class="highlight-layer">
-                            <div class="highlight-inner" id="syntaxHighlight"></div>
-                        </div>
-                        <textarea 
-                            id="configEditor" 
-                            class="config-editor" 
-                            spellcheck="false"
-                            autocomplete="off"
-                            autocorrect="off"
-                            autocapitalize="off"
-                            wrap="off"></textarea>
-                    </div>
-                </div>
-            </div>
-        </div>
 
-        <!-- Control Tab -->
-        <div id="control-tab" class="tab-content">
-            <div class="control-section">
-                <h2 style="margin-bottom: 15px; color: #333;">Управление Sing-Box</h2>
-                <p style="color: #666; margin-bottom: 20px;">Используйте эту панель для управления сервисом Sing-Box.</p>
-                
-                <div class="control-card">
-                    <div class="control-card-header">
-                        <h3>🔄 Перезагрузка конфигурации</h3>
+                <!-- URL Sources Tab -->
+                <div id="url-sources-tab" class="tab-content">
+                    <div class="add-form-card">
+                        <div class="form-header">Добавить URL источник</div>
+                        <form id="addURLSourceForm" onsubmit="addURLSource(event)">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label" for="urlSourceGroup">Группа</label>
+                                    <select class="form-select" id="urlSourceGroup" required>
+                                        <option value="default">default</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex: 2;">
+                                    <label class="form-label" for="urlSourceURL">URL</label>
+                                    <input class="form-input" type="url" id="urlSourceURL" placeholder="https://example.com/ips.txt" required>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="urlSourceInterval">Интервал (мин)</label>
+                                    <input class="form-input" type="number" id="urlSourceInterval" placeholder="60" min="1" value="60" required>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label" for="urlSourceDescription">Описание</label>
+                                    <textarea class="form-textarea" id="urlSourceDescription" placeholder="Описание источника"></textarea>
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="button" class="btn btn-secondary" onclick="validateURL()">Проверить</button>
+                                <button type="submit" class="btn btn-primary">Добавить</button>
+                            </div>
+                        </form>
                     </div>
-                    <div class="control-card-body">
-                        <p>Перезагрузить конфигурацию Sing-Box без перезапуска сервиса. Это применит все изменения правил маршрутизации.</p>
-                        <button id="reloadBtn" class="btn btn-primary" onclick="reloadSingBox()" style="margin-top: 15px;">
-                            🔄 Перезагрузить Sing-Box
-                        </button>
+
+                    <div class="data-table">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Статус</th>
+                                    <th>Группа</th>
+                                    <th>URL</th>
+                                    <th>Описание</th>
+                                    <th>Интервал</th>
+                                    <th>Обновлено</th>
+                                    <th>Элементов</th>
+                                    <th style="width: 150px; text-align: center;">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="urlSourcesBody">
+                                <tr>
+                                    <td colspan="8" class="empty-state">Загрузка...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Groups Tab -->
+                <div id="groups-tab" class="tab-content">
+                    <div class="add-form-card">
+                        <div class="form-header">Добавить группу</div>
+                        <form id="addGroupForm" onsubmit="addGroup(event)">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label" for="groupName">Имя группы</label>
+                                    <input class="form-input" type="text" id="groupName" placeholder="work, personal, etc." required pattern="[a-zA-Z0-9_\-]+" title="Только латинские буквы, цифры, дефис и подчеркивание">
+                                </div>
+                                <div class="form-group" style="flex: 2;">
+                                    <label class="form-label" for="groupDescription">Описание</label>
+                                    <textarea class="form-textarea" id="groupDescription" placeholder="Описание группы"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="groupDefaultOutbound">Default Outbound</label>
+                                    <input class="form-input" type="text" id="groupDefaultOutbound" placeholder="direct (по умолчанию)">
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">Добавить</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div id="groupsContainer">
+                        <h3 style="margin-bottom: 10px; color: #c9d1d9;">Существующие группы</h3>
+                        <p style="color: #8b949e; margin-bottom: 15px;">Группы используются для логического объединения правил и источников. Каждая группа создает свой ruleset и selector в конфиге sing-box.</p>
+                        <div class="data-table">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>Имя</th>
+                                        <th>Описание</th>
+                                        <th>Default Outbound</th>
+                                        <th>Создана</th>
+                                        <th style="width: 150px; text-align: center;">Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="groupsBody">
+                                    <tr>
+                                        <td colspan="5" class="empty-state">Загрузка...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Outbounds Tab -->
+                <div id="outbounds-tab" class="tab-content">
+                    <div class="add-form-card" style="margin-bottom: 24px;">
+                        <div class="form-header">Управление VPN Outbounds</div>
+                        <p style="color: #8b949e; margin-bottom: 20px;">Добавляйте VPN конфиги через share-ссылки (vless://, hysteria2://, и др.)</p>
+                        <form id="addOutboundForm" onsubmit="addOutbound(event)">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label" for="outboundUrl">Share-ссылка</label>
+                                    <input class="form-input" type="text" id="outboundUrl" placeholder="vless://... или hysteria2://..." required>
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">Добавить</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div class="data-table">
+                        <table class="table">
+                            <thead>
+                            <tr>
+                                <th>Тег</th>
+                                <th>Тип</th>
+                                <th>Сервер</th>
+                                <th>Порт</th>
+                                <th>Действия</th>
+                            </tr>
+                            </thead>
+                            <tbody id="outboundsTableBody">
+                            <tr>
+                                <td colspan="5" style="text-align: center; color: #8b949e;">Загрузка...</td>
+                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Config Tab -->
+                <div id="config-tab" class="tab-content">
+                    <div class="add-form-card" style="margin-bottom: 24px;">
+                        <div class="form-header">Редактор конфигурации Sing-Box</div>
+                        <p style="color: #8b949e; margin-bottom: 20px;">Редактируйте конфигурацию в формате JSON. Изменения сохраняются временно и требуют подтверждения для применения.</p>
+
+                        <!-- Предупреждения о несинхронизированных группах -->
+                        <div id="groupSyncWarnings" style="margin-bottom: 20px;"></div>
+
+                        <div class="config-actions">
+                            <button id="saveConfigBtn" class="btn btn-primary" onclick="saveTempConfig()" disabled>
+                                Сохранить временно
+                            </button>
+                            <button id="applyConfigBtn" class="btn btn-warning" onclick="applyConfig()" disabled>
+                                Применить и перезагрузить
+                            </button>
+                            <button id="discardConfigBtn" class="btn btn-secondary" onclick="discardConfig()" disabled>
+                                Отменить изменения
+                            </button>
+                            <span id="configStatus" class="config-status"></span>
+                        </div>
+                    </div>
+
+                    <div class="editor-container" id="editorContainer">
+                        <div class="editor-gutter">
+                            <div class="gutter-inner" id="lineNumbers"></div>
+                        </div>
+                        <div class="editor-main">
+                            <div class="highlight-layer">
+                                <div class="highlight-inner" id="syntaxHighlight"></div>
+                            </div>
+                            <textarea
+                                    id="configEditor"
+                                    class="config-editor"
+                                    spellcheck="false"
+                                    autocomplete="off"
+                                    autocorrect="off"
+                                    autocapitalize="off"
+                                    wrap="off"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Control Tab -->
+                <div id="control-tab" class="tab-content">
+                    <div class="add-form-card">
+                        <div class="form-header">Управление Sing-Box</div>
+                        <p style="color: #8b949e; margin-bottom: 20px; line-height: 1.6;">Перезагрузить конфигурацию Sing-Box без перезапуска сервиса. Это применит все изменения правил маршрутизации.</p>
+                        <div class="form-actions">
+                            <button id="reloadBtn" class="btn btn-primary" onclick="reloadSingBox()">
+                                Перезагрузить Sing-Box
+                            </button>
+                        </div>
                         <div id="reloadStatus" class="reload-status"></div>
                     </div>
                 </div>
             </div>
-        </div>
+        </main>
     </div>
     
     <script src="/static/app.js"></script>

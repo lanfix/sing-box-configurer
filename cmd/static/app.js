@@ -25,19 +25,22 @@ function showMessage(text, type) {
 
 function activateTab(tabName) {
     const content = document.getElementById(tabName + '-tab');
-    const btn = document.querySelector(`.tab-btn[data-tab="${tabName}"]`);
-    if (!content || !btn) return false;
+    const navItem = document.querySelector(`.nav-item[data-tab="${tabName}"]`);
+    if (!content || !navItem) return false;
 
     document.querySelectorAll('.tab-content.active').forEach(tab => {
         tab.classList.remove('active');
     });
-    document.querySelectorAll('.tab-btn.active').forEach(b => {
-        b.classList.remove('active');
+    document.querySelectorAll('.nav-item.active').forEach(item => {
+        item.classList.remove('active');
     });
 
     content.classList.add('active');
-    btn.classList.add('active');
+    navItem.classList.add('active');
     localStorage.setItem('activeTab', tabName);
+    
+    // Обновляем заголовок и кнопки действий
+    updateTopBar(tabName);
 
     if (autoRefreshInterval) {
         clearInterval(autoRefreshInterval);
@@ -62,6 +65,35 @@ function activateTab(tabName) {
 
 function switchTab(tabName) {
     activateTab(tabName);
+}
+
+function updateTopBar(tabName) {
+    const pageTitle = document.getElementById('pageTitle');
+    const topBarActions = document.getElementById('topBarActions');
+    
+    if (!pageTitle || !topBarActions) return;
+    
+    const titles = {
+        'rules': 'Правила маршрутизации',
+        'url-sources': 'URL Источники',
+        'groups': 'Группы',
+        'outbounds': 'Outbounds',
+        'config': 'Конфигурация',
+        'control': 'Управление'
+    };
+    
+    pageTitle.textContent = titles[tabName] || 'Sing-Box Configurer';
+    
+    // Обновляем кнопки действий
+    if (tabName === 'rules') {
+        topBarActions.innerHTML = '<button id="applyBtn" class="btn btn-warning" onclick="applyRules()">Применить правила</button>';
+        updateApplyButton();
+    } else if (tabName === 'url-sources') {
+        topBarActions.innerHTML = '<button id="applyUrlBtn" class="btn btn-warning" onclick="applyURLSources()">Применить URL источники</button>';
+        updateApplyURLButton();
+    } else {
+        topBarActions.innerHTML = '';
+    }
 }
 
 function restoreActiveTab() {

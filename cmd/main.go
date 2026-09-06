@@ -62,8 +62,9 @@ func main() {
 
 		for _, g := range groups {
 			configGroups = append(configGroups, singboxconfig.Group{
-				Name:        g.Name,
-				Description: g.Description,
+				Name:            g.Name,
+				Description:     g.Description,
+				DefaultOutbound: g.DefaultOutbound,
 			})
 		}
 
