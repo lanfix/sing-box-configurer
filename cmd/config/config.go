@@ -11,6 +11,8 @@ type AppConfig struct {
 	DockerControllerURL string `json:"docker_controller_url"`
 	SourceListsProxyUrl string `json:"source_lists_proxy_url"`
 	SingBoxConfigPath   string `json:"sing_box_config_path"`
+	ClashAPIBaseURL     string `json:"clash_api_base_url"`
+	ClashAPISecret      string `json:"clash_api_secret"`
 }
 
 func Read[T any](path string) (*T, error) {

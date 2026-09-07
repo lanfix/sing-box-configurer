@@ -1137,6 +1137,7 @@ body {
     display: block;
 }
 
+
 /* Warning box */
 .warning-box {
     background: rgba(217, 119, 6, 0.1);
@@ -1201,3 +1202,517 @@ body {
 .highlight-layer::-webkit-scrollbar-corner {
     background: #0d1117;
 }
+
+/* Обзор — плитки и графики
+   Серии проверены валидатором палитры на поверхности #0d1117:
+   CVD ΔE 29.3, обычное зрение ΔE 33.5, обе в тёмной полосе светлоты. */
+:root {
+    --series-down: #388bfd;
+    --series-up: #db6d28;
+    --chart-grid: #21262d;
+    --chart-ink-muted: #6e7681;
+}
+
+.stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.stat-tile {
+    background: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 18px 20px;
+}
+
+.stat-label {
+    color: #8b949e;
+    font-size: 13px;
+    margin-bottom: 10px;
+}
+
+/* Пропорциональные цифры: tabular-nums растягивает крупные числа */
+.stat-value {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    color: #ffffff;
+    font-size: 30px;
+    font-weight: 600;
+    line-height: 1.1;
+}
+
+.stat-value-lg {
+    font-size: 34px;
+}
+
+.stat-unit {
+    color: #8b949e;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.stat-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.stat-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #6e7681;
+    flex-shrink: 0;
+}
+
+.stat-dot.is-good { background: #3fb950; }
+.stat-dot.is-warn { background: #d29922; }
+.stat-dot.is-bad { background: #f85149; }
+
+.overview-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+
+@media (max-width: 1100px) {
+    .overview-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.overview-grid > .add-form-card {
+    margin-bottom: 0;
+}
+
+.chart-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 8px;
+}
+
+.chart-legend {
+    display: flex;
+    gap: 22px;
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: center;
+    gap: 3px 7px;
+}
+
+/* Ключ серии — короткий штрих, а не залитый бокс */
+.legend-key {
+    width: 12px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--chart-ink-muted);
+    flex-shrink: 0;
+}
+
+.legend-key[data-series="down"] { background: var(--series-down); }
+.legend-key[data-series="up"] { background: var(--series-up); }
+
+.legend-name {
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.legend-value {
+    grid-column: 2;
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.chart-wrap {
+    position: relative;
+    height: 220px;
+}
+
+.chart-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.chart-grid {
+    stroke: var(--chart-grid);
+    stroke-width: 1;
+}
+
+.chart-tick {
+    fill: var(--chart-ink-muted);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.chart-empty {
+    fill: var(--chart-ink-muted);
+    font-size: 12px;
+}
+
+.chart-line {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.chart-line[data-series="down"] { stroke: var(--series-down); }
+.chart-line[data-series="up"] { stroke: var(--series-up); }
+
+.chart-area {
+    stroke: none;
+    opacity: 0.1;
+}
+
+.chart-area[data-series="down"] { fill: var(--series-down); }
+.chart-area[data-series="up"] { fill: var(--series-up); }
+
+.chart-crosshair {
+    stroke: #484f58;
+    stroke-width: 1;
+}
+
+/* Кольцо в цвет поверхности держит точку читаемой поверх линий */
+.chart-dot {
+    stroke: #0d1117;
+    stroke-width: 2;
+}
+
+.chart-dot[data-series="down"] { fill: var(--series-down); }
+.chart-dot[data-series="up"] { fill: var(--series-up); }
+
+.chart-tooltip {
+    position: absolute;
+    top: 10px;
+    z-index: 3;
+    min-width: 148px;
+    padding: 9px 11px;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    background: #161b22;
+    box-shadow: 0 8px 20px rgba(1, 4, 9, 0.6);
+    pointer-events: none;
+}
+
+.tt-time {
+    color: #8b949e;
+    font-size: 11px;
+    margin-bottom: 6px;
+}
+
+.tt-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 4px;
+}
+
+.tt-key {
+    width: 12px;
+    height: 2px;
+    border-radius: 1px;
+    flex-shrink: 0;
+}
+
+.tt-key[data-series="down"] { background: var(--series-down); }
+.tt-key[data-series="up"] { background: var(--series-up); }
+
+/* Значение ведёт, имя серии следом */
+.tt-value {
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.tt-name {
+    color: #8b949e;
+    font-size: 11px;
+}
+
+.chart-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+}
+
+.chart-table {
+    margin-top: 14px;
+    max-height: 260px;
+    overflow-y: auto;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+}
+
+.chart-table .table td {
+    font-variant-numeric: tabular-nums;
+}
+
+.mem-spark-wrap {
+    height: 96px;
+    margin: 16px 0 4px;
+}
+
+.meta-list {
+    margin: 0;
+    padding-top: 6px;
+}
+
+.meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 0;
+    border-top: 1px solid #21262d;
+}
+
+.meta-row dt {
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.meta-row dd {
+    margin: 0;
+    color: #c9d1d9;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+/* Clash API — прокси-группы */
+.card-hint {
+    color: #8b949e;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.clash-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+}
+
+/* Индикатор загрузки — тонкая бегущая полоса по верхней грани блока */
+.has-progress {
+    position: relative;
+    overflow: hidden;
+}
+
+.progress-line {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+}
+
+.is-loading > .progress-line {
+    opacity: 1;
+}
+
+.progress-line::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    height: 100%;
+    width: 35%;
+    background: linear-gradient(90deg, transparent, #58a6ff, transparent);
+}
+
+.is-loading > .progress-line::before {
+    animation: progress-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+    from { left: -35%; }
+    to { left: 100%; }
+}
+
+.btn .btn-icon {
+    width: 15px;
+    height: 15px;
+    fill: currentColor;
+}
+
+.btn-sm {
+    padding: 5px 12px;
+    font-size: 12px;
+}
+
+.clash-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.clash-group {
+    background: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 18px 20px;
+}
+
+.clash-group-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.clash-group-meta {
+    min-width: 0;
+}
+
+.clash-group-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: #e6edf3;
+    font-size: 15px;
+}
+
+.clash-type {
+    padding: 1px 7px;
+    border-radius: 4px;
+    background: rgba(88, 166, 255, 0.12);
+    color: #58a6ff;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+
+.clash-group-now {
+    margin-top: 3px;
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.clash-group-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+.proxy-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 8px;
+}
+
+.proxy-node {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: #161b22;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.proxy-node-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.proxy-node.selectable {
+    cursor: pointer;
+}
+
+.proxy-node.selectable:hover {
+    background: #1c222b;
+    border-color: #30363d;
+}
+
+.proxy-node.active {
+    background: rgba(35, 134, 54, 0.12);
+    border-color: rgba(63, 185, 80, 0.45);
+}
+
+/* Узлы групп без ручного выбора (URLTest, Fallback) — только для чтения */
+.proxy-node.readonly {
+    background: #12161c;
+    cursor: default;
+}
+
+.proxy-node.readonly .proxy-node-name {
+    color: #8b949e;
+}
+
+.proxy-node.readonly.active {
+    background: rgba(35, 134, 54, 0.08);
+    border-color: rgba(63, 185, 80, 0.25);
+}
+
+.proxy-node-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: #e6edf3;
+}
+
+.proxy-node-type {
+    font-size: 11px;
+    color: #6e7681;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.proxy-udp {
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #21262d;
+    color: #6e7681;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+}
+
+.proxy-delay {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: #6e7681;
+}
+
+.clash-group-actions .proxy-delay {
+    font-size: 13px;
+}
+
+.proxy-delay.d-good { color: #3fb950; }
+.proxy-delay.d-ok { color: #d29922; }
+.proxy-delay.d-slow { color: #db6d28; }
+.proxy-delay.d-bad { color: #f85149; }

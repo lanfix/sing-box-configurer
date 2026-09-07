@@ -10,8 +10,10 @@ import (
 
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
+	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
+	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
 )
 
 type Handler struct {
@@ -19,6 +21,8 @@ type Handler struct {
 	dockerControllerProvider *dockercontroller.Provider
 	singBoxConfigProvider    *singboxconfig.Provider
 	outboundManager          *outbound.Manager
+	clashAPI                 *singboxclashapi.ClashAPI
+	trafficMonitor           *trafficmonitor.Monitor
 }
 
 func NewHandler(
@@ -26,12 +30,16 @@ func NewHandler(
 	dockerControllerProvider *dockercontroller.Provider,
 	singBoxConfigProvider *singboxconfig.Provider,
 	outboundManager *outbound.Manager,
+	clashAPI *singboxclashapi.ClashAPI,
+	trafficMonitor *trafficmonitor.Monitor,
 ) *Handler {
 	return &Handler{
 		rulesManager:             rulesManager,
 		dockerControllerProvider: dockerControllerProvider,
 		singBoxConfigProvider:    singBoxConfigProvider,
 		outboundManager:          outboundManager,
+		clashAPI:                 clashAPI,
+		trafficMonitor:           trafficMonitor,
 	}
 }
 

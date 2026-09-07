@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -14,8 +15,10 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/handler"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
+	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
+	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
 )
 
 //go:embed all:static
@@ -81,7 +84,18 @@ func main() {
 
 	outboundManager := outbound.NewManager(singBoxConfigProvider)
 
-	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager)
+	clashAPIBaseURL := cfg.ClashAPIBaseURL
+	if clashAPIBaseURL == "" {
+		clashAPIBaseURL = "http://127.0.0.1:9090"
+	}
+
+	clashAPI := singboxclashapi.NewClashAPI(clashAPIBaseURL, cfg.ClashAPISecret)
+
+	// Окно на 60 измерений — Clash API отдаёт скорость раз в секунду.
+	trafficMonitor := trafficmonitor.New(clashAPI, 60)
+	trafficMonitor.Start(context.Background())
+
+	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager, clashAPI, trafficMonitor)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -135,6 +149,12 @@ func main() {
 	http.HandleFunc("/api/url-sources/rules", h.GetURLSourceRules)
 
 	http.HandleFunc("/api/control/reload", h.ReloadSingBox)
+
+	http.HandleFunc("/api/clash/overview", h.GetClashOverview)
+	http.HandleFunc("/api/clash/proxies", h.GetClashProxies)
+	http.HandleFunc("/api/clash/proxies/select", h.SelectClashProxy)
+	http.HandleFunc("/api/clash/proxies/delay", h.TestClashProxyDelay)
+	http.HandleFunc("/api/clash/group/delay", h.TestClashGroupDelay)
 
 	http.HandleFunc("/api/config/get", h.GetSingBoxConfig)
 	http.HandleFunc("/api/config/save-temp", h.SaveTempConfig)

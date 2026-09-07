@@ -22,7 +22,15 @@
                 </div>
             </div>
             <nav class="nav-menu">
-                <div class="nav-item active" data-tab="rules" onclick="switchTab('rules')">
+                <div class="nav-item active" data-tab="overview" onclick="switchTab('overview')">
+                    <div class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M16,11.78L20.24,4.45L21.97,5.45L16.74,14.5L10.23,10.75L5.46,19H22V21H2V3H4V17.54L9.5,8L16,11.78Z"/>
+                        </svg>
+                    </div>
+                    <span>Обзор</span>
+                </div>
+                <div class="nav-item" data-tab="rules" onclick="switchTab('rules')">
                     <div class="nav-icon">
                         <svg viewBox="0 0 24 24">
                             <path d="M17,21L14.25,18L15.41,16.84L17,18.43L20.59,14.84L21.75,16.25M12.8,21H5C3.89,21 3,20.11 3,19V5C3,3.89 3.89,3 5,3H19C20.11,3 21,3.89 21,5V12.8C20.39,12.45 19.72,12.2 19,12.08V5H5V19H12.08C12.2,19.72 12.45,20.39 12.8,21M12,17H7V15H12M14.68,13H7V11H17V12.08C16.15,12.22 15.37,12.54 14.68,13M17,9H7V7H17"/>
@@ -83,9 +91,76 @@
 
             <div class="content-area">
                 <div id="message" class="message"></div>
-        
+
+                <!-- Overview Tab -->
+                <div id="overview-tab" class="tab-content active">
+                    <div class="stat-row">
+                        <div class="stat-tile">
+                            <div class="stat-label">Всего загружено</div>
+                            <div class="stat-value"><span id="ovDownTotal">—</span><span class="stat-unit" id="ovDownTotalUnit"></span></div>
+                            <div class="stat-foot"><span class="legend-key" data-series="down"></span>С запуска ядра</div>
+                        </div>
+                        <div class="stat-tile">
+                            <div class="stat-label">Всего отдано</div>
+                            <div class="stat-value"><span id="ovUpTotal">—</span><span class="stat-unit" id="ovUpTotalUnit"></span></div>
+                            <div class="stat-foot"><span class="legend-key" data-series="up"></span>С запуска ядра</div>
+                        </div>
+                        <div class="stat-tile">
+                            <div class="stat-label">Активные подключения</div>
+                            <div class="stat-value"><span id="ovConnTotal">—</span><span class="stat-unit">conn</span></div>
+                            <div class="stat-foot"><span class="stat-dot" id="ovStreamDot"></span><span id="ovConnBreakdown">—</span></div>
+                        </div>
+                    </div>
+
+                    <div class="overview-grid">
+                        <div class="add-form-card">
+                            <div class="chart-head">
+                                <div>
+                                    <div class="form-header" style="margin-bottom: 2px;">Трафик в реальном времени</div>
+                                    <p class="card-hint" style="margin: 0;">Последние 60 секунд</p>
+                                </div>
+                                <div class="chart-legend">
+                                    <div class="legend-item">
+                                        <span class="legend-key" data-series="down"></span>
+                                        <span class="legend-name">Загрузка</span>
+                                        <span class="legend-value" id="ovDownRate">—</span>
+                                    </div>
+                                    <div class="legend-item">
+                                        <span class="legend-key" data-series="up"></span>
+                                        <span class="legend-name">Отдача</span>
+                                        <span class="legend-value" id="ovUpRate">—</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="chart-wrap" id="ovChartWrap">
+                                <svg id="ovChart" class="chart-svg" role="img" aria-label="График скорости загрузки и отдачи за последние 60 секунд"></svg>
+                                <div class="chart-tooltip" id="ovTooltip" hidden></div>
+                            </div>
+                            <div class="chart-foot">
+                                <button class="btn btn-secondary btn-sm" id="ovTableToggle" onclick="toggleTrafficTable()">Показать таблицу</button>
+                                <span class="card-hint" id="ovPeakRate"></span>
+                            </div>
+                            <div class="chart-table" id="ovTrafficTable" hidden></div>
+                        </div>
+
+                        <div class="add-form-card">
+                            <div class="form-header" style="margin-bottom: 2px;">Использование памяти</div>
+                            <p class="card-hint" style="margin: 0 0 16px;">Текущий процесс sing-box</p>
+                            <div class="stat-value stat-value-lg"><span id="ovMemory">—</span><span class="stat-unit" id="ovMemoryUnit"></span></div>
+                            <div class="mem-spark-wrap">
+                                <svg id="ovMemChart" class="chart-svg" role="img" aria-label="График потребления памяти"></svg>
+                            </div>
+                            <dl class="meta-list">
+                                <div class="meta-row"><dt>Пик</dt><dd id="ovMemPeak">—</dd></div>
+                                <div class="meta-row"><dt>Правил</dt><dd id="ovRules">—</dd></div>
+                                <div class="meta-row"><dt>Ядро</dt><dd id="ovVersion">—</dd></div>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Rules Tab -->
-                <div id="rules-tab" class="tab-content active">
+                <div id="rules-tab" class="tab-content">
                     <div class="add-form-card">
                         <div class="form-header">Добавить правило</div>
                         <form id="addRuleForm" onsubmit="addRule(event)">
@@ -347,15 +422,28 @@
 
                 <!-- Control Tab -->
                 <div id="control-tab" class="tab-content">
-                    <div class="add-form-card">
-                        <div class="form-header">Управление Sing-Box</div>
-                        <p style="color: #8b949e; margin-bottom: 20px; line-height: 1.6;">Перезагрузить конфигурацию Sing-Box без перезапуска сервиса. Это применит все изменения правил маршрутизации.</p>
-                        <div class="form-actions">
-                            <button id="reloadBtn" class="btn btn-primary" onclick="reloadSingBox()">
-                                Перезагрузить Sing-Box
+                    <div class="add-form-card has-progress" id="clashPanel">
+                        <div class="progress-line"></div>
+                        <div class="form-header" style="margin-bottom: 4px;">Прокси-группы</div>
+                        <p class="card-hint" style="margin: 0 0 16px;">Переключение активного узла в selector-группах и замер задержки. Данные из Clash API sing-box обновляются автоматически.</p>
+                        <div class="clash-controls">
+                            <div class="form-group" style="flex: 1;">
+                                <label class="form-label" for="clashTestUrl">URL для проверки задержки</label>
+                                <input class="form-input" type="text" id="clashTestUrl" value="http://www.gstatic.com/generate_204">
+                            </div>
+                            <button class="btn btn-secondary" id="clashRefreshBtn" onclick="loadClashProxies()">
+                                <svg class="btn-icon" viewBox="0 0 24 24"><path d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"/></svg>
+                                Обновить
+                            </button>
+                            <button class="btn btn-primary" id="clashTestAllBtn" onclick="testAllClashGroups()">
+                                <svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 16a3 3 0 0 1-3-3c0-1.12.61-2.1 1.5-2.61l9.71-5.62-5.53 9.58c-.5.98-1.51 1.65-2.68 1.65m0-13c1.81 0 3.5.5 4.97 1.32l-2.1 1.21C14 5.19 13 5 12 5a8 8 0 0 0-8 8c0 2.21.89 4.21 2.34 5.65h.01c.39.39.39 1.02 0 1.41-.39.39-1.03.39-1.42.01C3.12 18.26 2 15.76 2 13A10 10 0 0 1 12 3m10 10c0 2.76-1.12 5.26-2.93 7.07-.39.38-1.02.38-1.41-.01a.996.996 0 0 1 0-1.41A7.95 7.95 0 0 0 20 13c0-1-.19-2-.54-2.9l1.21-2.1C21.5 9.5 22 11.19 22 13Z"/></svg>
+                                Проверить все
                             </button>
                         </div>
-                        <div id="reloadStatus" class="reload-status"></div>
+                    </div>
+
+                    <div id="clashGroupsContainer" class="clash-groups">
+                        <div class="empty-state">Загрузка...</div>
                     </div>
                 </div>
             </div>

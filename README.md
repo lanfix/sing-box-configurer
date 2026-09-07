@@ -28,6 +28,8 @@
 - ✅ **Редактор конфигурации Sing-Box** - визуальное редактирование конфига с подсветкой синтаксиса
 - ✅ Двухэтапное применение изменений конфига (сохранение во временный файл → подтверждение и перезагрузка)
 - ✅ Автоматическая перезагрузка Sing-Box через Docker API после применения конфига
+- ✅ **Управление через Clash API** - вкладка «Управление» показывает selector-ы и urltest-ы, позволяет переключать активный узел и замерять задержку (аналог yacd)
+- ✅ **Обзор** - домашняя вкладка с суммарным трафиком, активными подключениями (TCP/UDP), графиком скорости за последние 60 секунд и потреблением памяти
 - ✅ Гибкая конфигурация через config.json или флаги командной строки
 - ✅ По умолчанию весь трафик идет напрямую, только указанные правила через VPN
 
@@ -66,7 +68,9 @@ go build -o sing-box-configurer ./cmd
   "listen_addr": ":8080",
   "docker_controller_url": "http://127.0.0.1:8081",
   "source_lists_proxy_url": "",
-  "sing_box_config_path": "/etc/sing-box/config.json"
+  "sing_box_config_path": "/etc/sing-box/config.json",
+  "clash_api_base_url": "http://127.0.0.1:9090",
+  "clash_api_secret": ""
 }
 ```
 
@@ -77,6 +81,8 @@ go build -o sing-box-configurer ./cmd
 - **docker_controller_url** - URL docker-controller для управления контейнерами (по умолчанию: `http://127.0.0.1:8081`)
 - **source_lists_proxy_url** - прокси для загрузки URL источников (опционально)
 - **sing_box_config_path** - путь к конфигу Sing-Box для редактирования (по умолчанию: `/etc/sing-box/config.json`)
+- **clash_api_base_url** - адрес Clash API sing-box (`experimental.clash_api.external_controller`), используется вкладкой «Управление» для переключения selector-ов и замера задержек (по умолчанию: `http://127.0.0.1:9090`)
+- **clash_api_secret** - секрет Clash API, если задан в конфиге sing-box (опционально)
 
 ### Флаги командной строки
 

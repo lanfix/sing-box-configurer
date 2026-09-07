@@ -47,7 +47,10 @@ function activateTab(tabName) {
         autoRefreshInterval = null;
     }
 
-    if (tabName === 'rules') {
+    if (tabName === 'overview') {
+        loadOverview();
+        autoRefreshInterval = setInterval(loadOverview, 1000);
+    } else if (tabName === 'rules') {
         loadRules();
     } else if (tabName === 'url-sources') {
         loadURLSources();
@@ -58,6 +61,9 @@ function activateTab(tabName) {
         loadOutbounds();
     } else if (tabName === 'config') {
         openConfigTab();
+    } else if (tabName === 'control') {
+        loadClashProxies();
+        autoRefreshInterval = setInterval(refreshClashProxies, 5000);
     }
 
     return true;
@@ -74,6 +80,7 @@ function updateTopBar(tabName) {
     if (!pageTitle || !topBarActions) return;
     
     const titles = {
+        'overview': 'Обзор',
         'rules': 'Правила маршрутизации',
         'url-sources': 'URL Источники',
         'groups': 'Группы',
@@ -91,15 +98,17 @@ function updateTopBar(tabName) {
     } else if (tabName === 'url-sources') {
         topBarActions.innerHTML = '<button id="applyUrlBtn" class="btn btn-warning" onclick="applyURLSources()">Применить URL источники</button>';
         updateApplyURLButton();
+    } else if (tabName === 'control') {
+        topBarActions.innerHTML = `<button id="reloadBtn" class="btn btn-warning" onclick="reloadSingBox()">${ICON_RESTART}Перезагрузить Sing-Box</button>`;
     } else {
         topBarActions.innerHTML = '';
     }
 }
 
 function restoreActiveTab() {
-    const savedTab = localStorage.getItem('activeTab') || 'rules';
+    const savedTab = localStorage.getItem('activeTab') || 'overview';
     if (!activateTab(savedTab)) {
-        activateTab('rules');
+        activateTab('overview');
     }
 }
 
@@ -996,12 +1005,14 @@ async function viewURLSourceRules(id) {
 
 async function reloadSingBox() {
     const btn = document.getElementById('reloadBtn');
-    const statusDiv = document.getElementById('reloadStatus');
+    const original = btn ? btn.innerHTML : '';
 
-    btn.disabled = true;
-    btn.textContent = '⏳ Перезагрузка...';
-    statusDiv.textContent = '';
-    statusDiv.className = 'reload-status';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = ICON_RESTART + 'Перезагрузка...';
+    }
+
+    setLoading(document.getElementById('clashPanel'), true);
 
     try {
         const response = await fetch('/api/control/reload', {
@@ -1010,20 +1021,751 @@ async function reloadSingBox() {
 
         const data = await response.json();
 
-        if (response.ok && data.success) {
-            showMessage('Sing-Box успешно перезагружен', 'success');
-            statusDiv.textContent = '✅ ' + data.message;
-            statusDiv.className = 'reload-status success';
-        } else {
+        if (!response.ok || !data.success) {
             throw new Error(data.error || 'Ошибка перезагрузки');
         }
+
+        showMessage(data.message || 'Sing-Box успешно перезагружен', 'success');
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');
-        statusDiv.textContent = '❌ Ошибка: ' + error.message;
-        statusDiv.className = 'reload-status error';
     } finally {
-        btn.disabled = false;
-        btn.textContent = '🔄 Перезагрузить Sing-Box';
+        setLoading(document.getElementById('clashPanel'), false);
+
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = original;
+        }
+    }
+}
+
+// Обзор — сводка и графики
+//
+// Цвета серий заданы в style.css (--series-down / --series-up) и проверены
+// валидатором палитры на тёмной поверхности #0d1117: CVD ΔE 29.3,
+// обычное зрение ΔE 33.5. Обе серии живут на одной оси Y (одна единица, B/s).
+
+const TRAFFIC_CAPACITY = 60;
+const MEMORY_CAPACITY = 60;
+
+const overviewState = {
+    traffic: [],
+    memory: [],
+    memoryPeak: 0,
+    // Храним позицию курсора, а не индекс: окно сдвигается каждую секунду,
+    // и крестовина должна оставаться под указателем.
+    hoverX: null,
+    hoverIndex: null,
+    tableOpen: false,
+    geometry: null
+};
+
+function splitBytes(bytes) {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let value = Number(bytes) || 0;
+    let unit = 0;
+
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit++;
+    }
+
+    let text;
+    if (unit === 0 || value >= 100) {
+        text = Math.round(value).toString();
+    } else {
+        text = value.toFixed(value >= 10 ? 1 : 2).replace(/\.?0+$/, '');
+    }
+
+    return { value: text, unit: units[unit] };
+}
+
+function formatRate(bytesPerSecond) {
+    const parts = splitBytes(bytesPerSecond);
+    return `${parts.value} ${parts.unit}/s`;
+}
+
+function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+}
+
+async function loadOverview() {
+    try {
+        const response = await fetch('/api/clash/overview');
+
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text.trim() || ('HTTP ' + response.status));
+        }
+
+        applyOverview(await response.json());
+    } catch (error) {
+        // Секундный поллинг: не спамим тостами, показываем статус в плитке
+        // и оставляем предыдущий кадр графика на месте.
+        const dot = document.getElementById('ovStreamDot');
+        if (dot) dot.className = 'stat-dot is-bad';
+        setText('ovConnBreakdown', 'Clash API недоступен');
+    }
+}
+
+function applyOverview(data) {
+    const down = splitBytes(data.downloadTotal);
+    setText('ovDownTotal', down.value);
+    setText('ovDownTotalUnit', down.unit);
+
+    const up = splitBytes(data.uploadTotal);
+    setText('ovUpTotal', up.value);
+    setText('ovUpTotalUnit', up.unit);
+
+    const connections = data.connections || {};
+    setText('ovConnTotal', connections.total ?? 0);
+    setText('ovConnBreakdown', `TCP ${connections.tcp ?? 0} · UDP ${connections.udp ?? 0}`);
+
+    const dot = document.getElementById('ovStreamDot');
+    if (dot) dot.className = 'stat-dot ' + (data.trafficStreamOk ? 'is-good' : 'is-warn');
+
+    const memory = Number(data.memory) || 0;
+    const memoryParts = splitBytes(memory);
+    setText('ovMemory', memoryParts.value);
+    setText('ovMemoryUnit', memoryParts.unit);
+
+    overviewState.memory.push(memory);
+    if (overviewState.memory.length > MEMORY_CAPACITY) {
+        overviewState.memory.shift();
+    }
+
+    if (memory > overviewState.memoryPeak) {
+        overviewState.memoryPeak = memory;
+    }
+
+    const peak = splitBytes(overviewState.memoryPeak);
+    setText('ovMemPeak', `${peak.value} ${peak.unit}`);
+    setText('ovRules', data.rules ?? 0);
+    setText('ovVersion', data.version || '—');
+
+    overviewState.traffic = Array.isArray(data.traffic) ? data.traffic : [];
+
+    const latest = overviewState.traffic[overviewState.traffic.length - 1];
+    setText('ovDownRate', latest ? formatRate(latest.down) : '—');
+    setText('ovUpRate', latest ? formatRate(latest.up) : '—');
+
+    const peakDown = Math.max(0, ...overviewState.traffic.map(s => s.down));
+    const peakUp = Math.max(0, ...overviewState.traffic.map(s => s.up));
+    setText('ovPeakRate', overviewState.traffic.length
+        ? `Пик за окно: ${formatRate(peakDown)} ↓ · ${formatRate(peakUp)} ↑`
+        : '');
+
+    renderTrafficChart();
+    renderMemorySpark();
+
+    // Окно сдвинулось — под курсором теперь другое измерение.
+    if (overviewState.hoverX !== null) {
+        const wrap = document.getElementById('ovChartWrap');
+        if (wrap) showChartTooltip(wrap.getBoundingClientRect());
+    }
+
+    if (overviewState.tableOpen) {
+        renderTrafficTable();
+    }
+}
+
+// Монотонная кубическая интерполяция (Фрич — Карлсон): сглаживает линию,
+// но по построению не выходит за пределы соседних значений.
+function monotonePath(points) {
+    const n = points.length;
+    if (n === 0) return '';
+    if (n === 1) return `M${points[0].x},${points[0].y}`;
+
+    const dx = [];
+    const slope = [];
+
+    for (let i = 0; i < n - 1; i++) {
+        dx[i] = points[i + 1].x - points[i].x;
+        slope[i] = (points[i + 1].y - points[i].y) / dx[i];
+    }
+
+    const tangent = new Array(n);
+    tangent[0] = slope[0];
+    tangent[n - 1] = slope[n - 2];
+
+    for (let i = 1; i < n - 1; i++) {
+        if (slope[i - 1] * slope[i] <= 0) {
+            tangent[i] = 0;
+        } else {
+            const w1 = 2 * dx[i] + dx[i - 1];
+            const w2 = dx[i] + 2 * dx[i - 1];
+            tangent[i] = (w1 + w2) / (w1 / slope[i - 1] + w2 / slope[i]);
+        }
+    }
+
+    const r = v => Math.round(v * 100) / 100;
+    let d = `M${r(points[0].x)},${r(points[0].y)}`;
+
+    for (let i = 0; i < n - 1; i++) {
+        const c1x = points[i].x + dx[i] / 3;
+        const c1y = points[i].y + tangent[i] * dx[i] / 3;
+        const c2x = points[i + 1].x - dx[i] / 3;
+        const c2y = points[i + 1].y - tangent[i + 1] * dx[i] / 3;
+
+        d += `C${r(c1x)},${r(c1y)} ${r(c2x)},${r(c2y)} ${r(points[i + 1].x)},${r(points[i + 1].y)}`;
+    }
+
+    return d;
+}
+
+// Округляет верх шкалы вверх до круглого числа в единице отображения
+// (шаг по 1024), иначе подписи оси выглядят как «9.54 MB/s».
+const NICE_STEPS = [1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1024];
+
+function niceMax(value) {
+    if (value <= 0) return 1024;
+
+    let scale = 1;
+    while (value / scale >= 1024) {
+        scale *= 1024;
+    }
+
+    const normalized = value / scale;
+    const step = NICE_STEPS.find(candidate => candidate >= normalized) || 1024;
+
+    return step * scale;
+}
+
+function renderTrafficChart() {
+    const svg = document.getElementById('ovChart');
+    const wrap = document.getElementById('ovChartWrap');
+    if (!svg || !wrap) return;
+
+    const width = wrap.clientWidth;
+    const height = wrap.clientHeight;
+    if (width <= 0 || height <= 0) return;
+
+    const padL = 58;
+    const padR = 14;
+    const padT = 12;
+    const padB = 22;
+    const plotW = width - padL - padR;
+    const plotH = height - padT - padB;
+
+    svg.setAttribute('width', width);
+    svg.setAttribute('height', height);
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+    const samples = overviewState.traffic;
+    const n = samples.length;
+
+    const observed = Math.max(0, ...samples.map(s => Math.max(s.down, s.up)));
+    const max = niceMax(observed);
+
+    const stepX = plotW / (TRAFFIC_CAPACITY - 1);
+    const xs = [];
+    for (let i = 0; i < n; i++) {
+        xs.push(padL + plotW - (n - 1 - i) * stepX);
+    }
+
+    const yAt = v => padT + plotH * (1 - Math.min(v, max) / max);
+
+    overviewState.geometry = { xs, padL, padT, plotW, plotH, stepX };
+
+    // Сетка и подписи оси Y — сплошные хайрлайны, утопленные в фон.
+    let grid = '';
+    const ticks = 4;
+    for (let i = 0; i <= ticks; i++) {
+        const value = max * (1 - i / ticks);
+        const y = padT + (plotH * i) / ticks;
+
+        grid += `<line class="chart-grid" x1="${padL}" y1="${y.toFixed(1)}" x2="${padL + plotW}" y2="${y.toFixed(1)}"/>`;
+        grid += `<text class="chart-tick" x="${padL - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end">${escapeHTML(formatRate(value))}</text>`;
+    }
+
+    let xLabels = '';
+    if (n > 0) {
+        const marks = [{ at: 0, text: '−60 с' }, { at: 0.5, text: '−30 с' }, { at: 1, text: 'сейчас' }];
+        marks.forEach(mark => {
+            const x = padL + plotW * mark.at;
+            const anchor = mark.at === 0 ? 'start' : mark.at === 1 ? 'end' : 'middle';
+            xLabels += `<text class="chart-tick" x="${x.toFixed(1)}" y="${(padT + plotH + 15).toFixed(1)}" text-anchor="${anchor}">${mark.text}</text>`;
+        });
+    }
+
+    let series = '';
+    if (n >= 1) {
+        [['up', s => s.up], ['down', s => s.down]].forEach(([name, pick]) => {
+            const points = samples.map((s, i) => ({ x: xs[i], y: yAt(pick(s)) }));
+            const line = monotonePath(points);
+            const baseline = padT + plotH;
+            const area = `${line}L${xs[n - 1].toFixed(2)},${baseline}L${xs[0].toFixed(2)},${baseline}Z`;
+
+            series += `<path class="chart-area" data-series="${name}" d="${area}"/>`;
+            series += `<path class="chart-line" data-series="${name}" d="${line}"/>`;
+        });
+    }
+
+    overviewState.hoverIndex = nearestSampleIndex(overviewState.hoverX, xs);
+
+    let hover = '';
+    const idx = overviewState.hoverIndex;
+    if (idx !== null) {
+        const x = xs[idx].toFixed(2);
+        hover += `<line class="chart-crosshair" x1="${x}" y1="${padT}" x2="${x}" y2="${padT + plotH}"/>`;
+
+        [['up', samples[idx].up], ['down', samples[idx].down]].forEach(([name, value]) => {
+            hover += `<circle class="chart-dot" data-series="${name}" cx="${x}" cy="${yAt(value).toFixed(2)}" r="4"/>`;
+        });
+    }
+
+    svg.innerHTML = grid + xLabels + series + hover;
+
+    if (n === 0) {
+        svg.innerHTML += `<text class="chart-empty" x="${(padL + plotW / 2).toFixed(1)}" y="${(padT + plotH / 2).toFixed(1)}" text-anchor="middle">Ожидание данных от Clash API…</text>`;
+    }
+}
+
+function nearestSampleIndex(x, xs) {
+    if (x === null || xs.length === 0) return null;
+
+    let nearest = 0;
+    let best = Infinity;
+
+    xs.forEach((position, i) => {
+        const distance = Math.abs(position - x);
+        if (distance < best) {
+            best = distance;
+            nearest = i;
+        }
+    });
+
+    return nearest;
+}
+
+function handleChartPointer(event) {
+    const wrap = document.getElementById('ovChartWrap');
+    if (!wrap) return;
+
+    const rect = wrap.getBoundingClientRect();
+
+    overviewState.hoverX = event.clientX - rect.left;
+    renderTrafficChart();
+    showChartTooltip(rect);
+}
+
+function showChartTooltip(rect) {
+    const tooltip = document.getElementById('ovTooltip');
+    const geometry = overviewState.geometry;
+    const index = overviewState.hoverIndex;
+    const sample = index === null ? null : overviewState.traffic[index];
+
+    if (!tooltip || !geometry || !sample) return;
+
+    const secondsAgo = overviewState.traffic.length - 1 - index;
+
+    tooltip.textContent = '';
+
+    const time = document.createElement('div');
+    time.className = 'tt-time';
+    time.textContent = secondsAgo === 0 ? 'сейчас' : `${secondsAgo} с назад`;
+    tooltip.appendChild(time);
+
+    [['down', 'Загрузка', sample.down], ['up', 'Отдача', sample.up]].forEach(([series, name, value]) => {
+        const row = document.createElement('div');
+        row.className = 'tt-row';
+
+        const key = document.createElement('span');
+        key.className = 'tt-key';
+        key.dataset.series = series;
+
+        const amount = document.createElement('span');
+        amount.className = 'tt-value';
+        amount.textContent = formatRate(value);
+
+        const label = document.createElement('span');
+        label.className = 'tt-name';
+        label.textContent = name;
+
+        row.append(key, amount, label);
+        tooltip.appendChild(row);
+    });
+
+    tooltip.hidden = false;
+
+    const x = geometry.xs[index];
+    const flip = x > rect.width / 2;
+    tooltip.style.left = `${flip ? x - 12 : x + 12}px`;
+    tooltip.style.transform = flip ? 'translateX(-100%)' : 'none';
+}
+
+function hideChartTooltip() {
+    const tooltip = document.getElementById('ovTooltip');
+    if (tooltip) tooltip.hidden = true;
+
+    if (overviewState.hoverX !== null) {
+        overviewState.hoverX = null;
+        renderTrafficChart();
+    }
+}
+
+function renderMemorySpark() {
+    const svg = document.getElementById('ovMemChart');
+    if (!svg || !svg.parentElement) return;
+
+    const width = svg.parentElement.clientWidth;
+    const height = svg.parentElement.clientHeight;
+    if (width <= 0 || height <= 0) return;
+
+    svg.setAttribute('width', width);
+    svg.setAttribute('height', height);
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+    const values = overviewState.memory;
+    const n = values.length;
+
+    if (n < 2) {
+        svg.innerHTML = '';
+        return;
+    }
+
+    const padT = 6;
+    const plotH = height - padT - 2;
+    const stepX = width / (MEMORY_CAPACITY - 1);
+
+    // Шкала от нуля исказила бы почти плоский ряд, поэтому берём окно
+    // вокруг наблюдаемого диапазона с запасом.
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = Math.max(max - min, max * 0.05, 1);
+    const top = max + span * 0.25;
+    const bottom = Math.max(0, min - span * 0.25);
+
+    const points = values.map((value, i) => ({
+        x: width - (n - 1 - i) * stepX,
+        y: padT + plotH * (1 - (value - bottom) / (top - bottom))
+    }));
+
+    const line = monotonePath(points);
+    const area = `${line}L${points[n - 1].x.toFixed(2)},${padT + plotH}L${points[0].x.toFixed(2)},${padT + plotH}Z`;
+
+    svg.innerHTML =
+        `<path class="chart-area" data-series="down" d="${area}"/>` +
+        `<path class="chart-line" data-series="down" d="${line}"/>`;
+}
+
+function toggleTrafficTable() {
+    const table = document.getElementById('ovTrafficTable');
+    const toggle = document.getElementById('ovTableToggle');
+    if (!table || !toggle) return;
+
+    overviewState.tableOpen = !overviewState.tableOpen;
+    table.hidden = !overviewState.tableOpen;
+    toggle.textContent = overviewState.tableOpen ? 'Скрыть таблицу' : 'Показать таблицу';
+
+    if (overviewState.tableOpen) {
+        renderTrafficTable();
+    }
+}
+
+// Табличный двойник графика: те же значения без наведения мышью.
+function renderTrafficTable() {
+    const container = document.getElementById('ovTrafficTable');
+    if (!container) return;
+
+    const samples = overviewState.traffic;
+
+    if (samples.length === 0) {
+        container.innerHTML = '<div class="empty-state">Нет данных.</div>';
+        return;
+    }
+
+    const rows = samples
+        .map((sample, i) => {
+            const secondsAgo = samples.length - 1 - i;
+            const when = secondsAgo === 0 ? 'сейчас' : `−${secondsAgo} с`;
+
+            return `<tr><td>${when}</td><td>${escapeHTML(formatRate(sample.down))}</td><td>${escapeHTML(formatRate(sample.up))}</td></tr>`;
+        })
+        .reverse()
+        .join('');
+
+    container.innerHTML = `
+        <table class="table">
+            <thead>
+                <tr><th>Время</th><th>Загрузка</th><th>Отдача</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+// Clash API — прокси-группы и задержки
+
+// Типы прокси-групп, которые показываем во вкладке "Управление".
+const CLASH_GROUP_TYPES = ['Selector', 'URLTest', 'LoadBalance', 'Fallback'];
+// GLOBAL — служебный selector sing-box, для этого проекта default outbound
+// задаётся в конфиге напрямую, поэтому группу не показываем.
+const CLASH_HIDDEN_GROUPS = ['GLOBAL'];
+
+const ICON_SPEEDOMETER = '<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 16a3 3 0 0 1-3-3c0-1.12.61-2.1 1.5-2.61l9.71-5.62-5.53 9.58c-.5.98-1.51 1.65-2.68 1.65m0-13c1.81 0 3.5.5 4.97 1.32l-2.1 1.21C14 5.19 13 5 12 5a8 8 0 0 0-8 8c0 2.21.89 4.21 2.34 5.65h.01c.39.39.39 1.02 0 1.41-.39.39-1.03.39-1.42.01C3.12 18.26 2 15.76 2 13A10 10 0 0 1 12 3m10 10c0 2.76-1.12 5.26-2.93 7.07-.39.38-1.02.38-1.41-.01a.996.996 0 0 1 0-1.41A7.95 7.95 0 0 0 20 13c0-1-.19-2-.54-2.9l1.21-2.1C21.5 9.5 22 11.19 22 13Z"/></svg>';
+const ICON_RESTART = '<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12,4C14.1,4 16.1,4.8 17.6,6.3C20.7,9.4 20.7,14.5 17.6,17.6C15.8,19.5 13.3,20.2 10.9,19.9L11.4,17.9C13.1,18.1 14.9,17.5 16.2,16.2C18.5,13.9 18.5,10.1 16.2,7.7C15.1,6.6 13.5,6 12,6V10.6L7,5.6L12,0.6V4M6.3,17.6C3.7,15 3.3,11 5.1,7.9L6.6,9.4C5.5,11.6 5.9,14.4 7.8,16.2C8.3,16.7 8.9,17.1 9.6,17.4L9,19.4C8,19 7.1,18.4 6.3,17.6Z"/></svg>';
+
+let clashProxiesCache = {};
+// Счётчик операций в полёте: пока он > 0, фоновое обновление не трогает DOM.
+let clashBusy = 0;
+
+function setLoading(el, on) {
+    if (el) el.classList.toggle('is-loading', on);
+}
+
+function clashTestUrl() {
+    const input = document.getElementById('clashTestUrl');
+    const value = input ? input.value.trim() : '';
+    return value || 'http://www.gstatic.com/generate_204';
+}
+
+function delayClass(delay) {
+    if (delay === undefined || delay === null) return '';
+    if (delay <= 0) return 'd-bad';
+    if (delay < 200) return 'd-good';
+    if (delay < 400) return 'd-ok';
+    if (delay < 800) return 'd-slow';
+    return 'd-bad';
+}
+
+function delayText(delay) {
+    if (delay === undefined || delay === null) return '—';
+    if (delay <= 0) return 'timeout';
+    return delay + ' ms';
+}
+
+function lastDelay(proxy) {
+    if (!proxy || !proxy.history || proxy.history.length === 0) return undefined;
+    return proxy.history[proxy.history.length - 1].delay;
+}
+
+function clashGroups() {
+    return Object.values(clashProxiesCache)
+        .filter(p => CLASH_GROUP_TYPES.includes(p.type) && !CLASH_HIDDEN_GROUPS.includes(p.name))
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function fetchClashProxies() {
+    const response = await fetch('/api/clash/proxies');
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text.trim() || ('HTTP ' + response.status));
+    }
+
+    const data = await response.json();
+    return data.proxies || {};
+}
+
+// Сохраняет уже замеренные задержки, если sing-box вернул пустую историю.
+function mergeClashProxies(fresh) {
+    Object.values(fresh).forEach(proxy => {
+        const cached = clashProxiesCache[proxy.name];
+        const hasFresh = proxy.history && proxy.history.length > 0;
+        const hasCached = cached && cached.history && cached.history.length > 0;
+
+        if (!hasFresh && hasCached) {
+            proxy.history = cached.history;
+        }
+    });
+
+    clashProxiesCache = fresh;
+}
+
+async function loadClashProxies() {
+    const container = document.getElementById('clashGroupsContainer');
+    if (!container) return;
+
+    const panel = document.getElementById('clashPanel');
+    setLoading(panel, true);
+    clashBusy++;
+
+    try {
+        mergeClashProxies(await fetchClashProxies());
+        renderClashGroups();
+    } catch (error) {
+        container.innerHTML = `<div class="empty-state">Не удалось получить данные Clash API: ${escapeHTML(error.message)}</div>`;
+    } finally {
+        clashBusy--;
+        setLoading(panel, false);
+    }
+}
+
+// Фоновое обновление: тихо подтягивает актуальные выборы и задержки.
+async function refreshClashProxies() {
+    if (clashBusy > 0) return;
+
+    try {
+        mergeClashProxies(await fetchClashProxies());
+
+        if (clashBusy === 0) {
+            renderClashGroups();
+        }
+    } catch (error) {
+        // Тихо игнорируем: следующая итерация повторит запрос.
+    }
+}
+
+function renderClashGroups() {
+    const container = document.getElementById('clashGroupsContainer');
+    if (!container) return;
+
+    const proxies = clashProxiesCache;
+    const groups = clashGroups();
+
+    if (groups.length === 0) {
+        container.innerHTML = '<div class="empty-state">Прокси-группы не найдены.</div>';
+        return;
+    }
+
+    container.innerHTML = groups.map(group => {
+        const selectable = group.type === 'Selector';
+        const groupAttr = escapeHTML(group.name);
+        const nowDelay = lastDelay(proxies[group.now]);
+
+        const members = (group.all || []).map(memberName => {
+            const member = proxies[memberName] || { name: memberName };
+            const delay = lastDelay(member);
+            const isActive = memberName === group.now;
+            const nameAttr = escapeHTML(memberName);
+
+            return `
+                <div class="proxy-node${isActive ? ' active' : ''}${selectable ? ' selectable' : ' readonly'}"
+                     ${selectable ? `onclick="selectClashProxy('${groupAttr}', '${nameAttr}')"` : ''}>
+                    <div class="proxy-node-row">
+                        <span class="proxy-node-name" title="${nameAttr}">${nameAttr}</span>
+                        ${member.udp ? '<span class="proxy-udp">UDP</span>' : ''}
+                    </div>
+                    <div class="proxy-node-row">
+                        <span class="proxy-node-type">${escapeHTML(member.type || '—')}</span>
+                        <span class="proxy-delay ${delayClass(delay)}">${delayText(delay)}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="clash-group has-progress">
+                <div class="progress-line"></div>
+                <div class="clash-group-head">
+                    <div class="clash-group-meta">
+                        <div class="clash-group-title">
+                            <strong>${groupAttr}</strong>
+                            <span class="clash-type">${escapeHTML(group.type)}</span>
+                        </div>
+                        <div class="clash-group-now">Активен: ${escapeHTML(group.now || '—')}</div>
+                    </div>
+                    <div class="clash-group-actions">
+                        <span class="proxy-delay ${delayClass(nowDelay)}">${delayText(nowDelay)}</span>
+                        <button class="btn btn-secondary btn-sm" onclick="testClashGroupDelay('${groupAttr}', this)">
+                            ${ICON_SPEEDOMETER}
+                            Проверить
+                        </button>
+                    </div>
+                </div>
+                <div class="proxy-grid">${members}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function selectClashProxy(group, name) {
+    try {
+        const response = await fetch('/api/clash/proxies/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ group, name })
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || ('HTTP ' + response.status));
+        }
+
+        if (clashProxiesCache[group]) {
+            clashProxiesCache[group].now = name;
+            renderClashGroups();
+        }
+        showMessage(`${group}: выбран ${name}`, 'success');
+    } catch (error) {
+        showMessage('Ошибка переключения: ' + error.message, 'error');
+    }
+}
+
+function applyDelays(delays) {
+    Object.entries(delays).forEach(([name, delay]) => {
+        if (!clashProxiesCache[name]) clashProxiesCache[name] = { name, history: [] };
+        if (!clashProxiesCache[name].history) clashProxiesCache[name].history = [];
+        clashProxiesCache[name].history.push({ delay });
+    });
+}
+
+async function fetchGroupDelay(group) {
+    const url = encodeURIComponent(clashTestUrl());
+    const response = await fetch(`/api/clash/group/delay?group=${encodeURIComponent(group)}&url=${url}`);
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text.trim() || ('HTTP ' + response.status));
+    }
+
+    const data = await response.json();
+    return data.delays || {};
+}
+
+async function testClashGroupDelay(group, btn) {
+    const card = btn ? btn.closest('.clash-group') : null;
+
+    setLoading(card, true);
+    if (btn) btn.disabled = true;
+    clashBusy++;
+
+    try {
+        const delays = await fetchGroupDelay(group);
+        applyDelays(delays);
+        showMessage(`${group}: проверено узлов — ${Object.keys(delays).length}`, 'success');
+    } catch (error) {
+        showMessage(`Ошибка замера задержки (${group}): ` + error.message, 'error');
+    } finally {
+        clashBusy--;
+        // Перерисовка пересоздаёт карточку, поэтому индикатор снимать не нужно.
+        renderClashGroups();
+    }
+}
+
+async function testAllClashGroups() {
+    const btn = document.getElementById('clashTestAllBtn');
+    const panel = document.getElementById('clashPanel');
+    const groups = clashGroups();
+
+    if (groups.length === 0) return;
+
+    setLoading(panel, true);
+    if (btn) btn.disabled = true;
+    clashBusy++;
+
+    let ok = 0;
+    const failed = [];
+
+    for (const group of groups) {
+        try {
+            applyDelays(await fetchGroupDelay(group.name));
+            renderClashGroups();
+            ok++;
+        } catch (error) {
+            failed.push(group.name);
+        }
+    }
+
+    clashBusy--;
+    setLoading(panel, false);
+    if (btn) btn.disabled = false;
+
+    if (failed.length === 0) {
+        showMessage(`Задержка замерена: групп — ${ok}`, 'success');
+    } else {
+        showMessage(`Замер завершён: успешно ${ok}, с ошибкой ${failed.join(', ')}`, 'error');
     }
 }
 
@@ -2279,6 +3021,22 @@ async function checkPendingConfig() {
     }
 }
 
+function initOverviewInteractions() {
+    const wrap = document.getElementById('ovChartWrap');
+    if (!wrap) return;
+
+    wrap.addEventListener('pointermove', handleChartPointer);
+    wrap.addEventListener('pointerleave', hideChartTooltip);
+
+    window.addEventListener('resize', () => {
+        if (document.getElementById('overview-tab').classList.contains('active')) {
+            renderTrafficChart();
+            renderMemorySpark();
+        }
+    });
+}
+
+initOverviewInteractions();
 checkPendingConfig();
 restoreActiveTab();
 
