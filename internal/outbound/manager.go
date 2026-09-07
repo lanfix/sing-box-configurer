@@ -28,13 +28,13 @@ func (m *Manager) GetOutbounds() ([]Outbound, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	configData, err := m.configManager.GetConfig()
+	configData, err := m.configManager.GetActualConfig()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get config: %w", err)
 	}
 
 	if m.configManager.HasPending() {
-		tempConfigData, err := m.configManager.GetTemp()
+		tempConfigData, err := m.configManager.GetTempConfig()
 		if err != nil {
 			return nil, fmt.Errorf("cannot get temp config: %w", err)
 		}
@@ -140,7 +140,7 @@ func (m *Manager) AddOutboundFromShare(shareUrl string) (*Outbound, error) {
 		return nil, fmt.Errorf("cannot parse share url: %w", err)
 	}
 
-	configStr, err := m.configManager.GetConfig()
+	configStr, err := m.configManager.GetActualConfig()
 	if err != nil {
 		return nil, fmt.Errorf("cannot read config: %w", err)
 	}
@@ -239,7 +239,7 @@ func (m *Manager) addEndpoint(config map[string]interface{}, outbound *Outbound)
 		return nil, fmt.Errorf("cannot marshal config: %w", err)
 	}
 
-	if err := m.configManager.SaveTemp(newData); err != nil {
+	if err := m.configManager.SaveTempConfig(newData); err != nil {
 		return nil, fmt.Errorf("cannot save temp config: %w", err)
 	}
 
@@ -329,7 +329,7 @@ func (m *Manager) addOutboundToConfig(config map[string]interface{}, outbound *O
 		return nil, fmt.Errorf("cannot marshal config: %w", err)
 	}
 
-	if err := m.configManager.SaveTemp(newData); err != nil {
+	if err := m.configManager.SaveTempConfig(newData); err != nil {
 		return nil, fmt.Errorf("cannot save temp config: %w", err)
 	}
 
@@ -345,7 +345,7 @@ func (m *Manager) DeleteOutbound(tag string) error {
 		return fmt.Errorf("tag cannot be empty")
 	}
 
-	configStr, err := m.configManager.GetConfig()
+	configStr, err := m.configManager.GetActualConfig()
 	if err != nil {
 		return fmt.Errorf("cannot read config: %w", err)
 	}
@@ -471,7 +471,7 @@ func (m *Manager) DeleteOutbound(tag string) error {
 		return fmt.Errorf("cannot marshal config: %w", err)
 	}
 
-	if err := m.configManager.SaveTemp(newData); err != nil {
+	if err := m.configManager.SaveTempConfig(newData); err != nil {
 		return fmt.Errorf("cannot save temp config: %w", err)
 	}
 

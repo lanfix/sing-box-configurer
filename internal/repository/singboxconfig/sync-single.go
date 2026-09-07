@@ -3,269 +3,99 @@ package singboxconfig
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+	"slices"
 	"strings"
 )
 
-// SyncSingleGroupToConfig синхронизирует одну группу в конфиг sing-box.
-func (p *Provider) SyncSingleGroupToConfig(configPath string, group Group, allGroups []Group) error {
-	// Читаем конфиг sing-box.
-	configData, err := os.ReadFile(configPath)
+const (
+	// Префикс, с которого начинаются имена тегов системных rule-set-ов.
+	ruleSetTagPrefix = "configurer"
+
+	// Префикс, с которого начинается имя тегов системных selector-ов.
+	selectorTagPrefix = "select"
+)
+
+// SyncSingleGroup синхронизирует одну группу в конфиг sing-box.
+func (p *Provider) SyncSingleGroup(group Group, allGroups []Group) error {
+	configData, err := p.GetTempOrActualConfig()
 	if err != nil {
-		return fmt.Errorf("cannot read config: %w", err)
+		return fmt.Errorf("cannot get config: %w", err)
 	}
 
 	// Удаляем комментарии перед парсингом.
 	cleanedConfigData := removeComments(configData)
 
-	var config map[string]interface{}
+	var config map[string]any
 
-	if err := json.Unmarshal(cleanedConfigData, &config); err != nil {
-		return fmt.Errorf("cannot parse config: %w", err)
+	if err = json.Unmarshal(cleanedConfigData, &config); err != nil {
+		return fmt.Errorf("cannot unmarshal json: %w", err)
 	}
 
-	// Получаем секцию route.
-	route, ok := config["route"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("route section not found in config")
-	}
+	var route map[string]any
 
-	// Получаем rule_set.
-	var ruleSets []interface{}
-
-	if rs, ok := route["rule_set"].([]interface{}); ok {
-		ruleSets = rs
+	if routeUntyped, ok := config["route"]; ok {
+		route, ok = routeUntyped.(map[string]any)
+		if !ok {
+			return fmt.Errorf(".route should be map[string]any")
+		}
 	} else {
-		ruleSets = []interface{}{}
+		route = map[string]any{}
 	}
 
-	// Получаем rules.
-	var rules []interface{}
+	var ruleSets []any
 
-	if r, ok := route["rules"].([]interface{}); ok {
-		rules = r
+	if ruleSetsUntyped, ok := route["rule_set"]; ok {
+		ruleSets, ok = ruleSetsUntyped.([]any)
+		if !ok {
+			return fmt.Errorf(".route.rule_set should be []any")
+		}
 	} else {
-		rules = []interface{}{}
+		ruleSets = []any{}
 	}
 
-	// Обновляем или добавляем rule_set для данной группы.
-	ruleSetTag := "configurer-" + group.Name
-	foundRuleSet := false
+	desiredRuleSetList := getDesiredRuleSetList(ruleSets, group, allGroups)
+	route["rule_set"] = desiredRuleSetList
 
-	for i, rs := range ruleSets {
-		rsMap, ok := rs.(map[string]interface{})
+	var rules []any
+
+	if rulesUntyped, ok := route["rules"]; ok {
+		rules, ok = rulesUntyped.([]any)
 		if !ok {
-			continue
+			return fmt.Errorf(".rules should be []any")
 		}
+	} else {
+		rules = []any{}
+	}
 
-		tag, ok := rsMap["tag"].(string)
+	desiredRulesList := getDesiredRulesList(rules, group, allGroups)
+	route["rules"] = desiredRulesList
+
+	config["route"] = route
+
+	var outbounds []any
+
+	if outboundsUntyped, ok := config["outbounds"]; ok {
+		outbounds, ok = outboundsUntyped.([]any)
 		if !ok {
-			continue
+			return fmt.Errorf(".outbounds should be []any")
 		}
-
-		if tag == ruleSetTag {
-			// Обновляем существующий rule_set.
-			rsMap["format"] = "source"
-			rsMap["http_client"] = map[string]interface{}{
-				"tag": "default_http_client",
-			}
-			rsMap["type"] = "remote"
-			rsMap["update_interval"] = "30s"
-			rsMap["url"] = fmt.Sprintf("http://127.0.0.1:8080/api/ruleset/group?group=%s", group.Name)
-			ruleSets[i] = rsMap
-			foundRuleSet = true
-
-			break
-		}
+	} else {
+		outbounds = []any{}
 	}
 
-	if !foundRuleSet {
-		// Добавляем новый rule_set в конец (сохраняя порядок).
-		ruleSet := map[string]interface{}{
-			"format": "source",
-			"http_client": map[string]interface{}{
-				"tag": "default_http_client",
-			},
-			"tag":             ruleSetTag,
-			"type":            "remote",
-			"update_interval": "30s",
-			"url":             fmt.Sprintf("http://127.0.0.1:8080/api/ruleset/group?group=%s", group.Name),
-		}
+	var endpoints []any
 
-		ruleSets = append(ruleSets, ruleSet)
-	}
-
-	route["rule_set"] = ruleSets
-
-	// Обрабатываем rules: удаляем все правила групп и добавляем их заново в правильном порядке.
-	var userRules []interface{}
-	var serviceRules []interface{}
-	existingGroupRules := make(map[string]map[string]interface{})
-
-	for _, rule := range rules {
-		ruleMap, ok := rule.(map[string]interface{})
+	if endpointsUntyped, ok := config["endpoints"]; ok {
+		endpoints, ok = endpointsUntyped.([]any)
 		if !ok {
-			userRules = append(userRules, rule)
-			continue
+			return fmt.Errorf(".endpoints should be []any")
 		}
-
-		// Проверяем служебные правила.
-		isService := false
-
-		if action, ok := ruleMap["action"].(string); ok {
-			if action == "sniff" || action == "hijack-dns" || action == "resolve" {
-				serviceRules = append(serviceRules, rule)
-				isService = true
-			}
-		}
-
-		if _, ok := ruleMap["ip_is_private"]; ok {
-			serviceRules = append(serviceRules, rule)
-			isService = true
-		}
-
-		if isService {
-			continue
-		}
-
-		// Проверяем, является ли это правилом группы.
-		if ruleSetValue, ok := ruleMap["rule_set"].(string); ok {
-			if strings.HasPrefix(ruleSetValue, "configurer-") {
-				// Сохраняем правило группы.
-				groupName := strings.TrimPrefix(ruleSetValue, "configurer-")
-				existingGroupRules[groupName] = ruleMap
-				continue
-			}
-		}
-
-		// Сохраняем пользовательские правила.
-		userRules = append(userRules, rule)
+	} else {
+		endpoints = []any{}
 	}
 
-	// Обновляем правило текущей группы.
-	existingGroupRules[group.Name] = map[string]interface{}{
-		"outbound": "select-" + group.Name,
-		"rule_set": "configurer-" + group.Name,
-	}
-
-	// Добавляем правила групп в порядке из allGroups.
-	var orderedGroupRules []interface{}
-
-	for _, g := range allGroups {
-		if ruleMap, exists := existingGroupRules[g.Name]; exists {
-			orderedGroupRules = append(orderedGroupRules, ruleMap)
-		}
-	}
-
-	// Собираем финальный список правил: служебные + пользовательские + группы.
-	finalRules := append(serviceRules, userRules...)
-	finalRules = append(finalRules, orderedGroupRules...)
-
-	route["rules"] = finalRules
-
-	// Обновляем или добавляем selector для данной группы.
-	outbounds, ok := config["outbounds"].([]interface{})
-	if !ok {
-		return fmt.Errorf("outbounds section not found in config")
-	}
-
-	// Получаем список всех доступных outbounds и endpoints.
-	var availableOutbounds []string
-	existingOutboundTags := make(map[string]bool)
-
-	for _, ob := range outbounds {
-		obMap, ok := ob.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		tag, ok := obMap["tag"].(string)
-		if !ok {
-			continue
-		}
-
-		obType, ok := obMap["type"].(string)
-		if !ok {
-			continue
-		}
-
-		existingOutboundTags[tag] = true
-
-		// Добавляем все outbounds кроме selector и dns-out.
-		if obType != "selector" && tag != "dns-out" {
-			availableOutbounds = append(availableOutbounds, tag)
-
-			// Если это outbound с endpoints, добавляем их тоже.
-			if endpoints, ok := obMap["endpoints"].([]interface{}); ok {
-				for _, ep := range endpoints {
-					epMap, ok := ep.(map[string]interface{})
-					if !ok {
-						continue
-					}
-
-					epTag, ok := epMap["tag"].(string)
-					if !ok {
-						continue
-					}
-
-					availableOutbounds = append(availableOutbounds, epTag)
-					existingOutboundTags[epTag] = true
-				}
-			}
-		}
-	}
-
-	// Определяем default outbound для группы.
-	defaultOutbound := group.DefaultOutbound
-	if defaultOutbound == "" {
-		defaultOutbound = "direct"
-	}
-
-	// Проверяем, существует ли указанный default outbound.
-	if !existingOutboundTags[defaultOutbound] {
-		// Если удален, используем block.
-		defaultOutbound = "block"
-	}
-
-	selectorTag := "select-" + group.Name
-	foundSelector := false
-
-	for i, ob := range outbounds {
-		obMap, ok := ob.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		tag, ok := obMap["tag"].(string)
-		if !ok {
-			continue
-		}
-
-		if tag == selectorTag {
-			// Обновляем существующий selector.
-			obMap["default"] = defaultOutbound
-			obMap["outbounds"] = availableOutbounds
-			outbounds[i] = obMap
-			foundSelector = true
-
-			break
-		}
-	}
-
-	if !foundSelector {
-		// Добавляем новый selector.
-		selector := map[string]interface{}{
-			"default":                     defaultOutbound,
-			"interrupt_exist_connections": true,
-			"outbounds":                   availableOutbounds,
-			"tag":                         selectorTag,
-			"type":                        "selector",
-		}
-
-		outbounds = append(outbounds, selector)
-	}
-
-	config["outbounds"] = outbounds
+	desiredOutboundsList := getDesiredOutboundsList(outbounds, endpoints, group, allGroups)
+	config["outbounds"] = desiredOutboundsList
 
 	// Сохраняем конфиг обратно.
 	configData, err = json.MarshalIndent(config, "", "  ")
@@ -273,9 +103,227 @@ func (p *Provider) SyncSingleGroupToConfig(configPath string, group Group, allGr
 		return fmt.Errorf("cannot marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, configData, 0644); err != nil {
-		return fmt.Errorf("cannot write config: %w", err)
+	if err = p.SaveTempConfig(configData); err != nil {
+		return fmt.Errorf("cannot save temp config: %w", err)
 	}
 
 	return nil
+}
+
+func getDesiredRuleSetList(actualRuleSetList []any, group Group, allGroups []Group) []any {
+	desiredRuleSetList := make([]any, 0)
+	systemRuleSetMap := map[string]any{}
+
+	for i := range actualRuleSetList {
+		rsMap, ok := actualRuleSetList[i].(map[string]any)
+		if !ok {
+			// Не системные rule-set-ы добавляем как есть.
+			desiredRuleSetList = append(desiredRuleSetList, actualRuleSetList[i])
+
+			continue
+		}
+
+		tag, ok := rsMap["tag"].(string)
+		if !ok {
+			// Не системные rule-set-ы добавляем как есть.
+			desiredRuleSetList = append(desiredRuleSetList, rsMap)
+
+			continue
+		}
+
+		if !strings.HasPrefix(tag, ruleSetTagPrefix) {
+			// Не системные rule-set-ы добавляем как есть.
+			desiredRuleSetList = append(desiredRuleSetList, rsMap)
+
+			continue
+		}
+
+		// Системные rule-set-ы откладываем в отдельную map-у, чтобы обработать позже.
+		systemRuleSetMap[tag] = actualRuleSetList[i]
+	}
+
+	desiredRuleSetTag := getRuleSetTagForGroup(group.Name)
+
+	// Обновляем данные rule-set-а.
+	systemRuleSetMap[desiredRuleSetTag] = map[string]any{
+		"format": "source",
+		"http_client": map[string]any{
+			"tag": "default_http_client",
+		},
+		"tag":             desiredRuleSetTag,
+		"type":            "remote",
+		"update_interval": "30s",
+		"url":             fmt.Sprintf("http://127.0.0.1:8080/api/ruleset/group?group=%s", group.Name), // TODO: Вынести хост в конфиг.
+	}
+
+	// Выстраиваем системные правила в порядке из allGroups.
+	for i := range allGroups {
+		tag := getRuleSetTagForGroup(allGroups[i].Name)
+
+		ruleSet, ok := systemRuleSetMap[tag]
+		if !ok {
+			continue
+		}
+
+		desiredRuleSetList = append(desiredRuleSetList, ruleSet)
+	}
+
+	return desiredRuleSetList
+}
+
+func getDesiredRulesList(actualRulesList []any, group Group, allGroups []Group) []any {
+	desiredRules := make([]any, 0)
+	systemRulesMap := map[string]any{}
+
+	for i := range actualRulesList {
+		ruleMap, ok := actualRulesList[i].(map[string]any)
+		if !ok {
+			desiredRules = append(desiredRules, ruleMap)
+
+			continue
+		}
+
+		outboundTag, ok := extractFiledFromMapAny(ruleMap, "outbound")
+		if !ok {
+			desiredRules = append(desiredRules, ruleMap)
+
+			continue
+		}
+
+		ruleSetTag, ok := extractFiledFromMapAny(ruleMap, "rule_set")
+		if !ok {
+			desiredRules = append(desiredRules, ruleMap)
+
+			continue
+		}
+
+		if !strings.HasPrefix(outboundTag, selectorTagPrefix) || !strings.HasPrefix(ruleSetTag, ruleSetTagPrefix) {
+			// Если нет специальных системных префиксов в именах тегов, то это обычное пользовательское правило.
+			desiredRules = append(desiredRules, ruleMap)
+
+			continue
+		}
+
+		systemRulesMap[ruleSetTag] = ruleMap
+	}
+
+	desiredRuleSetTag := getRuleSetTagForGroup(group.Name)
+	desiredSelectorTag := getSelectorTagForGroup(group.Name)
+
+	systemRulesMap[desiredRuleSetTag] = map[string]any{
+		"outbound": desiredSelectorTag,
+		"rule_set": desiredRuleSetTag,
+	}
+
+	for i := range allGroups {
+		tag := getRuleSetTagForGroup(allGroups[i].Name)
+
+		rule, ok := systemRulesMap[tag]
+		if !ok {
+			continue
+		}
+
+		desiredRules = append(desiredRules, rule)
+	}
+
+	return desiredRules
+}
+
+func getDesiredOutboundsList(actualOutboundsList, actualEndpointsList []any, group Group, allGroups []Group) []any {
+	desiredOutbounds := make([]any, 0)
+	systemOutboundsMap := map[string]any{}
+	outboundTags := make([]string, 0)
+
+	for i := range actualOutboundsList {
+		outboundMap, ok := actualOutboundsList[i].(map[string]any)
+		if !ok {
+			desiredOutbounds = append(desiredOutbounds, actualOutboundsList[i])
+
+			continue
+		}
+
+		tag, ok := extractFiledFromMapAny(outboundMap, "tag")
+		if !ok {
+			desiredOutbounds = append(desiredOutbounds, outboundMap)
+
+			continue
+		}
+
+		if !strings.HasPrefix(tag, selectorTagPrefix) {
+			desiredOutbounds = append(desiredOutbounds, outboundMap)
+
+			// Не добавляем в список теги от самих себя (от селекторов).
+			outboundTags = append(outboundTags, tag)
+
+			continue
+		}
+
+		systemOutboundsMap[tag] = outboundMap
+	}
+
+	for i := range actualEndpointsList {
+		endpointMap, ok := actualEndpointsList[i].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		tag, ok := extractFiledFromMapAny(endpointMap, "tag")
+		if !ok {
+			continue
+		}
+
+		outboundTags = append(outboundTags, tag)
+	}
+
+	desiredSelectorTag := getSelectorTagForGroup(group.Name)
+
+	defaultOutbound := group.DefaultOutbound
+
+	// Если нет дефолтного outbound, определенного в группе, блокируем трафик.
+	if !slices.Contains(outboundTags, defaultOutbound) {
+		defaultOutbound = "block" // TODO: Сделать системный outbound block.
+	}
+
+	systemOutboundsMap[desiredSelectorTag] = map[string]any{
+		"default":                     defaultOutbound,
+		"interrupt_exist_connections": true,
+		"outbounds":                   outboundTags,
+		"tag":                         desiredSelectorTag,
+		"type":                        "selector",
+	}
+
+	for i := range allGroups {
+		tag := getSelectorTagForGroup(allGroups[i].Name)
+
+		outbound, ok := systemOutboundsMap[tag]
+		if !ok {
+			continue
+		}
+
+		desiredOutbounds = append(desiredOutbounds, outbound)
+	}
+
+	return desiredOutbounds
+}
+
+func getRuleSetTagForGroup(groupName string) string {
+	return fmt.Sprintf("%s-%s", ruleSetTagPrefix, groupName)
+}
+
+func getSelectorTagForGroup(groupName string) string {
+	return fmt.Sprintf("%s-%s", selectorTagPrefix, groupName)
+}
+
+func extractFiledFromMapAny(data map[string]any, key string) (string, bool) {
+	untyped, ok := data[key]
+	if !ok {
+		return "", false
+	}
+
+	val, ok := untyped.(string)
+	if !ok {
+		return "", false
+	}
+
+	return val, true
 }

@@ -17,7 +17,7 @@ func (h *Handler) GetSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configData, err := h.singBoxConfigProvider.GetConfig()
+	configData, err := h.singBoxConfigProvider.GetActualConfig()
 	if err != nil {
 		log.Printf("Error reading config: %v", err)
 		http.Error(w, "Failed to read config: "+err.Error(), http.StatusInternalServerError)
@@ -35,7 +35,7 @@ func (h *Handler) GetSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Если есть временный конфиг, возвращаем его как текущий.
 	if hasPending {
-		tempConfigData, err := h.singBoxConfigProvider.GetTemp()
+		tempConfigData, err := h.singBoxConfigProvider.GetTempConfig()
 		if err != nil {
 			log.Printf("Error reading temp config: %v", err)
 			http.Error(w, "Failed to read temp config: "+err.Error(), http.StatusInternalServerError)
@@ -72,7 +72,7 @@ func (h *Handler) SaveTempConfig(w http.ResponseWriter, r *http.Request) {
 
 	tempConfigData := []byte(req.Config)
 
-	configData, err := h.singBoxConfigProvider.GetConfig()
+	configData, err := h.singBoxConfigProvider.GetActualConfig()
 	if err != nil {
 		log.Printf("Error reading temp config: %v", err)
 		http.Error(w, "Failed to read temp config: "+err.Error(), http.StatusInternalServerError)
@@ -82,7 +82,7 @@ func (h *Handler) SaveTempConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Если конфиги одинаковые, то можем смело удалять temp-конфиг.
 	if slices.Equal(configData, tempConfigData) {
-		_ = h.singBoxConfigProvider.RemoveTemp()
+		_ = h.singBoxConfigProvider.RemoveTempConfig()
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":    true,
@@ -93,7 +93,7 @@ func (h *Handler) SaveTempConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.singBoxConfigProvider.SaveTemp(tempConfigData); err != nil {
+	if err := h.singBoxConfigProvider.SaveTempConfig(tempConfigData); err != nil {
 		log.Printf("Error saving temp config: %v", err)
 		http.Error(w, "Failed to save temp config: "+err.Error(), http.StatusInternalServerError)
 
@@ -119,7 +119,7 @@ func (h *Handler) ApplySingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.singBoxConfigProvider.ApplyConfig(); err != nil {
+	if err := h.singBoxConfigProvider.ApplyTempConfigToActual(); err != nil {
 		log.Printf("Error applying config: %v", err)
 		http.Error(w, "Failed to apply config: "+err.Error(), http.StatusInternalServerError)
 
@@ -176,7 +176,7 @@ func (h *Handler) DiscardTempConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.singBoxConfigProvider.RemoveTemp(); err != nil {
+	if err := h.singBoxConfigProvider.RemoveTempConfig(); err != nil {
 		log.Printf("Error discarding temp config: %v", err)
 		http.Error(w, "Failed to discard temp config: "+err.Error(), http.StatusInternalServerError)
 
@@ -250,31 +250,6 @@ func (h *Handler) SyncGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Синхронизируем во временный конфиг.
-	var targetPath string
-
-	if h.singBoxConfigProvider.HasPending() {
-		targetPath = h.singBoxConfigProvider.GetTempPath()
-	} else {
-		// Копируем актуальный конфиг во временный.
-		configData, err := h.singBoxConfigProvider.GetConfig()
-		if err != nil {
-			log.Printf("Error reading config: %v", err)
-			http.Error(w, "Failed to read config: "+err.Error(), http.StatusInternalServerError)
-
-			return
-		}
-
-		if err := h.singBoxConfigProvider.SaveTemp(configData); err != nil {
-			log.Printf("Error saving temp config: %v", err)
-			http.Error(w, "Failed to save temp config: "+err.Error(), http.StatusInternalServerError)
-
-			return
-		}
-
-		targetPath = h.singBoxConfigProvider.GetTempPath()
-	}
-
 	// Преобразуем все группы в формат для singboxconfig (сохраняем порядок).
 	var configGroups []singboxconfig.Group
 
@@ -286,7 +261,7 @@ func (h *Handler) SyncGroups(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	if err := h.singBoxConfigProvider.SyncSingleGroupToConfig(targetPath, *targetGroup, configGroups); err != nil {
+	if err := h.singBoxConfigProvider.SyncSingleGroup(*targetGroup, configGroups); err != nil {
 		log.Printf("Error syncing group to config: %v", err)
 		http.Error(w, "Failed to sync group to config: "+err.Error(), http.StatusInternalServerError)
 

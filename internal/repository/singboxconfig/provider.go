@@ -31,10 +31,14 @@ func NewProvider(actualConfigPath string) *Provider {
 	}
 }
 
-// GetConfig читает и возвращает текущий конфиг sing-box (как есть).
-func (p *Provider) GetConfig() ([]byte, error) {
+// GetActualConfig читает и возвращает текущий конфиг sing-box (как есть).
+func (p *Provider) GetActualConfig() ([]byte, error) {
 	configData, err := os.ReadFile(p.actualConfigPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, err
+		}
+
 		return nil, fmt.Errorf("cannot read config: %w", err)
 	}
 
@@ -50,18 +54,32 @@ func (p *Provider) HasPending() bool {
 	return false
 }
 
-// GetTemp возвращает временный конфиг, если он существует.
-func (p *Provider) GetTemp() ([]byte, error) {
+// GetTempConfig возвращает временный конфиг, если он существует.
+func (p *Provider) GetTempConfig() ([]byte, error) {
 	configData, err := os.ReadFile(p.tempConfigPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, err
+		}
+
 		return nil, fmt.Errorf("cannot read temp config: %w", err)
 	}
 
 	return configData, nil
 }
 
-// SaveTemp сохраняет конфиг во временный файл без применения.
-func (p *Provider) SaveTemp(configData []byte) error {
+// GetTempOrActualConfig возвращает временный конфиг, либо основной, если временного нет.
+func (p *Provider) GetTempOrActualConfig() ([]byte, error) {
+	configData, err := p.GetTempConfig()
+	if err != nil && os.IsNotExist(err) {
+		return p.GetActualConfig()
+	}
+
+	return configData, err
+}
+
+// SaveTempConfig сохраняет конфиг во временный файл без применения.
+func (p *Provider) SaveTempConfig(configData []byte) error {
 	// Валидируем JSON (с комментариями).
 	if err := validateJSONWithComments(configData); err != nil {
 		return fmt.Errorf("cannot parse json: %w", err)
@@ -74,9 +92,9 @@ func (p *Provider) SaveTemp(configData []byte) error {
 	return nil
 }
 
-// ApplyConfig применяет временный конфиг к основному файлу конфигурации.
-func (p *Provider) ApplyConfig() error {
-	content, err := p.GetTemp()
+// ApplyTempConfigToActual применяет временный конфиг к основному файлу конфигурации.
+func (p *Provider) ApplyTempConfigToActual() error {
+	content, err := p.GetTempConfig()
 	if err != nil {
 		return fmt.Errorf("cannot get temp config: %w", err)
 	}
@@ -92,13 +110,13 @@ func (p *Provider) ApplyConfig() error {
 		return fmt.Errorf("cannot write actual config: %w", err)
 	}
 
-	_ = p.RemoveTemp()
+	_ = p.RemoveTempConfig()
 
 	return nil
 }
 
-// RemoveTemp удаляет временный конфиг.
-func (p *Provider) RemoveTemp() error {
+// RemoveTempConfig удаляет временный конфиг.
+func (p *Provider) RemoveTempConfig() error {
 	if err := os.Remove(p.tempConfigPath); err != nil {
 		return fmt.Errorf("cannot remove temp config: %w", err)
 	}

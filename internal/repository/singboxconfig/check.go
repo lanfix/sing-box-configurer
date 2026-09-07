@@ -150,8 +150,6 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 	// Проверяем каждую группу.
 	statuses := make([]GroupSyncStatus, 0, len(groups))
 
-	fmt.Printf("%v", groups)
-
 	for _, group := range groups {
 		ruleSetTag := "configurer-" + group.Name
 		selectorTag := "select-" + group.Name
