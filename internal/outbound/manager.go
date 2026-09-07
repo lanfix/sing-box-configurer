@@ -28,24 +28,9 @@ func (m *Manager) GetOutbounds() ([]Outbound, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	configData, err := m.configManager.GetActualConfig()
+	config, err := m.configManager.GetTempOrActualConfigParsed()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get config: %w", err)
-	}
-
-	if m.configManager.HasPending() {
-		tempConfigData, err := m.configManager.GetTempConfig()
-		if err != nil {
-			return nil, fmt.Errorf("cannot get temp config: %w", err)
-		}
-
-		configData = tempConfigData
-	}
-
-	var config map[string]interface{}
-
-	if err := json.Unmarshal(configData, &config); err != nil {
-		return nil, fmt.Errorf("cannot parse config json: %w", err)
 	}
 
 	var result []Outbound
@@ -140,15 +125,9 @@ func (m *Manager) AddOutboundFromShare(shareUrl string) (*Outbound, error) {
 		return nil, fmt.Errorf("cannot parse share url: %w", err)
 	}
 
-	configStr, err := m.configManager.GetActualConfig()
+	config, err := m.configManager.GetTempOrActualConfigParsed()
 	if err != nil {
 		return nil, fmt.Errorf("cannot read config: %w", err)
-	}
-
-	var config map[string]interface{}
-
-	if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-		return nil, fmt.Errorf("cannot parse config json: %w", err)
 	}
 
 	outbound := share.GetOutbound()
@@ -345,15 +324,9 @@ func (m *Manager) DeleteOutbound(tag string) error {
 		return fmt.Errorf("tag cannot be empty")
 	}
 
-	configStr, err := m.configManager.GetActualConfig()
+	config, err := m.configManager.GetTempOrActualConfigParsed()
 	if err != nil {
 		return fmt.Errorf("cannot read config: %w", err)
-	}
-
-	var config map[string]interface{}
-
-	if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-		return fmt.Errorf("cannot parse config json: %w", err)
 	}
 
 	found := false

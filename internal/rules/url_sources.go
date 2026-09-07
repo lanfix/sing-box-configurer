@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -16,7 +17,8 @@ func (rm *Manager) GetURLSources() []URLSource {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	return rm.data.URLSources
+	// Возвращаем копию, чтобы вызывающий код не читал слайс, который меняют под блокировкой.
+	return slices.Clone(rm.data.URLSources)
 }
 
 // AddURLSource adds a new URL source
@@ -180,25 +182,33 @@ func (rm *Manager) startURLSourceUpdates(source URLSource) {
 
 // fetchRulesFromSource получает правила из источника и сохраняет их.
 func (rm *Manager) fetchRulesFromSource(sourceID string) {
-	rm.mu.Lock()
+	rm.mu.RLock()
 
-	var source *URLSource
+	var (
+		sourceURL         string
+		sourceDescription string
+		found             bool
+	)
 
+	// Копируем нужные поля под блокировкой: слайс источников может быть заменен целиком,
+	// поэтому держать указатель на его элемент после разблокировки нельзя.
 	for i := range rm.data.URLSources {
 		if rm.data.URLSources[i].ID == sourceID {
-			source = &rm.data.URLSources[i]
+			sourceURL = rm.data.URLSources[i].URL
+			sourceDescription = rm.data.URLSources[i].Description
+			found = true
 
 			break
 		}
 	}
 
-	rm.mu.Unlock()
+	rm.mu.RUnlock()
 
-	if source == nil {
+	if !found {
 		return
 	}
 
-	log.Printf("Fetching URL source: %s (%s)", source.Description, source.URL)
+	log.Printf("Fetching URL source: %s (%s)", sourceDescription, sourceURL)
 
 	ruleSet := RuleSet{
 		CidrList:       make([]string, 0),
@@ -210,8 +220,10 @@ func (rm *Manager) fetchRulesFromSource(sourceID string) {
 		return rowHandler(row, &ruleSet)
 	}
 
-	if err := rm.scanAndHandleRowsFromURL(source.URL, handler); err != nil {
-		log.Printf("Error scanning and handling URL source %s: %s", source.URL, err)
+	if err := rm.scanAndHandleRowsFromURL(sourceURL, handler); err != nil {
+		log.Printf("Error scanning and handling URL source %s: %s", sourceURL, err)
+
+		rm.updateURLSourceError(sourceID, err.Error())
 
 		return
 	}
@@ -222,7 +234,7 @@ func (rm *Manager) fetchRulesFromSource(sourceID string) {
 
 	rm.updateURLSourceStatus(sourceID, "success", "", ruleSet.Total())
 
-	log.Printf("Successfully fetched %d items from URL source: %s", ruleSet.Total(), source.Description)
+	log.Printf("Successfully fetched %d items from URL source: %s", ruleSet.Total(), sourceDescription)
 }
 
 // updateURLSourceStatus updates the status of a URL source
@@ -245,6 +257,27 @@ func (rm *Manager) updateURLSourceStatus(sourceID, status, errorMsg string, coun
 		log.Printf("Error updating URL source status for %s: %s", sourceID, err)
 	}
 
+}
+
+// updateURLSourceError фиксирует ошибку обновления источника.
+// Счетчик правил не трогаем: в памяти остается прошлый успешно загруженный набор.
+func (rm *Manager) updateURLSourceError(sourceID, errorMsg string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	for i := range rm.data.URLSources {
+		if rm.data.URLSources[i].ID == sourceID {
+			rm.data.URLSources[i].LastUpdate = time.Now()
+			rm.data.URLSources[i].LastStatus = "error"
+			rm.data.URLSources[i].LastError = errorMsg
+
+			break
+		}
+	}
+
+	if err := rm.save(); err != nil {
+		log.Printf("Error updating URL source status for %s: %s", sourceID, err)
+	}
 }
 
 type RuleSet struct {

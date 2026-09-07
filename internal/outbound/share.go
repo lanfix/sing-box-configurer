@@ -151,7 +151,7 @@ func extractHostPortFromShare(shareData string) (host string, port *uint16, port
 				return "", nil, nil, fmt.Errorf("cannot parse share data min port: %s", err)
 			}
 
-			portMax, err := strconv.ParseUint(portParts[0], 10, 16)
+			portMax, err := strconv.ParseUint(portParts[1], 10, 16)
 			if err != nil {
 				return "", nil, nil, fmt.Errorf("cannot parse share data max port: %s", err)
 			}

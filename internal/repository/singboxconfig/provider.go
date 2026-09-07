@@ -78,6 +78,23 @@ func (p *Provider) GetTempOrActualConfig() ([]byte, error) {
 	return configData, err
 }
 
+// GetTempOrActualConfigParsed возвращает временный конфиг, либо основной, если временного нет,
+// распарсенным в map. Комментарии удаляются перед парсингом.
+func (p *Provider) GetTempOrActualConfigParsed() (map[string]any, error) {
+	configData, err := p.GetTempOrActualConfig()
+	if err != nil {
+		return nil, fmt.Errorf("cannot get config: %w", err)
+	}
+
+	var config map[string]any
+
+	if err := json.Unmarshal(removeComments(configData), &config); err != nil {
+		return nil, fmt.Errorf("cannot parse config json: %w", err)
+	}
+
+	return config, nil
+}
+
 // SaveTempConfig сохраняет конфиг во временный файл без применения.
 func (p *Provider) SaveTempConfig(configData []byte) error {
 	// Валидируем JSON (с комментариями).

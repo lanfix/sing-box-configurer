@@ -34,7 +34,7 @@ func (p *ShareHysteria2Provider) Parse(shareData string) (Share, error) {
 		return nil, fmt.Errorf("port number or port range is required")
 	}
 
-	if shareCommonData.port != nil && *shareCommonData.port != 0 && &shareCommonData.portRange != nil {
+	if shareCommonData.port != nil && *shareCommonData.port != 0 && shareCommonData.portRange != nil {
 		return nil, fmt.Errorf("only port or port range can be specified")
 	}
 

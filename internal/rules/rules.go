@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -204,7 +205,8 @@ func (rm *Manager) GetRules() []Rule {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	return rm.data.Rules
+	// Возвращаем копию, чтобы вызывающий код не читал слайс, который меняют под блокировкой.
+	return slices.Clone(rm.data.Rules)
 }
 
 func (rm *Manager) AddRule(rule Rule) error {
@@ -532,7 +534,8 @@ func (rm *Manager) GetGroups() []Group {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	return rm.data.Groups
+	// Возвращаем копию, чтобы вызывающий код не читал слайс, который меняют под блокировкой.
+	return slices.Clone(rm.data.Groups)
 }
 
 // AddGroup добавляет новую группу.
