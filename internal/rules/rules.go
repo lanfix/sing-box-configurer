@@ -228,6 +228,36 @@ func (rm *Manager) AddRule(rule Rule) error {
 	return rm.save()
 }
 
+// EditRule обновляет параметры правила.
+func (rm *Manager) EditRule(id string, description string, group string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	// Проверяем, что группа существует.
+	if !rm.groupExists(group) {
+		return fmt.Errorf("группа %s не существует", group)
+	}
+
+	// Находим правило.
+	found := false
+
+	for i := range rm.data.Rules {
+		if rm.data.Rules[i].ID == id {
+			rm.data.Rules[i].Description = description
+			rm.data.Rules[i].Group = group
+			found = true
+
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("правило с ID %s не найдено", id)
+	}
+
+	return rm.save()
+}
+
 func (rm *Manager) DeleteRule(id string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -441,6 +471,31 @@ func (rm *Manager) AddGroup(group Group) error {
 
 	group.CreatedAt = time.Now()
 	rm.data.Groups = append(rm.data.Groups, group)
+
+	return rm.save()
+}
+
+// EditGroup обновляет параметры группы.
+func (rm *Manager) EditGroup(name string, description string, defaultOutbound string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	// Находим группу.
+	found := false
+
+	for i := range rm.data.Groups {
+		if rm.data.Groups[i].Name == name {
+			rm.data.Groups[i].Description = description
+			rm.data.Groups[i].DefaultOutbound = defaultOutbound
+			found = true
+
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("группа %s не найдена", name)
+	}
 
 	return rm.save()
 }

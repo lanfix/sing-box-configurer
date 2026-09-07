@@ -37,6 +37,36 @@ func (rm *Manager) AddURLSource(source URLSource) error {
 	return rm.save()
 }
 
+// EditURLSource обновляет параметры URL источника.
+func (rm *Manager) EditURLSource(id string, description string, group string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	// Проверяем, что группа существует.
+	if !rm.groupExists(group) {
+		return fmt.Errorf("группа %s не существует", group)
+	}
+
+	// Находим источник.
+	found := false
+
+	for i := range rm.data.URLSources {
+		if rm.data.URLSources[i].ID == id {
+			rm.data.URLSources[i].Description = description
+			rm.data.URLSources[i].Group = group
+			found = true
+
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("источник с ID %s не найден", id)
+	}
+
+	return rm.save()
+}
+
 // DeleteURLSource marks a URL source as deleted
 func (rm *Manager) DeleteURLSource(id string) error {
 	rm.mu.Lock()

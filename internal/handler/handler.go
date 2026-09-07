@@ -138,6 +138,46 @@ func (h *Handler) DeleteRule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// EditRule редактирует правило.
+func (h *Handler) EditRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ID          string `json:"id"`
+		Description string `json:"description"`
+		Group       string `json:"group"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == "" {
+		http.Error(w, "ID is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Group == "" {
+		http.Error(w, "Group is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.rulesManager.EditRule(req.ID, req.Description, req.Group); err != nil {
+		log.Printf("Error editing rule: %v", err)
+		http.Error(w, "Failed to edit rule: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
 func (h *Handler) ApplyRules(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -279,6 +319,41 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// EditGroup редактирует группу.
+func (h *Handler) EditGroup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name            string `json:"name"`
+		Description     string `json:"description"`
+		DefaultOutbound string `json:"default_outbound"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.rulesManager.EditGroup(req.Name, req.Description, req.DefaultOutbound); err != nil {
+		log.Printf("Error editing group: %v", err)
+		http.Error(w, "Failed to edit group: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
 // URL Sources endpoints
 
 func (h *Handler) GetURLSources(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +446,46 @@ func (h *Handler) DeleteURLSource(w http.ResponseWriter, r *http.Request) {
 	if err := h.rulesManager.DeleteURLSource(req.ID); err != nil {
 		log.Printf("Error deleting URL source: %v", err)
 		http.Error(w, "Failed to delete URL source", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+// EditURLSource редактирует URL источник.
+func (h *Handler) EditURLSource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ID          string `json:"id"`
+		Description string `json:"description"`
+		Group       string `json:"group"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == "" {
+		http.Error(w, "ID is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Group == "" {
+		http.Error(w, "Group is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.rulesManager.EditURLSource(req.ID, req.Description, req.Group); err != nil {
+		log.Printf("Error editing URL source: %v", err)
+		http.Error(w, "Failed to edit URL source: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 

@@ -193,6 +193,9 @@ function displayGroups(groups) {
                 <td>${escapeHTML(defaultOutbound)}</td>
                 <td class="date-cell">${createdAt}</td>
                 <td class="actions-cell">
+                    <button class="btn btn-secondary" onclick="editGroup('${escapeHTML(group.name)}', '${escapeHTML(group.description || '')}', '${escapeHTML(defaultOutbound)}')">
+                        Редактировать
+                    </button>
                     <button class="btn btn-danger" onclick="deleteGroup('${escapeHTML(group.name)}')" ${isDefault ? 'disabled' : ''}>
                         ${isDefault ? 'Нельзя удалить' : 'Удалить'}
                     </button>
@@ -267,6 +270,72 @@ async function deleteGroup(name) {
         await loadGroupsForSelect();
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function editGroup(name, description, defaultOutbound) {
+    const modal = `
+        <div class="modal-overlay" onclick="closeEditModal(event)">
+            <div class="modal" onclick="event.stopPropagation()">
+                <h3>Редактировать группу "${escapeHTML(name)}"</h3>
+                <form id="editGroupForm" onsubmit="submitEditGroup(event, '${escapeHTML(name)}')">
+                    <div class="form-group">
+                        <label class="form-label" for="editGroupDescription">Описание</label>
+                        <textarea class="form-textarea" id="editGroupDescription" required>${escapeHTML(description)}</textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="editGroupDefaultOutbound">Default Outbound</label>
+                        <input class="form-input" type="text" id="editGroupDefaultOutbound" value="${escapeHTML(defaultOutbound)}" required>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Отмена</button>
+                        <button type="submit" class="btn btn-primary">Сохранить</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', modal);
+}
+
+async function submitEditGroup(event, name) {
+    event.preventDefault();
+
+    const description = document.getElementById('editGroupDescription').value;
+    const defaultOutbound = document.getElementById('editGroupDefaultOutbound').value;
+
+    try {
+        const response = await fetch('/api/groups/edit', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ 
+                name, 
+                description,
+                default_outbound: defaultOutbound
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(errorData || 'Ошибка при редактировании группы');
+        }
+
+        showMessage('Группа успешно обновлена', 'success');
+        closeEditModal();
+        await loadGroups();
+        await loadGroupsForSelect();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+function closeEditModal(event) {
+    if (event && event.target.classList.contains('modal-overlay')) {
+        event.target.remove();
+    } else {
+        document.querySelector('.modal-overlay')?.remove();
     }
 }
 
@@ -392,6 +461,9 @@ function displayRules(rules) {
             <td><code>${escapeHTML(rule.value)}</code></td>
             <td class="description-cell">${escapeHTML(rule.description || '')}</td>
             <td class="actions-cell">
+                <button class="btn btn-secondary" onclick='editRule(${JSON.stringify(rule)})' ${rule.deleted ? 'disabled' : ''}>
+                    Редактировать
+                </button>
                 <button class="btn btn-danger" onclick="deleteRule('${escapeHTML(rule.id)}')" ${rule.deleted ? 'disabled' : ''}>
                     ${rule.deleted ? 'Удалено' : 'Удалить'}
                 </button>
@@ -460,6 +532,75 @@ async function deleteRule(id) {
         }
 
         showMessage('Правило успешно удалено', 'success');
+        await loadRules();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function editRule(rule) {
+    const modal = `
+        <div class="modal-overlay" onclick="closeEditModal(event)">
+            <div class="modal" onclick="event.stopPropagation()">
+                <h3>Редактировать правило</h3>
+                <form id="editRuleForm" onsubmit="submitEditRule(event, '${escapeHTML(rule.id)}')">
+                    <div class="form-group">
+                        <label class="form-label">Тип</label>
+                        <input class="form-input" type="text" value="${getTypeLabel(rule.type)}" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Значение</label>
+                        <input class="form-input" type="text" value="${escapeHTML(rule.value)}" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="editRuleGroup">Группа</label>
+                        <select class="form-select" id="editRuleGroup" required>
+                            ${groups.map(g => 
+                                `<option value="${escapeHTML(g.name)}" ${g.name === rule.group ? 'selected' : ''}>${escapeHTML(g.name)}</option>`
+                            ).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="editRuleDescription">Описание</label>
+                        <textarea class="form-textarea" id="editRuleDescription">${escapeHTML(rule.description || '')}</textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Отмена</button>
+                        <button type="submit" class="btn btn-primary">Сохранить</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', modal);
+}
+
+async function submitEditRule(event, id) {
+    event.preventDefault();
+
+    const group = document.getElementById('editRuleGroup').value;
+    const description = document.getElementById('editRuleDescription').value;
+
+    try {
+        const response = await fetch('/api/rules/edit', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ 
+                id, 
+                group,
+                description
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(errorData || 'Ошибка при редактировании правила');
+        }
+
+        showMessage('Правило успешно обновлено', 'success');
+        closeEditModal();
         await loadRules();
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');
@@ -544,6 +685,9 @@ function displayURLSources(sources) {
                 <td class="actions-cell">
                     <button class="btn btn-info" onclick="viewURLSourceRules('${id}')" ${!source.applied ? 'disabled' : ''}>
                         Посмотреть
+                    </button>
+                    <button class="btn btn-secondary" onclick='editURLSource(${JSON.stringify(source)})' ${source.deleted ? 'disabled' : ''}>
+                        Редактировать
                     </button>
                     <button class="btn btn-danger" onclick="deleteURLSource('${id}')" ${source.deleted ? 'disabled' : ''}>
                         ${source.deleted ? 'Удалено' : 'Удалить'}
@@ -634,6 +778,71 @@ async function deleteURLSource(id) {
         }
 
         showMessage('URL источник успешно удален', 'success');
+        await loadURLSources();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function editURLSource(source) {
+    const modal = `
+        <div class="modal-overlay" onclick="closeEditModal(event)">
+            <div class="modal" onclick="event.stopPropagation()">
+                <h3>Редактировать URL источник</h3>
+                <form id="editURLSourceForm" onsubmit="submitEditURLSource(event, '${escapeHTML(source.id)}')">
+                    <div class="form-group">
+                        <label class="form-label">URL</label>
+                        <input class="form-input" type="text" value="${escapeHTML(source.url)}" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="editURLSourceGroup">Группа</label>
+                        <select class="form-select" id="editURLSourceGroup" required>
+                            ${groups.map(g => 
+                                `<option value="${escapeHTML(g.name)}" ${g.name === source.group ? 'selected' : ''}>${escapeHTML(g.name)}</option>`
+                            ).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="editURLSourceDescription">Описание</label>
+                        <textarea class="form-textarea" id="editURLSourceDescription">${escapeHTML(source.description || '')}</textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Отмена</button>
+                        <button type="submit" class="btn btn-primary">Сохранить</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', modal);
+}
+
+async function submitEditURLSource(event, id) {
+    event.preventDefault();
+
+    const group = document.getElementById('editURLSourceGroup').value;
+    const description = document.getElementById('editURLSourceDescription').value;
+
+    try {
+        const response = await fetch('/api/url-sources/edit', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ 
+                id, 
+                group,
+                description
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(errorData || 'Ошибка при редактировании URL источника');
+        }
+
+        showMessage('URL источник успешно обновлен', 'success');
+        closeEditModal();
         await loadURLSources();
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');

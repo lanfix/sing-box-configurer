@@ -114,6 +114,7 @@ func main() {
 
 	http.HandleFunc("/api/rules", h.GetRules)
 	http.HandleFunc("/api/rules/add", h.AddRule)
+	http.HandleFunc("/api/rules/edit", h.EditRule)
 	http.HandleFunc("/api/rules/delete", h.DeleteRule)
 	http.HandleFunc("/api/apply", h.ApplyRules)
 	http.HandleFunc("/api/ruleset", h.GetRuleSet)
@@ -121,10 +122,12 @@ func main() {
 
 	http.HandleFunc("/api/groups", h.GetGroups)
 	http.HandleFunc("/api/groups/add", h.AddGroup)
+	http.HandleFunc("/api/groups/edit", h.EditGroup)
 	http.HandleFunc("/api/groups/delete", h.DeleteGroup)
 
 	http.HandleFunc("/api/url-sources", h.GetURLSources)
 	http.HandleFunc("/api/url-sources/add", h.AddURLSource)
+	http.HandleFunc("/api/url-sources/edit", h.EditURLSource)
 	http.HandleFunc("/api/url-sources/delete", h.DeleteURLSource)
 	http.HandleFunc("/api/url-sources/apply", h.ApplyURLSources)
 	http.HandleFunc("/api/url-sources/validate", h.ValidateURLSource)
