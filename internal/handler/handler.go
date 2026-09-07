@@ -106,6 +106,50 @@ func (h *Handler) AddRule(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// AddRuleBulk добавляет несколько правил одновременно.
+func (h *Handler) AddRuleBulk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Type        string `json:"type"`
+		Values      string `json:"values"`
+		Description string `json:"description"`
+		Group       string `json:"group"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Type == "" || req.Values == "" {
+		http.Error(w, "Type and values are required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Type != "domain" && req.Type != "domain_suffix" && req.Type != "ip" && req.Type != "cidr" {
+		http.Error(w, "Invalid type. Must be: domain, domain_suffix, ip, or cidr", http.StatusBadRequest)
+		return
+	}
+
+	if req.Group == "" {
+		req.Group = "default"
+	}
+
+	result, err := h.rulesManager.AddRuleBulk(req.Type, req.Values, req.Description, req.Group)
+	if err != nil {
+		log.Printf("Error in bulk add: %v", err)
+		http.Error(w, "Failed to process bulk add: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
 func (h *Handler) DeleteRule(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

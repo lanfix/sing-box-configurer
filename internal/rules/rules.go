@@ -228,6 +228,84 @@ func (rm *Manager) AddRule(rule Rule) error {
 	return rm.save()
 }
 
+// BulkAddResult содержит результаты массового добавления правил.
+type BulkAddResult struct {
+	Success      int              `json:"success"`
+	Failed       int              `json:"failed"`
+	Total        int              `json:"total"`
+	FailedValues []BulkAddFailure `json:"failed_values,omitempty"`
+	AddedRules   []Rule           `json:"added_rules,omitempty"`
+}
+
+// BulkAddFailure содержит информацию об ошибке при добавлении правила.
+type BulkAddFailure struct {
+	Value string `json:"value"`
+	Error string `json:"error"`
+}
+
+// AddRuleBulk добавляет несколько правил одновременно.
+func (rm *Manager) AddRuleBulk(
+	ruleType, values, description, group string,
+) (*BulkAddResult, error) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	if !rm.groupExists(group) {
+		return nil, fmt.Errorf("группа %s не существует", group)
+	}
+
+	lines := strings.Split(values, "\n")
+	result := &BulkAddResult{
+		Total:        0,
+		Success:      0,
+		Failed:       0,
+		FailedValues: []BulkAddFailure{},
+		AddedRules:   []Rule{},
+	}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		if line == "" {
+			continue
+		}
+
+		result.Total++
+
+		rule := Rule{
+			ID:          fmt.Sprintf("%s-%d", time.Now().Format("20060102150405"), result.Total),
+			Type:        ruleType,
+			Value:       line,
+			Description: description,
+			Group:       group,
+			Applied:     false,
+			CreatedAt:   time.Now(),
+		}
+
+		if err := rm.validateRuleConflicts(rule); err != nil {
+			result.Failed++
+			result.FailedValues = append(result.FailedValues, BulkAddFailure{
+				Value: line,
+				Error: err.Error(),
+			})
+
+			continue
+		}
+
+		rm.data.Rules = append(rm.data.Rules, rule)
+		result.AddedRules = append(result.AddedRules, rule)
+		result.Success++
+	}
+
+	if result.Success > 0 {
+		if err := rm.save(); err != nil {
+			return nil, fmt.Errorf("cannot save rules: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
 // EditRule обновляет параметры правила.
 func (rm *Manager) EditRule(id string, description string, group string) error {
 	rm.mu.Lock()

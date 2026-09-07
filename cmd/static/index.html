@@ -105,9 +105,24 @@
                                         <option value="cidr">CIDR</option>
                                     </select>
                                 </div>
-                                <div class="form-group" style="flex: 2;">
+                                <div class="form-group">
+                                    <label class="form-label">Режим добавления</label>
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                        <input type="checkbox" id="bulkModeToggle" onchange="toggleBulkMode()" style="cursor: pointer;">
+                                        <span>Массовое добавление</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-row" id="singleValueRow">
+                                <div class="form-group" style="flex: 1;">
                                     <label class="form-label" for="ruleValue">Значение</label>
-                                    <input class="form-input" type="text" id="ruleValue" placeholder="example.com или 192.168.1.0/24" required>
+                                    <input class="form-input" type="text" id="ruleValue" placeholder="example.com или 192.168.1.0/24">
+                                </div>
+                            </div>
+                            <div class="form-row" id="bulkValuesRow" style="display: none;">
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="form-label" for="ruleBulkValues">Значения (по одному на строку)</label>
+                                    <textarea class="form-textarea" id="ruleBulkValues" placeholder="example.com&#10;google.com&#10;192.168.1.0/24" rows="8"></textarea>
                                 </div>
                             </div>
                             <div class="form-row">

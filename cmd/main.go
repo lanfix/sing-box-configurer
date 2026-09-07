@@ -114,6 +114,7 @@ func main() {
 
 	http.HandleFunc("/api/rules", h.GetRules)
 	http.HandleFunc("/api/rules/add", h.AddRule)
+	http.HandleFunc("/api/rules/add-bulk", h.AddRuleBulk)
 	http.HandleFunc("/api/rules/edit", h.EditRule)
 	http.HandleFunc("/api/rules/delete", h.DeleteRule)
 	http.HandleFunc("/api/apply", h.ApplyRules)

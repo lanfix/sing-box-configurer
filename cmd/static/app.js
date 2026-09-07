@@ -485,6 +485,16 @@ function getTypeLabel(type) {
 async function addRule(event) {
     event.preventDefault();
 
+    const bulkMode = document.getElementById('bulkModeToggle').checked;
+
+    if (bulkMode) {
+        await addRuleBulk(event);
+    } else {
+        await addRuleSingle(event);
+    }
+}
+
+async function addRuleSingle(event) {
     const type = document.getElementById('ruleType').value;
     const value = document.getElementById('ruleValue').value;
     const description = document.getElementById('ruleDescription').value;
@@ -510,6 +520,79 @@ async function addRule(event) {
         await loadRules();
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function addRuleBulk(event) {
+    const type = document.getElementById('ruleType').value;
+    const values = document.getElementById('ruleBulkValues').value;
+    const description = document.getElementById('ruleDescription').value;
+    const group = document.getElementById('ruleGroup').value;
+
+    if (!values.trim()) {
+        showMessage('Введите хотя бы одно значение', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/rules/add-bulk', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ type, values, description, group })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(errorData || 'Ошибка при массовом добавлении');
+        }
+
+        const result = await response.json();
+
+        let message = `Добавлено: ${result.success} из ${result.total}`;
+
+        if (result.failed > 0) {
+            message += ` (ошибок: ${result.failed})`;
+            
+            const errorDetails = result.failed_values
+                .slice(0, 3)
+                .map(f => `${f.value}: ${f.error}`)
+                .join('\n');
+
+            if (result.failed > 3) {
+                message += `\n\nПервые ошибки:\n${errorDetails}\n... и ещё ${result.failed - 3}`;
+            } else {
+                message += `\n\nОшибки:\n${errorDetails}`;
+            }
+        }
+
+        showMessage(message, result.failed > 0 ? 'warning' : 'success');
+        document.getElementById('ruleBulkValues').value = '';
+        document.getElementById('ruleDescription').value = '';
+        await loadRules();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+function toggleBulkMode() {
+    const bulkMode = document.getElementById('bulkModeToggle').checked;
+    const singleValueRow = document.getElementById('singleValueRow');
+    const bulkValuesRow = document.getElementById('bulkValuesRow');
+    const ruleValue = document.getElementById('ruleValue');
+    const ruleBulkValues = document.getElementById('ruleBulkValues');
+
+    if (bulkMode) {
+        singleValueRow.style.display = 'none';
+        bulkValuesRow.style.display = 'flex';
+        ruleValue.required = false;
+        ruleBulkValues.required = true;
+    } else {
+        singleValueRow.style.display = 'flex';
+        bulkValuesRow.style.display = 'none';
+        ruleValue.required = true;
+        ruleBulkValues.required = false;
     }
 }
 
