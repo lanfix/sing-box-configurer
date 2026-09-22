@@ -3,6 +3,7 @@ package rules
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -10,6 +11,14 @@ import (
 	"slices"
 	"strings"
 	"time"
+)
+
+var (
+	// ErrURLSourceNotFound — источник с таким ID не найден.
+	ErrURLSourceNotFound = errors.New("url source not found")
+
+	// ErrURLSourceNotApplied — источник еще не применен (или удален), загружать его нельзя.
+	ErrURLSourceNotApplied = errors.New("url source is not applied")
 )
 
 // GetURLSources returns all URL sources
@@ -164,7 +173,7 @@ func (rm *Manager) startURLSourceUpdates(source URLSource) {
 	rm.cancelFuncs[source.ID] = cancel
 	rm.cancelFuncsMu.Unlock()
 
-	rm.fetchRulesFromSource(source.ID)
+	_ = rm.fetchRulesFromSource(source.ID)
 
 	ticker := time.NewTicker(time.Duration(source.Interval) * time.Minute)
 	defer ticker.Stop()
@@ -175,13 +184,44 @@ func (rm *Manager) startURLSourceUpdates(source URLSource) {
 			return
 
 		case <-ticker.C:
-			rm.fetchRulesFromSource(source.ID)
+			_ = rm.fetchRulesFromSource(source.ID)
 		}
 	}
 }
 
-// fetchRulesFromSource получает правила из источника и сохраняет их.
-func (rm *Manager) fetchRulesFromSource(sourceID string) {
+// RefreshURLSource сразу загружает правила примененного источника, не дожидаясь интервала обновления.
+func (rm *Manager) RefreshURLSource(sourceID string) error {
+	rm.mu.RLock()
+
+	var (
+		found   bool
+		applied bool
+	)
+
+	for i := range rm.data.URLSources {
+		if rm.data.URLSources[i].ID == sourceID {
+			found = true
+			applied = rm.data.URLSources[i].Applied && !rm.data.URLSources[i].Deleted
+
+			break
+		}
+	}
+
+	rm.mu.RUnlock()
+
+	if !found {
+		return ErrURLSourceNotFound
+	}
+
+	if !applied {
+		return ErrURLSourceNotApplied
+	}
+
+	return rm.fetchRulesFromSource(sourceID)
+}
+
+// fetchRulesFromSource загружает правила источника и обновляет его статус.
+func (rm *Manager) fetchRulesFromSource(sourceID string) error {
 	rm.mu.RLock()
 
 	var (
@@ -205,7 +245,7 @@ func (rm *Manager) fetchRulesFromSource(sourceID string) {
 	rm.mu.RUnlock()
 
 	if !found {
-		return
+		return ErrURLSourceNotFound
 	}
 
 	log.Printf("Fetching URL source: %s (%s)", sourceDescription, sourceURL)
@@ -225,7 +265,7 @@ func (rm *Manager) fetchRulesFromSource(sourceID string) {
 
 		rm.updateURLSourceError(sourceID, err.Error())
 
-		return
+		return err
 	}
 
 	rm.urlRulesMu.Lock()
@@ -235,6 +275,8 @@ func (rm *Manager) fetchRulesFromSource(sourceID string) {
 	rm.updateURLSourceStatus(sourceID, "success", "", ruleSet.Total())
 
 	log.Printf("Successfully fetched %d items from URL source: %s", ruleSet.Total(), sourceDescription)
+
+	return nil
 }
 
 // updateURLSourceStatus updates the status of a URL source

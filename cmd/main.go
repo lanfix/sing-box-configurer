@@ -168,6 +168,7 @@ func main() {
 	http.HandleFunc("/api/url-sources/add", h.AddURLSource)
 	http.HandleFunc("/api/url-sources/edit", h.EditURLSource)
 	http.HandleFunc("/api/url-sources/delete", h.DeleteURLSource)
+	http.HandleFunc("/api/url-sources/refresh", h.RefreshURLSource)
 	http.HandleFunc("/api/url-sources/apply", h.ApplyURLSources)
 	http.HandleFunc("/api/url-sources/validate", h.ValidateURLSource)
 	http.HandleFunc("/api/url-sources/rules", h.GetURLSourceRules)

@@ -770,7 +770,7 @@ function displayURLSources(sources) {
                         <span class="status-icon">${statusIcon}</span>
                         <span class="status-text">${statusText}</span>
                     </div>
-                    ${source.last_error ? `<div class="source-error">${escapeHTML(source.last_error)}</div>` : ''}
+                    ${source.last_error ? `<div class="source-error" title="${escapeHTML(source.last_error)}">${escapeHTML(source.last_error)}</div>` : ''}
                 </td>
                 <td><span class="badge badge-group">${escapeHTML(source.group || 'default')}</span></td>
                 <td class="url-cell" title="${url}">${url}</td>
@@ -779,6 +779,9 @@ function displayURLSources(sources) {
                 <td class="date-cell">${lastUpdate}</td>
                 <td>${source.items_count || 0}</td>
                 <td class="actions-cell">
+                    <button class="btn btn-secondary" onclick="refreshURLSource('${id}')" title="Загрузить список сейчас, не дожидаясь интервала" ${!source.applied || source.deleted || refreshingURLSources.has(source.id) ? 'disabled' : ''}>
+                        ${refreshingURLSources.has(source.id) ? 'Загрузка...' : 'Обновить'}
+                    </button>
                     <button class="btn btn-info" onclick="viewURLSourceRules('${id}')" ${!source.applied ? 'disabled' : ''}>
                         Посмотреть
                     </button>
@@ -852,6 +855,36 @@ async function addURLSource(event) {
         await loadURLSources();
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+// ID источников, которые сейчас загружаются вручную (список перерисовывается каждые 5 секунд).
+const refreshingURLSources = new Set();
+
+async function refreshURLSource(id) {
+    refreshingURLSources.add(id);
+    await loadURLSources();
+
+    try {
+        const response = await fetch('/api/url-sources/refresh', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ id })
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            throw new Error(result.error || `HTTP ${response.status}`);
+        }
+
+        showMessage('Источник загружен', 'success');
+    } catch (error) {
+        showMessage('Ошибка загрузки источника: ' + error.message, 'error');
+    } finally {
+        refreshingURLSources.delete(id);
+        await loadURLSources();
     }
 }
 
@@ -970,7 +1003,11 @@ async function applyURLSources() {
 async function viewURLSourceRules(id) {
     try {
         const response = await fetch(`/api/url-sources/rules?id=${encodeURIComponent(id)}`);
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+        }
 
         const cidrList = data.cidrList || [];
         const domains = data.domains || [];

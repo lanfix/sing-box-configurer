@@ -350,7 +350,8 @@ body {
     background: #161b22;
     border: 1px solid #30363d;
     border-radius: 8px;
-    overflow: hidden;
+    /* Широкая таблица прокручивается, а не обрезается вместе с кнопками действий */
+    overflow-x: auto;
 }
 
 .table {
@@ -552,8 +553,11 @@ body {
     font-size: 13px;
 }
 
+/* max-width: 0 + width: 100% — колонка занимает оставшееся место и сжимается с многоточием,
+   а не растягивает таблицу по длине URL (полный адрес — в подсказке title) */
 .url-cell {
-    max-width: 400px;
+    max-width: 0;
+    width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -566,11 +570,11 @@ body {
     color: #8b949e;
 }
 
+/* Ячейка остается table-cell (display: flex выбивает ее из разметки таблицы),
+   кнопки идут в одну строку, а колонка сжимается до их ширины */
 .actions-cell {
-    display: flex;
-    gap: 5px;
-    align-items: center;
-    flex-wrap: nowrap;
+    white-space: nowrap;
+    width: 1%;
 }
 
 .actions-cell .btn {
@@ -633,10 +637,18 @@ body {
     margin-top: 8px;
 }
 
+/* Длинные ошибки с URL переносятся и обрезаются до 3 строк, полный текст — в подсказке */
 .source-error {
+    width: 240px;
     color: #f85149;
     font-size: 11px;
     margin-top: 4px;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    cursor: help;
 }
 
 /* Config Editor */

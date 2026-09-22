@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -515,6 +516,49 @@ func (h *Handler) DeleteURLSource(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// RefreshURLSource сразу загружает правила URL-источника, не дожидаясь интервала обновления.
+func (h *Handler) RefreshURLSource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	var req struct {
+		ID string `json:"id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+		writeJSONError(w, http.StatusBadRequest, "ID is required")
+
+		return
+	}
+
+	err := h.rulesManager.RefreshURLSource(req.ID)
+
+	switch {
+	case errors.Is(err, rules.ErrURLSourceNotFound):
+		writeJSONError(w, http.StatusNotFound, "Источник не найден")
+
+		return
+
+	case errors.Is(err, rules.ErrURLSourceNotApplied):
+		writeJSONError(w, http.StatusConflict, "Источник ещё не применён")
+
+		return
+
+	case err != nil:
+		// Ошибка загрузки уже сохранена в статусе источника и видна в таблице.
+		writeJSONError(w, http.StatusBadGateway, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+	})
+}
+
 // EditURLSource редактирует URL источник.
 func (h *Handler) EditURLSource(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -630,7 +674,9 @@ func (h *Handler) GetURLSourceRules(w http.ResponseWriter, r *http.Request) {
 
 	ruleSet, err := h.rulesManager.GetURLSourceRuleSet(sourceID)
 	if err != nil {
-		http.Error(w, "Error happened: "+err.Error(), http.StatusInternalServerError)
+		// Правила хранятся в памяти и появляются только после успешной загрузки источника.
+		writeJSONError(w, http.StatusNotFound, "Правила источника ещё не загружены: последняя загрузка не удалась или ещё не выполнялась")
+
 		return
 	}
 
