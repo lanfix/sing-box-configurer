@@ -61,6 +61,16 @@ if [[ "$IMAGE" == docker.io/* ]]; then
     [[ "$status" != "200" ]] || die "tag ${IMAGE}:${VERSION} already exists in registry"
 fi
 
+# Версия docker-controller, которую потребует updater этого релиза, должна быть опубликована:
+# иначе обновление упадет на загрузке образа контроллера.
+CONTROLLER_VERSION="$(sed -n 's/^[[:space:]]*ControllerVersion = "\(v[^"]*\)".*/\1/p' internal/updater/updater.go)"
+
+[[ -n "$CONTROLLER_VERSION" ]] || die "cannot find ControllerVersion in internal/updater/updater.go"
+
+status="$(curl -s -o /dev/null -w '%{http_code}' "https://hub.docker.com/v2/repositories/lanfix/docker-controller/tags/${CONTROLLER_VERSION}" || true)"
+
+[[ "$status" == "200" ]] || die "docker-controller ${CONTROLLER_VERSION} (ControllerVersion) is not published in Docker Hub"
+
 # Секция изменений из CHANGELOG.md: строки после "## vX.Y.Z" до следующего заголовка "## ".
 CHANGELOG=""
 

@@ -15,7 +15,7 @@ services:
   # Порт docker-controller не публикуется: он доступен только конфигуратору и updater
   # по внутренней сети compose (http://docker-controller:8081).
   docker-controller:
-    image: docker.io/lanfix/docker-controller:v0.1.0
+    image: docker.io/lanfix/docker-controller:v0.0.2
     container_name: docker-controller
     restart: always
     volumes:

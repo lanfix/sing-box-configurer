@@ -262,7 +262,7 @@ sing-box во время обновления не перезапускаетс�
 
 ### Первичная настройка
 
-Обновление через UI требует docker-controller с API управления контейнерами (v0.1.0+). Один раз вручную:
+Обновление через UI требует docker-controller с API управления контейнерами (v0.0.2+). Один раз вручную:
 
 1. Сгенерируйте ключ: `openssl rand -hex 32`.
 2. Пропишите его в `docker-controller.json` (`api_key`) и `sing-box-configurer.json` (`docker_controller_api_key`),
