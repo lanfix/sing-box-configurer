@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -55,6 +56,7 @@ type fakeGateway struct {
 	mu       sync.Mutex
 	requests map[string][]GatewayRequest
 	failWith int
+	rejected int
 }
 
 func newFakeGateway(t *testing.T) (*fakeGateway, *GatewayClient) {
@@ -74,15 +76,24 @@ func newFakeGateway(t *testing.T) (*fakeGateway, *GatewayClient) {
 	gateway.server = httptest.NewServer(http.HandlerFunc(gateway.handle))
 	t.Cleanup(gateway.server.Close)
 
-	publicDER, _ := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
-	publicPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})
-
-	client, err := newGatewayClient(gateway.server.URL, string(publicPEM))
+	client, err := newGatewayClient(gateway.server.URL, publicKeyPEM(t, &privateKey.PublicKey))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	return gateway, client
+}
+
+// publicKeyPEM кодирует RSA-ключ в PEM.
+func publicKeyPEM(t *testing.T, key *rsa.PublicKey) string {
+	t.Helper()
+
+	der, err := x509.MarshalPKIXPublicKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
 }
 
 // handle расшифровывает запрос, запоминает его и отвечает зашифрованной конфигурацией.
@@ -104,7 +115,12 @@ func (g *fakeGateway) handle(w http.ResponseWriter, r *http.Request) {
 
 	keyJSON, err := rsa.DecryptPKCS1v15(rand.Reader, g.privateKey, encryptedKey)
 	if err != nil {
-		g.t.Errorf("cannot decrypt key payload: %v", err)
+		// Так отвечает настоящий шлюз на запрос, зашифрованный чужим ключом.
+		g.mu.Lock()
+		g.rejected++
+		g.mu.Unlock()
+
+		w.WriteHeader(http.StatusInternalServerError)
 
 		return
 	}
@@ -403,5 +419,43 @@ func TestGatewayCrypto(t *testing.T) {
 	derived, err := wireGuardPublicKey(privateKey)
 	if err != nil || derived != publicKey {
 		t.Errorf("public key mismatch: %q vs %q (%v)", derived, publicKey, err)
+	}
+}
+
+// TestGatewayKeyFallback проверяет переход на следующий ключ, если шлюз сменил ключ.
+func TestGatewayKeyFallback(t *testing.T) {
+	gateway, _ := newFakeGateway(t)
+
+	staleKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client, err := newGatewayClient(gateway.server.URL, publicKeyPEM(t, &staleKey.PublicKey), publicKeyPEM(t, &gateway.privateKey.PublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state, _, err := decodePremiumKey(premiumKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if _, err = client.FetchConfig(context.Background(), state, "P"); err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+
+	// Устаревший ключ пробуется только один раз, дальше клиент сразу использует рабочий.
+	if gateway.rejected != 1 {
+		t.Errorf("rejected = %d, want 1", gateway.rejected)
+	}
+
+	// Если не подошел ни один ключ, возвращается понятная ошибка.
+	onlyStale, _ := newGatewayClient(gateway.server.URL, publicKeyPEM(t, &staleKey.PublicKey))
+
+	if _, err = onlyStale.FetchConfig(context.Background(), state, "P"); !errors.Is(err, errKeyRejected) {
+		t.Errorf("err = %v, want errKeyRejected", err)
 	}
 }

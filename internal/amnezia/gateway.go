@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,8 +35,25 @@ const (
 	gatewayTimeout = 20 * time.Second
 )
 
-// gatewayPublicKeyPEM — RSA-ключ шлюза из клиента Amnezia VPN, им шифруется одноразовый ключ AES запроса.
-const gatewayPublicKeyPEM = `-----BEGIN PUBLIC KEY-----
+// gatewayPublicKeysPEM — RSA-ключи шлюза из клиента Amnezia VPN, ими шифруется одноразовый ключ AES запроса.
+// Шлюз периодически меняет ключ: клиент пробует ключи по порядку и запоминает подошедший.
+// Первый — текущий ключ gw.amnezia.org, второй — прежний (сейчас принимается только dev-шлюзом).
+var gatewayPublicKeysPEM = []string{
+	`-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAj5mxl/4DL3Sk89ntxs5G
+X3JawGQWIoq6rvNkOzNGuNgedNS2+pi6hZl3Izl1Io9om4KiUlMT6mgLO1hTr9q+
+s7CYhlvroFA7ErucF+9L+7FCt0Igi0kIK/R2/vxd/2HaUrorn/aSvvutkYwbfxqW
+SwtzE+RuBeDWGvEt937OW0oqYONPYv9E4T56Dz/EZ6v2t8ejAnKLbGD/GocMmipK
+7etFSiSMAB2RmaztqTq4NleBepfO80XpYlW9pCSXuHcE8wxHczkzxsbyMAMsG/K3
+vUQY6qPtohqqzSSBwa/8u2ptNHBeor7l7DdYXeR/Nqcc4z92VUkZ5lOVR4evkS5V
+/wQqp5tnOJEj3NjUhEhXFoNEapbZd1bh6iQoUk7jC1TdvKJ/nPKGZAsHRpr0rNKz
+fx/N/Oo6lr2yh/+ps6VxTkbPmB6E85WOO3UvjImZUY0XQdBjWle/4iJLdEC77Nr0
+jXhdgeypucy6jkB6iBHMeVMlrNMEV7UxoBR/cCNx55zu/8sml5ByiDvCDT7sRomN
+NgVt5S/FaVjYuzFUifJ12ToChXFgESKFmuso7WluEaWvMIGREdrMrKQKHfYLOzWF
+2B5ZJDqw4o03fU4J/6rw61M1b+rjVpXMjPnzc2A+RgcjTvXv955gfZkwe4lt5wk/
+3j8zMVo3+zLrMTAaEeIUM0UCAwEAAQ==
+-----END PUBLIC KEY-----`,
+	`-----BEGIN PUBLIC KEY-----
 MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAwMJbYlGxn3l+0XiGA9I/
 BHK8HX/aet7A9GVL817apDUeL6sdISRBdopv5Y0FdrBHSJWSUdWtVxVazJB46J8x
 327/5H5pi0nkfRbcgxBGSGxhKOvwRe+WPVb2f81jlkenZK46c9C7dNmX/310rlHY
@@ -48,7 +66,8 @@ UJZZfm1lDUMpWJ2eWJGrgOUX8/f8v/GB+x4PxUo1m7V/pDLqCUPm3l2dkaM9P0sM
 GX5YxZiEDmCCLRskRwBBUaYffXIpFbI8sO2Xj0J5/im5xtu7TtfJktcPzDL9uyG1
 Ebt8oSA4FTzTid6Zwj55YgDfz0FMnNmXh80T1xMzlbi6y+BCuna+I+7McMRo8yz3
 VzzYJ0/J7PpHpXoZv7K1qDsCAwEAAQ==
------END PUBLIC KEY-----`
+-----END PUBLIC KEY-----`,
+}
 
 // GatewayRequest — запрос к шлюзу (поля как в клиенте Amnezia VPN).
 type GatewayRequest struct {
@@ -65,33 +84,49 @@ type GatewayRequest struct {
 	AuthData          map[string]string `json:"auth_data"`
 }
 
+// errKeyRejected — шлюз не смог расшифровать запрос: он отвечает 500 с пустым телом, если ключ устарел.
+var errKeyRejected = errors.New("шлюз не принял ключ шифрования (500 без ответа): вероятно, ключ шлюза сменился")
+
 // GatewayClient выполняет зашифрованные запросы к шлюзу Amnezia.
 type GatewayClient struct {
 	baseURL    string
-	publicKey  *rsa.PublicKey
+	publicKeys []*rsa.PublicKey
 	httpClient *http.Client
+
+	// active — индекс ключа, который шлюз принял последним.
+	active atomic.Int32
 }
 
 // NewGatewayClient создает клиент шлюза. Пустой baseURL — адрес по умолчанию.
 func NewGatewayClient(baseURL string) (*GatewayClient, error) {
-	return newGatewayClient(baseURL, gatewayPublicKeyPEM)
+	return newGatewayClient(baseURL, gatewayPublicKeysPEM...)
 }
 
-// newGatewayClient создает клиент с указанным ключом шлюза (используется в тестах).
-func newGatewayClient(baseURL, publicKeyPEM string) (*GatewayClient, error) {
-	block, _ := pem.Decode([]byte(publicKeyPEM))
-	if block == nil {
-		return nil, fmt.Errorf("cannot parse gateway public key")
+// newGatewayClient создает клиент с указанными ключами шлюза (используется в тестах).
+func newGatewayClient(baseURL string, publicKeysPEM ...string) (*GatewayClient, error) {
+	publicKeys := make([]*rsa.PublicKey, 0, len(publicKeysPEM))
+
+	for _, publicKeyPEM := range publicKeysPEM {
+		block, _ := pem.Decode([]byte(publicKeyPEM))
+		if block == nil {
+			return nil, fmt.Errorf("cannot parse gateway public key")
+		}
+
+		parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse gateway public key: %w", err)
+		}
+
+		publicKey, ok := parsed.(*rsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("gateway public key is not RSA")
+		}
+
+		publicKeys = append(publicKeys, publicKey)
 	}
 
-	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("cannot parse gateway public key: %w", err)
-	}
-
-	publicKey, ok := parsed.(*rsa.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("gateway public key is not RSA")
+	if len(publicKeys) == 0 {
+		return nil, fmt.Errorf("no gateway public keys")
 	}
 
 	if baseURL == "" {
@@ -99,8 +134,8 @@ func newGatewayClient(baseURL, publicKeyPEM string) (*GatewayClient, error) {
 	}
 
 	return &GatewayClient{
-		baseURL:   strings.TrimSuffix(baseURL, "/") + "/",
-		publicKey: publicKey,
+		baseURL:    strings.TrimSuffix(baseURL, "/") + "/",
+		publicKeys: publicKeys,
 		httpClient: &http.Client{
 			Timeout: gatewayTimeout,
 		},
@@ -108,7 +143,33 @@ func newGatewayClient(baseURL, publicKeyPEM string) (*GatewayClient, error) {
 }
 
 // Post отправляет запрос на endpoint (например "v1/config") и возвращает расшифрованное тело ответа.
+// Если шлюз не принимает ключ шифрования, пробуются остальные известные ключи.
 func (c *GatewayClient) Post(ctx context.Context, endpoint string, payload GatewayRequest) ([]byte, error) {
+	start := int(c.active.Load())
+
+	var err error
+
+	for i := range c.publicKeys {
+		index := (start + i) % len(c.publicKeys)
+
+		var body []byte
+
+		body, err = c.post(ctx, endpoint, payload, c.publicKeys[index])
+		if errors.Is(err, errKeyRejected) {
+			continue
+		}
+
+		// Шлюз расшифровал запрос (даже если ответил ошибкой) — ключ рабочий.
+		c.active.Store(int32(index))
+
+		return body, err
+	}
+
+	return nil, err
+}
+
+// post выполняет запрос, шифруя одноразовый ключ AES ключом шлюза publicKey.
+func (c *GatewayClient) post(ctx context.Context, endpoint string, payload GatewayRequest, publicKey *rsa.PublicKey) ([]byte, error) {
 	// Одноразовый ключ AES: шлюз шифрует им ответ. IV генерируется на 32 байта,
 	// но AES-256-CBC использует первые 16 — как в клиенте Amnezia (OpenSSL).
 	key, iv, salt := make([]byte, 32), make([]byte, 32), make([]byte, 8)
@@ -128,7 +189,7 @@ func (c *GatewayClient) Post(ctx context.Context, endpoint string, payload Gatew
 		return nil, fmt.Errorf("cannot marshal key payload: %w", err)
 	}
 
-	encryptedKey, err := rsa.EncryptPKCS1v15(rand.Reader, c.publicKey, keyPayload)
+	encryptedKey, err := rsa.EncryptPKCS1v15(rand.Reader, publicKey, keyPayload)
 	if err != nil {
 		return nil, fmt.Errorf("cannot encrypt key payload: %w", err)
 	}
@@ -171,6 +232,10 @@ func (c *GatewayClient) Post(ctx context.Context, endpoint string, payload Gatew
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusInternalServerError && len(bytes.TrimSpace(respBody)) == 0 {
+		return nil, errKeyRejected
 	}
 
 	// Ответ (в том числе с ошибкой) обычно зашифрован; если расшифровать не удалось — это текст ошибки.
@@ -218,6 +283,9 @@ func gatewayError(status int, message string) error {
 
 	case http.StatusNotFound:
 		return fmt.Errorf("шлюз не нашел конфигурацию (%d): %s", status, message)
+
+	case http.StatusConflict:
+		return fmt.Errorf("в подписке закончились места для устройств — удалите лишнее устройство в приложении Amnezia VPN и повторите (%d): %s", status, message)
 	}
 
 	return fmt.Errorf("шлюз вернул ошибку %d: %s", status, message)

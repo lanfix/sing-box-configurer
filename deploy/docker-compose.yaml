@@ -23,7 +23,7 @@ services:
       - ./docker-controller.json:/app/config.json:ro
 
   sing-box:
-    image: ghcr.io/sagernet/sing-box:v1.14.0
+    image: docker.io/lanfix/sing-box-lx:v1.14.1-lx.8
     container_name: sing-box
     restart: always
     network_mode: host
