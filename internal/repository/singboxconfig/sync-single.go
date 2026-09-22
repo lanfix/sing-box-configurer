@@ -15,7 +15,7 @@ const (
 	selectorTagPrefix = "select"
 )
 
-// SyncSingleGroup синхронизирует одну группу в конфиг sing-box.
+// SyncSingleGroup синхронизирует одну группу во временный конфиг sing-box.
 func (p *Provider) SyncSingleGroup(group Group, allGroups []Group) error {
 	configData, err := p.GetTempOrActualConfig()
 	if err != nil {
@@ -31,6 +31,27 @@ func (p *Provider) SyncSingleGroup(group Group, allGroups []Group) error {
 		return fmt.Errorf("cannot unmarshal json: %w", err)
 	}
 
+	if err = syncGroups(config, []Group{group}, allGroups); err != nil {
+		return fmt.Errorf("cannot sync group: %w", err)
+	}
+
+	// Сохраняем конфиг обратно.
+	configData, err = json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("cannot marshal config: %w", err)
+	}
+
+	if err = p.SaveTempConfig(configData); err != nil {
+		return fmt.Errorf("cannot save temp config: %w", err)
+	}
+
+	return nil
+}
+
+// syncGroups приводит системные rule-set-ы, правила и selector-ы групп targets к желаемому состоянию.
+// Системные записи остальных групп из allGroups сохраняются, пользовательские записи не трогаются.
+// Функция идемпотентна: повторный вызов не создает дубликатов.
+func syncGroups(config map[string]any, targets []Group, allGroups []Group) error {
 	var route map[string]any
 
 	if routeUntyped, ok := config["route"]; ok {
@@ -53,8 +74,7 @@ func (p *Provider) SyncSingleGroup(group Group, allGroups []Group) error {
 		ruleSets = []any{}
 	}
 
-	desiredRuleSetList := getDesiredRuleSetList(ruleSets, group, allGroups)
-	route["rule_set"] = desiredRuleSetList
+	route["rule_set"] = getDesiredRuleSetList(ruleSets, targets, allGroups)
 
 	var rules []any
 
@@ -67,9 +87,7 @@ func (p *Provider) SyncSingleGroup(group Group, allGroups []Group) error {
 		rules = []any{}
 	}
 
-	desiredRulesList := getDesiredRulesList(rules, group, allGroups)
-	route["rules"] = desiredRulesList
-
+	route["rules"] = getDesiredRulesList(rules, targets, allGroups)
 	config["route"] = route
 
 	var outbounds []any
@@ -94,23 +112,13 @@ func (p *Provider) SyncSingleGroup(group Group, allGroups []Group) error {
 		endpoints = []any{}
 	}
 
-	desiredOutboundsList := getDesiredOutboundsList(outbounds, endpoints, group, allGroups)
-	config["outbounds"] = desiredOutboundsList
-
-	// Сохраняем конфиг обратно.
-	configData, err = json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("cannot marshal config: %w", err)
-	}
-
-	if err = p.SaveTempConfig(configData); err != nil {
-		return fmt.Errorf("cannot save temp config: %w", err)
-	}
+	config["outbounds"] = getDesiredOutboundsList(outbounds, endpoints, targets, allGroups)
 
 	return nil
 }
 
-func getDesiredRuleSetList(actualRuleSetList []any, group Group, allGroups []Group) []any {
+// getDesiredRuleSetList возвращает список rule-set-ов с актуальными системными rule-set-ами групп targets.
+func getDesiredRuleSetList(actualRuleSetList []any, targets []Group, allGroups []Group) []any {
 	desiredRuleSetList := make([]any, 0)
 	systemRuleSetMap := map[string]any{}
 
@@ -142,21 +150,23 @@ func getDesiredRuleSetList(actualRuleSetList []any, group Group, allGroups []Gro
 		systemRuleSetMap[tag] = actualRuleSetList[i]
 	}
 
-	desiredRuleSetTag := getRuleSetTagForGroup(group.Name)
+	// Обновляем данные rule-set-ов.
+	for _, group := range targets {
+		desiredRuleSetTag := getRuleSetTagForGroup(group.Name)
 
-	// Обновляем данные rule-set-а.
-	systemRuleSetMap[desiredRuleSetTag] = map[string]any{
-		"format": "source",
-		"http_client": map[string]any{
-			"tag": "default_http_client",
-		},
-		"tag":             desiredRuleSetTag,
-		"type":            "remote",
-		"update_interval": "30s",
-		"url":             fmt.Sprintf("http://127.0.0.1:8080/api/ruleset/group?group=%s", group.Name), // TODO: Вынести хост в конфиг.
+		systemRuleSetMap[desiredRuleSetTag] = map[string]any{
+			"format": "source",
+			"http_client": map[string]any{
+				"tag": "default_http_client",
+			},
+			"tag":             desiredRuleSetTag,
+			"type":            "remote",
+			"update_interval": "30s",
+			"url":             fmt.Sprintf("http://127.0.0.1:8080/api/ruleset/group?group=%s", group.Name), // TODO: Вынести хост в конфиг.
+		}
 	}
 
-	// Выстраиваем системные правила в порядке из allGroups.
+	// Выстраиваем системные rule-set-ы в порядке из allGroups.
 	for i := range allGroups {
 		tag := getRuleSetTagForGroup(allGroups[i].Name)
 
@@ -171,14 +181,15 @@ func getDesiredRuleSetList(actualRuleSetList []any, group Group, allGroups []Gro
 	return desiredRuleSetList
 }
 
-func getDesiredRulesList(actualRulesList []any, group Group, allGroups []Group) []any {
+// getDesiredRulesList возвращает список правил с актуальными системными правилами групп targets в конце.
+func getDesiredRulesList(actualRulesList []any, targets []Group, allGroups []Group) []any {
 	desiredRules := make([]any, 0)
 	systemRulesMap := map[string]any{}
 
 	for i := range actualRulesList {
 		ruleMap, ok := actualRulesList[i].(map[string]any)
 		if !ok {
-			desiredRules = append(desiredRules, ruleMap)
+			desiredRules = append(desiredRules, actualRulesList[i])
 
 			continue
 		}
@@ -207,12 +218,13 @@ func getDesiredRulesList(actualRulesList []any, group Group, allGroups []Group) 
 		systemRulesMap[ruleSetTag] = ruleMap
 	}
 
-	desiredRuleSetTag := getRuleSetTagForGroup(group.Name)
-	desiredSelectorTag := getSelectorTagForGroup(group.Name)
+	for _, group := range targets {
+		desiredRuleSetTag := getRuleSetTagForGroup(group.Name)
 
-	systemRulesMap[desiredRuleSetTag] = map[string]any{
-		"outbound": desiredSelectorTag,
-		"rule_set": desiredRuleSetTag,
+		systemRulesMap[desiredRuleSetTag] = map[string]any{
+			"outbound": getSelectorTagForGroup(group.Name),
+			"rule_set": desiredRuleSetTag,
+		}
 	}
 
 	for i := range allGroups {
@@ -229,7 +241,8 @@ func getDesiredRulesList(actualRulesList []any, group Group, allGroups []Group) 
 	return desiredRules
 }
 
-func getDesiredOutboundsList(actualOutboundsList, actualEndpointsList []any, group Group, allGroups []Group) []any {
+// getDesiredOutboundsList возвращает список outbounds с актуальными selector-ами групп targets в конце.
+func getDesiredOutboundsList(actualOutboundsList, actualEndpointsList []any, targets []Group, allGroups []Group) []any {
 	desiredOutbounds := make([]any, 0)
 	systemOutboundsMap := map[string]any{}
 	outboundTags := make([]string, 0)
@@ -275,21 +288,23 @@ func getDesiredOutboundsList(actualOutboundsList, actualEndpointsList []any, gro
 		outboundTags = append(outboundTags, tag)
 	}
 
-	desiredSelectorTag := getSelectorTagForGroup(group.Name)
+	for _, group := range targets {
+		desiredSelectorTag := getSelectorTagForGroup(group.Name)
 
-	defaultOutbound := group.DefaultOutbound
+		defaultOutbound := group.DefaultOutbound
 
-	// Если нет дефолтного outbound, определенного в группе, блокируем трафик.
-	if !slices.Contains(outboundTags, defaultOutbound) {
-		defaultOutbound = "block" // TODO: Сделать системный outbound block.
-	}
+		// Если нет дефолтного outbound, определенного в группе, блокируем трафик.
+		if !slices.Contains(outboundTags, defaultOutbound) {
+			defaultOutbound = "block" // TODO: Сделать системный outbound block.
+		}
 
-	systemOutboundsMap[desiredSelectorTag] = map[string]any{
-		"default":                     defaultOutbound,
-		"interrupt_exist_connections": true,
-		"outbounds":                   outboundTags,
-		"tag":                         desiredSelectorTag,
-		"type":                        "selector",
+		systemOutboundsMap[desiredSelectorTag] = map[string]any{
+			"default":                     defaultOutbound,
+			"interrupt_exist_connections": true,
+			"outbounds":                   slices.Clone(outboundTags),
+			"tag":                         desiredSelectorTag,
+			"type":                        "selector",
+		}
 	}
 
 	for i := range allGroups {

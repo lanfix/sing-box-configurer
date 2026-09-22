@@ -49,8 +49,12 @@ func (p *ShareVLessProvider) Parse(shareData string) (Share, error) {
 		"uuid":        shareCommonData.credentials,
 	}
 
+	if flow := shareCommonData.params.Get("flow"); flow != "" {
+		config["flow"] = flow
+	}
+
 	security := shareCommonData.params.Get("security")
-	if security == "tls" {
+	if security == "tls" || security == "reality" {
 		tlsConfig := map[string]any{
 			"enabled": true,
 		}
@@ -63,6 +67,27 @@ func (p *ShareVLessProvider) Parse(shareData string) (Share, error) {
 			tlsConfig["utls"] = map[string]any{
 				"enabled":     true,
 				"fingerprint": fp,
+			}
+		}
+
+		if security == "reality" {
+			publicKey := shareCommonData.params.Get("pbk")
+			if publicKey == "" {
+				return nil, fmt.Errorf("public key (pbk) is required for reality")
+			}
+
+			tlsConfig["reality"] = map[string]any{
+				"enabled":    true,
+				"public_key": publicKey,
+				"short_id":   shareCommonData.params.Get("sid"),
+			}
+
+			// Reality в sing-box работает только через uTLS.
+			if _, ok := tlsConfig["utls"]; !ok {
+				tlsConfig["utls"] = map[string]any{
+					"enabled":     true,
+					"fingerprint": "chrome",
+				}
 			}
 		}
 

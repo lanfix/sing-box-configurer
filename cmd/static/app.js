@@ -2968,13 +2968,8 @@ async function applyConfig() {
             showMessage('✅ ' + data.message, 'success');
         }
 
-        const st = editorState;
-        const currentValue = st.editor.value;
-        st.originalConfig = currentValue; // Новый baseline для diff
-        st.loadedConfig = currentValue; // Обновляем loaded
-        st.hasPendingChanges = false;
-        updateConfigButtons();
-        renderGutter(st.lines.length); // Сброс индикаторов
+        // Сервер при применении синхронизирует группы, поэтому перечитываем итоговый конфиг.
+        await loadConfig();
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');
     }

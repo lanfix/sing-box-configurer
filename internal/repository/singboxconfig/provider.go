@@ -151,276 +151,108 @@ func (p *Provider) GetActualPath() string {
 	return p.actualConfigPath
 }
 
-// SyncGroupsToConfig синхронизирует группы в конфиг sing-box.
+// SyncGroupsToConfig синхронизирует все группы в конфиг sing-box по пути configPath.
+// Функция идемпотентна: повторный вызов не создает дубликатов rule-set-ов, правил и selector-ов.
 func (p *Provider) SyncGroupsToConfig(configPath string, groups []Group) error {
-	// Читаем конфиг sing-box.
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("cannot read config: %w", err)
 	}
 
-	// Удаляем комментарии перед парсингом.
-	cleanedConfigData := removeComments(configData)
+	var config map[string]any
 
-	var config map[string]interface{}
-
-	if err := json.Unmarshal(cleanedConfigData, &config); err != nil {
+	if err = json.Unmarshal(removeComments(configData), &config); err != nil {
 		return fmt.Errorf("cannot parse config: %w", err)
 	}
 
-	// Получаем секцию route.
-	route, ok := config["route"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("route section not found in config")
+	if err = syncGroups(config, groups, groups); err != nil {
+		return fmt.Errorf("cannot sync groups: %w", err)
 	}
 
-	// Получаем rule_set.
-	var ruleSets []interface{}
-
-	if rs, ok := route["rule_set"].([]interface{}); ok {
-		ruleSets = rs
-	} else {
-		ruleSets = []interface{}{}
+	if route, ok := config["route"].(map[string]any); ok {
+		ensureServiceRules(route)
 	}
 
-	// Получаем rules.
-	var rules []interface{}
-
-	if r, ok := route["rules"].([]interface{}); ok {
-		rules = r
-	} else {
-		rules = []interface{}{}
-	}
-
-	// Удаляем старые ruleset'ы для групп (кроме default/configurer для обратной совместимости).
-	newRuleSets := []interface{}{}
-
-	for _, rs := range ruleSets {
-		rsMap, ok := rs.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		tag, ok := rsMap["tag"].(string)
-		if !ok {
-			continue
-		}
-
-		// Сохраняем только ruleset с тегом "configurer" для обратной совместимости.
-		if tag == "configurer" {
-			newRuleSets = append(newRuleSets, rs)
-		}
-	}
-
-	// Добавляем ruleset для каждой группы.
-	for _, group := range groups {
-		ruleSet := map[string]interface{}{
-			"format": "source",
-			"http_client": map[string]interface{}{
-				"tag": "default_http_client",
-			},
-			"tag":             "configurer-" + group.Name,
-			"type":            "remote",
-			"update_interval": "30s",
-			"url":             fmt.Sprintf("http://127.0.0.1:8080/api/ruleset/group?group=%s", group.Name),
-		}
-
-		newRuleSets = append(newRuleSets, ruleSet)
-	}
-
-	route["rule_set"] = newRuleSets
-
-	// Удаляем старые правила для групп из rules.
-	newRules := []interface{}{}
-	foundSniff := false
-	foundHijackDNS := false
-	foundResolve := false
-	foundPrivate := false
-
-	for _, rule := range rules {
-		ruleMap, ok := rule.(map[string]interface{})
-		if !ok {
-			newRules = append(newRules, rule)
-
-			continue
-		}
-
-		// Проверяем служебные правила.
-		if action, ok := ruleMap["action"].(string); ok {
-			if action == "sniff" {
-				foundSniff = true
-			}
-
-			if action == "hijack-dns" {
-				foundHijackDNS = true
-			}
-
-			if action == "resolve" {
-				foundResolve = true
-			}
-		}
-
-		if _, ok := ruleMap["ip_is_private"]; ok {
-			foundPrivate = true
-		}
-
-		// Пропускаем старое правило с ruleset "configurer".
-		if ruleSetTag, ok := ruleMap["rule_set"].(string); ok {
-			if ruleSetTag == "configurer" {
-				continue
-			}
-		}
-
-		// Сохраняем все остальные правила.
-		newRules = append(newRules, rule)
-	}
-
-	// Добавляем служебные правила, если их нет.
-	serviceRules := []interface{}{}
-
-	if !foundSniff {
-		serviceRules = append(serviceRules, map[string]interface{}{
-			"action": "sniff",
-		})
-	}
-
-	if !foundHijackDNS {
-		serviceRules = append(serviceRules, map[string]interface{}{
-			"action":   "hijack-dns",
-			"protocol": "dns",
-		})
-	}
-
-	if !foundResolve {
-		serviceRules = append(serviceRules, map[string]interface{}{
-			"action":   "resolve",
-			"strategy": "ipv4_only",
-		})
-	}
-
-	if !foundPrivate {
-		serviceRules = append(serviceRules, map[string]interface{}{
-			"ip_is_private": true,
-			"outbound":      "direct",
-		})
-	}
-
-	// Добавляем правила для каждой группы в конец.
-	for _, group := range groups {
-		groupRule := map[string]interface{}{
-			"outbound": "select-" + group.Name,
-			"rule_set": "configurer-" + group.Name,
-		}
-
-		serviceRules = append(serviceRules, groupRule)
-	}
-
-	// Объединяем пользовательские и служебные правила.
-	finalRules := append(newRules, serviceRules...)
-	route["rules"] = finalRules
-
-	// Проверяем наличие селекторов для групп в outbounds.
-	if err := ensureSelectorsInConfig(config, groups); err != nil {
-		return fmt.Errorf("cannot ensure selectors: %w", err)
-	}
-
-	// Сохраняем конфиг обратно.
 	configData, err = json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("cannot marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, configData, 0644); err != nil {
+	if err = os.WriteFile(configPath, configData, 0644); err != nil {
 		return fmt.Errorf("cannot write config: %w", err)
 	}
 
 	return nil
 }
 
-// ensureSelectorsInConfig проверяет и добавляет селекторы для групп в outbounds.
-func ensureSelectorsInConfig(config map[string]interface{}, groups []Group) error {
-	outbounds, ok := config["outbounds"].([]interface{})
-	if !ok {
-		return fmt.Errorf("outbounds section not found in config")
-	}
+// ensureServiceRules добавляет в начало route.rules отсутствующие служебные правила
+// (sniff, hijack-dns, resolve, ip_is_private -> direct).
+func ensureServiceRules(route map[string]any) {
+	rules, _ := route["rules"].([]any)
 
-	// Собираем существующие селекторы.
-	existingSelectors := make(map[string]bool)
+	var (
+		foundSniff     bool
+		foundHijackDNS bool
+		foundResolve   bool
+		foundPrivate   bool
+	)
 
-	for _, ob := range outbounds {
-		obMap, ok := ob.(map[string]interface{})
+	for _, rule := range rules {
+		ruleMap, ok := rule.(map[string]any)
 		if !ok {
 			continue
 		}
 
-		tag, ok := obMap["tag"].(string)
-		if !ok {
-			continue
+		switch action, _ := ruleMap["action"].(string); action {
+		case "sniff":
+			foundSniff = true
+
+		case "hijack-dns":
+			foundHijackDNS = true
+
+		case "resolve":
+			foundResolve = true
 		}
 
-		obType, ok := obMap["type"].(string)
-		if !ok {
-			continue
-		}
-
-		if obType == "selector" {
-			existingSelectors[tag] = true
-		}
-	}
-
-	// Получаем список всех outbounds для использования в selector.
-	var availableOutbounds []string
-
-	for _, ob := range outbounds {
-		obMap, ok := ob.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		tag, ok := obMap["tag"].(string)
-		if !ok {
-			continue
-		}
-
-		obType, ok := obMap["type"].(string)
-		if !ok {
-			continue
-		}
-
-		// Добавляем только VPN outbounds и direct.
-		if obType != "selector" && obType != "block" && tag != "dns-out" {
-			availableOutbounds = append(availableOutbounds, tag)
+		if _, ok := ruleMap["ip_is_private"]; ok {
+			foundPrivate = true
 		}
 	}
 
-	// Добавляем селекторы для групп, если их нет.
-	newOutbounds := make([]interface{}, len(outbounds))
-	copy(newOutbounds, outbounds)
+	serviceRules := make([]any, 0, 4)
 
-	for _, group := range groups {
-		selectorTag := "select-" + group.Name
-
-		if !existingSelectors[selectorTag] {
-			defaultOutbound := group.DefaultOutbound
-			if defaultOutbound == "" {
-				defaultOutbound = "direct"
-			}
-
-			selector := map[string]interface{}{
-				"default":                     defaultOutbound,
-				"interrupt_exist_connections": true,
-				"outbounds":                   availableOutbounds,
-				"tag":                         selectorTag,
-				"type":                        "selector",
-			}
-
-			newOutbounds = append(newOutbounds, selector)
-		}
+	if !foundSniff {
+		serviceRules = append(serviceRules, map[string]any{
+			"action": "sniff",
+		})
 	}
 
-	config["outbounds"] = newOutbounds
+	if !foundHijackDNS {
+		serviceRules = append(serviceRules, map[string]any{
+			"action":   "hijack-dns",
+			"protocol": "dns",
+		})
+	}
 
-	return nil
+	if !foundResolve {
+		serviceRules = append(serviceRules, map[string]any{
+			"action":   "resolve",
+			"strategy": "ipv4_only",
+		})
+	}
+
+	if !foundPrivate {
+		serviceRules = append(serviceRules, map[string]any{
+			"ip_is_private": true,
+			"outbound":      "direct",
+		})
+	}
+
+	if len(serviceRules) == 0 {
+		return
+	}
+
+	route["rules"] = append(serviceRules, rules...)
 }
 
 // validateJSONWithComments валидирует JSON с поддержкой комментариев.
