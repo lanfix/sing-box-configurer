@@ -453,7 +453,8 @@ func (m *Manager) DeleteOutbound(tag string) error {
 	return nil
 }
 
-// ReplaceOutbounds заменяет во временном конфиге outbounds с тегами removeTags на outbounds из add.
+// ReplaceOutbounds заменяет во временном конфиге outbounds и endpoints с тегами removeTags на элементы из add.
+// Элементы типа wireguard записываются в секцию endpoints, остальные — в outbounds.
 // Новые теги добавляются во все системные selector-ы (select-*), удаленные теги убираются из всех групп.
 func (m *Manager) ReplaceOutbounds(removeTags []string, add []map[string]any) error {
 	m.mu.Lock()
@@ -537,12 +538,39 @@ func (m *Manager) ReplaceOutbounds(removeTags []string, add []map[string]any) er
 	}
 
 	newOutbounds := make([]any, 0, len(add))
+	newEndpoints := make([]any, 0)
 
 	for _, item := range add {
+		// WireGuard в sing-box — endpoint, а не outbound: он хранится в отдельной секции.
+		if itemType, _ := item["type"].(string); itemType == "wireguard" {
+			newEndpoints = append(newEndpoints, item)
+
+			continue
+		}
+
 		newOutbounds = append(newOutbounds, item)
 	}
 
 	config["outbounds"] = slices.Insert(kept, insertPosition, newOutbounds...)
+
+	endpointsList, _ := config["endpoints"].([]any)
+	keptEndpoints := make([]any, 0, len(endpointsList)+len(newEndpoints))
+
+	for _, item := range endpointsList {
+		if endpointMap, ok := item.(map[string]any); ok && removeSet[endpointMap["tag"]] {
+			continue
+		}
+
+		keptEndpoints = append(keptEndpoints, item)
+	}
+
+	keptEndpoints = append(keptEndpoints, newEndpoints...)
+
+	if len(keptEndpoints) > 0 {
+		config["endpoints"] = keptEndpoints
+	} else {
+		delete(config, "endpoints")
+	}
 
 	newData, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

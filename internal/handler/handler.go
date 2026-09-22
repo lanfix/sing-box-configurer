@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lanfix/sing-box-configurer/internal/amnezia"
 	"github.com/lanfix/sing-box-configurer/internal/happ"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
@@ -28,6 +29,7 @@ type Handler struct {
 	trafficMonitor           *trafficmonitor.Monitor
 	happManager              *happ.Manager
 	updateService            *update.Service
+	amneziaManager           *amnezia.Manager
 }
 
 func NewHandler(
@@ -39,6 +41,7 @@ func NewHandler(
 	trafficMonitor *trafficmonitor.Monitor,
 	happManager *happ.Manager,
 	updateService *update.Service,
+	amneziaManager *amnezia.Manager,
 ) *Handler {
 	return &Handler{
 		rulesManager:             rulesManager,
@@ -49,6 +52,7 @@ func NewHandler(
 		trafficMonitor:           trafficMonitor,
 		happManager:              happManager,
 		updateService:            updateService,
+		amneziaManager:           amneziaManager,
 	}
 }
 

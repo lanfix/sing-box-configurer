@@ -61,7 +61,11 @@ function activateTab(tabName) {
         loadOutbounds();
     } else if (tabName === 'happ') {
         loadHappProfiles();
-        autoRefreshInterval = setInterval(loadHappProfiles, 30000);
+        loadAmneziaProfiles();
+        autoRefreshInterval = setInterval(() => {
+            loadHappProfiles();
+            loadAmneziaProfiles();
+        }, 30000);
     } else if (tabName === 'config') {
         openConfigTab();
     } else if (tabName === 'control') {
@@ -88,7 +92,7 @@ function updateTopBar(tabName) {
         'url-sources': 'URL Источники',
         'groups': 'Группы',
         'outbounds': 'Outbounds',
-        'happ': 'Подписки Happ',
+        'happ': 'Подписки',
         'config': 'Конфигурация',
         'control': 'Управление'
     };
@@ -3934,4 +3938,271 @@ function renderUpdateStatus(status, inProgress) {
                 <div class="update-steps">${steps || '<span class="card-hint">Пока пусто</span>'}</div>
             </details>
         </div>`;
+}
+
+// ============================================================================
+// Amnezia
+// ============================================================================
+
+let amneziaBusy = false; // Блокирует автообновление списка во время действий
+
+async function loadAmneziaProfiles() {
+    if (amneziaBusy) return;
+
+    const container = document.getElementById('amneziaProfiles');
+    if (!container) return;
+
+    try {
+        const response = await fetch('/api/amnezia/profiles');
+        if (!response.ok) throw new Error(await response.text());
+
+        const data = await response.json();
+        renderAmneziaSupport(data.awg_support || {});
+
+        const profiles = data.profiles || [];
+        if (profiles.length === 0) {
+            container.innerHTML = '<div class="empty-state">Конфигураций пока нет. Вставьте ключ vpn:// выше.</div>';
+            return;
+        }
+
+        const awgSupported = Boolean(data.awg_support && data.awg_support.supported);
+        container.innerHTML = profiles.map(p => renderAmneziaProfile(p, awgSupported)).join('');
+    } catch (error) {
+        console.error('Ошибка загрузки конфигураций Amnezia:', error);
+        container.innerHTML = '<div class="empty-state">Не удалось загрузить конфигурации</div>';
+    }
+}
+
+function renderAmneziaSupport(support) {
+    const note = document.getElementById('amneziaSupport');
+    if (!note) return;
+
+    if (support.supported) {
+        note.className = 'happ-note';
+        note.innerHTML = `✅ ${escapeHTML(support.version)} поддерживает AmneziaWG.`;
+        return;
+    }
+
+    note.className = 'happ-note is-warn';
+
+    const version = support.version ? escapeHTML(support.version) : 'sing-box';
+    const reason = support.error ? ` (${escapeHTML(support.error)})` : '';
+
+    note.innerHTML = `⚠️ ${version} не поддерживает AmneziaWG${reason}. WireGuard и Xray импортируются как обычно,
+        а AmneziaWG сохранится, но не попадёт в конфиг: официальный sing-box не запустится с параметрами обфускации.
+        Нужен форк <a href="https://github.com/Leadaxe/sing-box-lx" target="_blank" rel="noopener">sing-box-lx</a>.`;
+}
+
+function renderAmneziaProfile(profile, awgSupported) {
+    const id = escapeHTML(profile.id);
+    const items = profile.items || [];
+    const warnings = profile.warnings || [];
+
+    const premium = profile.premium;
+
+    let statusDot = 'is-good';
+    let statusText = 'Записано в конфиг';
+
+    if (profile.last_error) {
+        statusDot = 'is-bad';
+        statusText = 'Ошибка обновления';
+    } else if (!profile.synced && profile.requires_awg && !awgSupported) {
+        statusDot = 'is-warn';
+        statusText = 'Не в конфиге: нужен sing-box с AmneziaWG';
+    } else if (!profile.synced) {
+        statusDot = 'is-warn';
+        statusText = 'Не в конфиге';
+    } else if (profile.out_of_sync) {
+        statusDot = 'is-warn';
+        statusText = 'Серверы изменились, обновите конфиг';
+    }
+
+    const syncDisabled = profile.requires_awg && !awgSupported ? 'disabled title="Нужен sing-box с поддержкой AmneziaWG"' : '';
+    const syncHighlight = !profile.synced || profile.out_of_sync;
+
+    const rows = items.map(item => `
+        <tr>
+            <td>${escapeHTML(item.name)}</td>
+            <td><span class="badge badge-${item.requires_awg ? 'group' : 'domain'}">${item.requires_awg ? 'AmneziaWG' : escapeHTML(item.protocol)}</span></td>
+            <td>${escapeHTML(item.server)}</td>
+        </tr>`).join('');
+
+    return `
+    <div class="add-form-card happ-card">
+        <div class="happ-card-head">
+            <div class="happ-card-title">
+                <div class="form-header" style="margin-bottom: 4px;">${escapeHTML(profile.name)}</div>
+                <div class="happ-card-sub">
+                    <span class="stat-dot ${statusDot}"></span>
+                    <span>${statusText}</span>
+                    ${profile.server ? `<span class="happ-sep">·</span><span>${escapeHTML(profile.server)}</span>` : ''}
+                    ${premium ? `<span class="happ-sep">·</span><span>обновлено ${formatHappAgo(profile.last_update)}</span>` : ''}
+                </div>
+            </div>
+            <div class="happ-card-actions">
+                ${premium ? `<button class="btn btn-secondary btn-sm" onclick="amneziaProfileAction('refresh', '${id}', this)">Обновить</button>` : ''}
+                <button class="btn ${syncHighlight ? 'btn-warning' : 'btn-secondary'} btn-sm" onclick="amneziaProfileAction('sync', '${id}', this)" ${syncDisabled}>В конфиг</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteAmneziaProfile('${id}', this)">Удалить</button>
+            </div>
+        </div>
+
+        ${profile.last_error ? `<div class="happ-note is-bad">${escapeHTML(profile.last_error)}</div>` : ''}
+        ${premium ? renderAmneziaPremium(profile) : ''}
+        ${warnings.length ? `<div class="happ-note">${warnings.map(escapeHTML).join('<br>')}</div>` : ''}
+
+        <table class="table">
+            <thead><tr><th>Протокол</th><th>Тип</th><th>Сервер</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+    </div>`;
+}
+
+// Форматирует дату шлюза Amnezia ("2026-10-06 12:54:28+00:00") и число оставшихся дней.
+function formatAmneziaDate(value) {
+    if (!value) return null;
+
+    const date = new Date(value.replace(' ', 'T'));
+    if (isNaN(date)) return { text: value, days: null };
+
+    return {
+        text: date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }),
+        days: Math.floor((date.getTime() - Date.now()) / 86400000),
+    };
+}
+
+function renderAmneziaPremium(profile) {
+    const premium = profile.premium;
+    const id = escapeHTML(profile.id);
+    const subscription = formatAmneziaDate(premium.subscription_end);
+    const expires = formatAmneziaDate(premium.config_expires_at);
+
+    const dateTile = (label, date, emptyText) => {
+        if (!date) {
+            return `<div class="stat-tile"><div class="stat-label">${label}</div><div class="stat-value happ-date">—</div><div class="stat-foot">${emptyText}</div></div>`;
+        }
+
+        let dot = 'is-good';
+        let foot = '';
+
+        if (date.days !== null) {
+            dot = date.days < 3 ? 'is-bad' : date.days < 7 ? 'is-warn' : 'is-good';
+            foot = date.days < 0 ? 'Истекло' : `Осталось ${date.days} ${pluralDays(date.days)}`;
+        }
+
+        return `
+            <div class="stat-tile">
+                <div class="stat-label">${label}</div>
+                <div class="stat-value happ-date">${escapeHTML(date.text)}</div>
+                <div class="stat-foot"><span class="stat-dot ${dot}"></span>${foot}</div>
+            </div>`;
+    };
+
+    const countries = (premium.available_countries || []).map(country =>
+        `<option value="${escapeHTML(country.code)}" ${country.code === premium.server_country_code ? 'selected' : ''}>${escapeHTML(country.name)}</option>`
+    ).join('');
+
+    return `
+        <div class="stat-row happ-stats">
+            ${dateTile('Подписка до', subscription, 'Нет данных')}
+            ${dateTile('Конфигурация действует до', expires, 'Без срока')}
+            <div class="stat-tile">
+                <div class="stat-label">Страна сервера</div>
+                ${countries
+                    ? `<select class="form-select amnezia-country" onchange="setAmneziaCountry('${id}', this)">${countries}</select>`
+                    : `<div class="stat-value happ-date">${escapeHTML(premium.server_country_name || '—')}</div>`}
+                <div class="stat-foot">Смена страны запрашивает новую конфигурацию</div>
+            </div>
+        </div>`;
+}
+
+async function setAmneziaCountry(id, select) {
+    select.disabled = true;
+    amneziaBusy = true;
+
+    try {
+        const response = await fetch('/api/amnezia/profiles/country', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, country: select.value })
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok) throw new Error(result.error || 'Не удалось сменить страну');
+
+        showMessage(`${result.message}. Нажмите «В конфиг», чтобы записать новый сервер.`, 'success');
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    } finally {
+        select.disabled = false;
+        amneziaBusy = false;
+        await loadAmneziaProfiles();
+    }
+}
+
+async function addAmneziaProfile(event) {
+    event.preventDefault();
+
+    const keyInput = document.getElementById('amneziaKey');
+    const nameInput = document.getElementById('amneziaName');
+    const button = document.getElementById('amneziaAddBtn');
+
+    button.disabled = true;
+    button.textContent = 'Импортирую...';
+    amneziaBusy = true;
+
+    try {
+        const response = await fetch('/api/amnezia/profiles/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: keyInput.value.trim(), name: nameInput.value.trim() })
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok) throw new Error(result.error || 'Не удалось импортировать ключ');
+
+        showMessage(result.message, result.synced ? 'success' : 'error');
+        keyInput.value = '';
+        nameInput.value = '';
+
+        if (result.synced) checkPendingConfig();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Импортировать';
+        amneziaBusy = false;
+        await loadAmneziaProfiles();
+    }
+}
+
+async function amneziaProfileAction(action, id, button) {
+    button.disabled = true;
+    amneziaBusy = true;
+
+    try {
+        const response = await fetch(`/api/amnezia/profiles/${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok) throw new Error(result.error || 'Действие не выполнено');
+
+        showMessage(result.message, result.warning ? 'error' : 'success');
+
+        if (action !== 'refresh') checkPendingConfig();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    } finally {
+        button.disabled = false;
+        amneziaBusy = false;
+        await loadAmneziaProfiles();
+    }
+}
+
+async function deleteAmneziaProfile(id, button) {
+    if (!confirm('Удалить конфигурацию и её серверы из конфига?\n\nДля Amnezia Premium освободится место устройства в подписке.')) return;
+
+    await amneziaProfileAction('delete', id, button);
 }

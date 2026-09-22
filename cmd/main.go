@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lanfix/sing-box-configurer/cmd/config"
+	"github.com/lanfix/sing-box-configurer/internal/amnezia"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
 	"github.com/lanfix/sing-box-configurer/internal/happ"
 	"github.com/lanfix/sing-box-configurer/internal/migrations"
@@ -117,7 +118,19 @@ func main() {
 
 	updateService := update.NewService(dockerControllerProvider, update.NewRegistry(), singBoxConfigProvider, cfg.ListenAddr)
 
-	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager, clashAPI, trafficMonitor, happManager, updateService)
+	amneziaGateway, err := amnezia.NewGatewayClient(amnezia.DefaultGatewayURL)
+	if err != nil {
+		log.Fatal(fmt.Errorf("failed to initialize amnezia gateway client: %w", err))
+	}
+
+	amneziaManager, err := amnezia.NewManager(appData, outboundManager, clashAPI, amneziaGateway)
+	if err != nil {
+		log.Fatal(fmt.Errorf("failed to initialize amnezia manager: %w", err))
+	}
+
+	amneziaManager.Start(context.Background())
+
+	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager, clashAPI, trafficMonitor, happManager, updateService, amneziaManager)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -196,6 +209,13 @@ func main() {
 	http.HandleFunc("/api/update/check", h.CheckUpdates)
 	http.HandleFunc("/api/update/start", h.StartUpdate)
 	http.HandleFunc("/api/update/status", h.UpdateStatus)
+
+	http.HandleFunc("/api/amnezia/profiles", h.GetAmneziaProfiles)
+	http.HandleFunc("/api/amnezia/profiles/add", h.AddAmneziaProfile)
+	http.HandleFunc("/api/amnezia/profiles/sync", h.SyncAmneziaProfile)
+	http.HandleFunc("/api/amnezia/profiles/refresh", h.RefreshAmneziaProfile)
+	http.HandleFunc("/api/amnezia/profiles/country", h.SetAmneziaCountry)
+	http.HandleFunc("/api/amnezia/profiles/delete", h.DeleteAmneziaProfile)
 
 	http.HandleFunc("/api/happ/profiles", h.GetHappProfiles)
 	http.HandleFunc("/api/happ/profiles/add", h.AddHappProfile)
