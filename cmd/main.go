@@ -13,7 +13,9 @@ import (
 
 	"github.com/lanfix/sing-box-configurer/cmd/config"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
+	"github.com/lanfix/sing-box-configurer/internal/happ"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
+	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
 	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
@@ -40,7 +42,9 @@ func main() {
 		log.Fatalf("Field app_data_path required in config")
 	}
 
-	rulesManager, err := rules.NewManager(cfg.AppDataPath, cfg.SourceListsProxyUrl)
+	appData := appdata.NewFile(cfg.AppDataPath)
+
+	rulesManager, err := rules.NewManager(appData, cfg.SourceListsProxyUrl)
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize rules manager: %w", err))
 	}
@@ -95,7 +99,17 @@ func main() {
 	trafficMonitor := trafficmonitor.New(clashAPI, 60)
 	trafficMonitor.Start(context.Background())
 
-	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager, clashAPI, trafficMonitor)
+	happStore, err := happ.NewStore(appData)
+	if err != nil {
+		log.Fatal(fmt.Errorf("failed to initialize happ store: %w", err))
+	}
+
+	log.Printf("Happ installation id: %s", happStore.InstallationID())
+
+	happManager := happ.NewManager(happStore, happ.NewClient(), outboundManager)
+	happManager.Start(context.Background())
+
+	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager, clashAPI, trafficMonitor, happManager)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -167,6 +181,12 @@ func main() {
 	http.HandleFunc("/api/outbounds", h.GetOutbounds)
 	http.HandleFunc("/api/outbounds/add", h.AddOutbound)
 	http.HandleFunc("/api/outbounds/delete", h.DeleteOutbound)
+
+	http.HandleFunc("/api/happ/profiles", h.GetHappProfiles)
+	http.HandleFunc("/api/happ/profiles/add", h.AddHappProfile)
+	http.HandleFunc("/api/happ/profiles/refresh", h.RefreshHappProfile)
+	http.HandleFunc("/api/happ/profiles/sync", h.SyncHappProfile)
+	http.HandleFunc("/api/happ/profiles/delete", h.DeleteHappProfile)
 
 	log.Printf("Server started on %s", cfg.ListenAddr)
 

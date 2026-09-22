@@ -59,6 +59,9 @@ function activateTab(tabName) {
         loadGroups();
     } else if (tabName === 'outbounds') {
         loadOutbounds();
+    } else if (tabName === 'happ') {
+        loadHappProfiles();
+        autoRefreshInterval = setInterval(loadHappProfiles, 30000);
     } else if (tabName === 'config') {
         openConfigTab();
     } else if (tabName === 'control') {
@@ -85,6 +88,7 @@ function updateTopBar(tabName) {
         'url-sources': 'URL Источники',
         'groups': 'Группы',
         'outbounds': 'Outbounds',
+        'happ': 'Подписки Happ',
         'config': 'Конфигурация',
         'control': 'Управление'
     };
@@ -3334,5 +3338,278 @@ async function deleteOutbound(tag) {
         
     } catch (error) {
         showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+// ============================================================================
+// Happ Profiles
+// ============================================================================
+
+let happBusy = false; // Блокирует автообновление списка во время действий
+
+// Форматирует количество байт в человекочитаемый вид.
+function formatHappBytes(bytes) {
+    if (!bytes) return '0 Б';
+
+    const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const value = bytes / Math.pow(1024, index);
+
+    return `${value.toFixed(value >= 100 || index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+// Возвращает «5 мин назад» и т.п. для даты.
+function formatHappAgo(dateString) {
+    const date = new Date(dateString);
+    if (isNaN(date) || date.getFullYear() < 2000) return 'никогда';
+
+    const minutes = Math.round((Date.now() - date.getTime()) / 60000);
+    if (minutes < 1) return 'только что';
+    if (minutes < 60) return `${minutes} мин назад`;
+
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours} ч назад`;
+
+    return `${Math.round(hours / 24)} дн назад`;
+}
+
+// Склоняет слово «день».
+function pluralDays(n) {
+    const mod10 = n % 10;
+    const mod100 = n % 100;
+
+    if (mod10 === 1 && mod100 !== 11) return 'день';
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'дня';
+
+    return 'дней';
+}
+
+async function loadHappProfiles() {
+    if (happBusy) return;
+
+    const container = document.getElementById('happProfiles');
+    if (!container) return;
+
+    try {
+        const response = await fetch('/api/happ/profiles');
+        if (!response.ok) throw new Error(await response.text());
+
+        const data = await response.json();
+        document.getElementById('happHwid').textContent = data.installation_id || '—';
+
+        const profiles = data.profiles || [];
+        if (profiles.length === 0) {
+            container.innerHTML = '<div class="empty-state">Подписок пока нет. Добавьте ссылку выше.</div>';
+            return;
+        }
+
+        // Сохраняем раскрытые списки серверов между перерисовками.
+        const openIds = new Set([...container.querySelectorAll('details[open]')].map(d => d.dataset.id));
+        container.innerHTML = profiles.map(p => renderHappProfile(p, openIds.has(p.id))).join('');
+    } catch (error) {
+        console.error('Ошибка загрузки подписок:', error);
+        container.innerHTML = '<div class="empty-state">Не удалось загрузить подписки</div>';
+    }
+}
+
+function renderHappProfile(profile, serversOpen) {
+    const info = profile.info || {};
+    const id = escapeHTML(profile.id);
+
+    // Трафик.
+    const used = (info.upload || 0) + (info.download || 0);
+    const total = info.total || 0;
+    let trafficValue = formatHappBytes(used);
+    let trafficFoot = 'Без лимита трафика';
+    let trafficBar = '';
+
+    if (total > 0) {
+        const percent = Math.min(100, used / total * 100);
+        const level = percent >= 90 ? 'is-bad' : percent >= 75 ? 'is-warn' : 'is-good';
+        trafficValue += ` <span class="stat-unit">из ${formatHappBytes(total)}</span>`;
+        trafficFoot = `Осталось ${formatHappBytes(Math.max(0, total - used))}`;
+        trafficBar = `<div class="happ-meter"><div class="happ-meter-fill ${level}" style="width: ${percent.toFixed(1)}%"></div></div>`;
+    }
+
+    // Срок действия.
+    let expireValue = '∞';
+    let expireFoot = 'Бессрочно';
+    let expireDot = 'is-good';
+
+    if (info.expire) {
+        const expire = new Date(info.expire);
+        const days = Math.floor((expire.getTime() - Date.now()) / 86400000);
+        expireValue = expire.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+
+        if (days < 0) {
+            expireFoot = 'Подписка истекла';
+            expireDot = 'is-bad';
+        } else {
+            expireFoot = `Осталось ${days} ${pluralDays(days)}`;
+            expireDot = days < 3 ? 'is-bad' : days < 7 ? 'is-warn' : 'is-good';
+        }
+    }
+
+    // Серверы.
+    const servers = profile.servers || [];
+    const warnings = profile.warnings || [];
+    const proxies = servers.filter(s => s.type === 'proxy').length;
+    const autoGroups = servers.length - proxies;
+
+    const statusDot = profile.last_error ? 'is-bad' : profile.out_of_sync ? 'is-warn' : 'is-good';
+    const statusText = profile.last_error
+        ? 'Ошибка обновления'
+        : profile.out_of_sync ? 'Серверы изменились, обновите конфиг' : 'Синхронизировано с конфигом';
+
+    const links = [
+        info.support_url ? `<a href="${escapeHTML(info.support_url)}" target="_blank" rel="noopener">Поддержка</a>` : '',
+        info.web_page_url ? `<a href="${escapeHTML(info.web_page_url)}" target="_blank" rel="noopener">Кабинет</a>` : '',
+    ].filter(Boolean).join('<span class="happ-sep">·</span>');
+
+    const serverRows = servers.map(s => {
+        const address = s.address
+            ? escapeHTML(`${s.address}:${s.port}`)
+            : `<span class="card-hint">самый быстрый из ${(s.outbound.outbounds || []).length}</span>`;
+
+        return `
+        <tr>
+            <td>${escapeHTML(s.name)}</td>
+            <td><span class="badge badge-${s.type === 'urltest' ? 'group' : 'domain'}">${escapeHTML(s.protocol)}</span></td>
+            <td>${address}</td>
+        </tr>`;
+    }).join('');
+
+    return `
+    <div class="add-form-card happ-card">
+        <div class="happ-card-head">
+            <div class="happ-card-title">
+                <div class="form-header" style="margin-bottom: 4px;">${escapeHTML(profile.name)}</div>
+                <div class="happ-card-sub">
+                    <span class="stat-dot ${statusDot}"></span>
+                    <span>${statusText}</span>
+                    <span class="happ-sep">·</span>
+                    <span title="${escapeHTML(profile.url)}">обновлено ${formatHappAgo(profile.last_update)}</span>
+                    ${links ? `<span class="happ-sep">·</span>${links}` : ''}
+                </div>
+            </div>
+            <div class="happ-card-actions">
+                <button class="btn btn-secondary btn-sm" onclick="happProfileAction('refresh', '${id}', this)">Обновить</button>
+                <button class="btn ${profile.out_of_sync ? 'btn-warning' : 'btn-secondary'} btn-sm" onclick="happProfileAction('sync', '${id}', this)">В конфиг</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteHappProfile('${id}', this)">Удалить</button>
+            </div>
+        </div>
+
+        ${profile.last_error ? `<div class="happ-note is-bad">${escapeHTML(profile.last_error)}</div>` : ''}
+        ${info.announce ? `<div class="happ-note">${escapeHTML(info.announce)}</div>` : ''}
+
+        <div class="stat-row happ-stats">
+            <div class="stat-tile">
+                <div class="stat-label">Потрачено трафика</div>
+                <div class="stat-value">${trafficValue}</div>
+                ${trafficBar}
+                <div class="stat-foot">${trafficFoot}</div>
+            </div>
+            <div class="stat-tile">
+                <div class="stat-label">Действует до</div>
+                <div class="stat-value happ-date">${escapeHTML(expireValue)}</div>
+                <div class="stat-foot"><span class="stat-dot ${expireDot}"></span>${expireFoot}</div>
+            </div>
+            <div class="stat-tile">
+                <div class="stat-label">Серверы</div>
+                <div class="stat-value">${proxies}<span class="stat-unit">${autoGroups ? `+ ${autoGroups} авто` : 'шт'}</span></div>
+                <div class="stat-foot">${warnings.length ? `Пропущено: ${warnings.length}` : 'Все поддерживаются sing-box'}</div>
+            </div>
+        </div>
+
+        ${warnings.length ? `<div class="happ-note">Не поддерживаются sing-box: ${warnings.map(escapeHTML).join('; ')}</div>` : ''}
+
+        <details class="happ-servers" data-id="${id}" ${serversOpen ? 'open' : ''}>
+            <summary>Список серверов</summary>
+            <table class="table">
+                <thead><tr><th>Название</th><th>Тип</th><th>Адрес</th></tr></thead>
+                <tbody>${serverRows}</tbody>
+            </table>
+        </details>
+    </div>`;
+}
+
+async function addHappProfile(event) {
+    event.preventDefault();
+
+    const urlInput = document.getElementById('happProfileUrl');
+    const nameInput = document.getElementById('happProfileName');
+    const button = document.getElementById('happAddBtn');
+
+    button.disabled = true;
+    button.textContent = 'Загружаю подписку...';
+    happBusy = true;
+
+    try {
+        const response = await fetch('/api/happ/profiles/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: urlInput.value.trim(), name: nameInput.value.trim() })
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok) throw new Error(result.error || 'Не удалось добавить подписку');
+
+        showMessage(`${result.message}. Примените его на вкладке «Конфиг».`, 'success');
+        urlInput.value = '';
+        nameInput.value = '';
+        checkPendingConfig();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Добавить';
+        happBusy = false;
+        await loadHappProfiles();
+    }
+}
+
+async function happProfileAction(action, id, button) {
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = '...';
+    happBusy = true;
+
+    try {
+        const response = await fetch(`/api/happ/profiles/${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok) throw new Error(result.error || 'Действие не выполнено');
+
+        showMessage(result.message, 'success');
+
+        if (action !== 'refresh') checkPendingConfig();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    } finally {
+        button.disabled = false;
+        button.textContent = original;
+        happBusy = false;
+        await loadHappProfiles();
+    }
+}
+
+async function deleteHappProfile(id, button) {
+    if (!confirm('Удалить подписку и её серверы из конфига?\n\nМесто устройства в подписке освободите в боте провайдера.')) return;
+
+    await happProfileAction('delete', id, button);
+}
+
+async function copyHappHwid() {
+    const hwid = document.getElementById('happHwid').textContent;
+
+    try {
+        await navigator.clipboard.writeText(hwid);
+        showMessage('HWID скопирован', 'success');
+    } catch (error) {
+        showMessage('Не удалось скопировать: ' + hwid, 'error');
     }
 }

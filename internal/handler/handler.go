@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lanfix/sing-box-configurer/internal/happ"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
@@ -23,6 +24,7 @@ type Handler struct {
 	outboundManager          *outbound.Manager
 	clashAPI                 *singboxclashapi.ClashAPI
 	trafficMonitor           *trafficmonitor.Monitor
+	happManager              *happ.Manager
 }
 
 func NewHandler(
@@ -32,6 +34,7 @@ func NewHandler(
 	outboundManager *outbound.Manager,
 	clashAPI *singboxclashapi.ClashAPI,
 	trafficMonitor *trafficmonitor.Monitor,
+	happManager *happ.Manager,
 ) *Handler {
 	return &Handler{
 		rulesManager:             rulesManager,
@@ -40,6 +43,7 @@ func NewHandler(
 		outboundManager:          outboundManager,
 		clashAPI:                 clashAPI,
 		trafficMonitor:           trafficMonitor,
+		happManager:              happManager,
 	}
 }
 

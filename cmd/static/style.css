@@ -1716,3 +1716,157 @@ body {
 .proxy-delay.d-ok { color: #d29922; }
 .proxy-delay.d-slow { color: #db6d28; }
 .proxy-delay.d-bad { color: #f85149; }
+
+
+/* Подписки Happ */
+.happ-hwid {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.happ-hwid-label {
+    color: #8b949e;
+    font-size: 13px;
+}
+
+.happ-hwid code,
+.happ-card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 3px 8px;
+    color: #e6edf3;
+    font-size: 13px;
+}
+
+.happ-profiles {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.happ-card {
+    margin-bottom: 0;
+}
+
+.happ-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.happ-card-title {
+    min-width: 0;
+}
+
+.happ-card-sub {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    color: #8b949e;
+    font-size: 13px;
+}
+
+.happ-card-sub a {
+    color: #58a6ff;
+    text-decoration: none;
+}
+
+.happ-card-sub a:hover {
+    text-decoration: underline;
+}
+
+.happ-sep {
+    color: #484f58;
+}
+
+.happ-card-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.happ-note {
+    background: rgba(88, 166, 255, 0.08);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    color: #c9d1d9;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.happ-note.is-bad {
+    background: rgba(248, 81, 73, 0.1);
+    border-color: rgba(248, 81, 73, 0.4);
+    color: #ffa198;
+}
+
+.happ-stats {
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    margin-bottom: 12px;
+}
+
+#addHappProfileForm .form-row {
+    flex-wrap: wrap;
+}
+
+#addHappProfileForm .form-group {
+    min-width: 200px;
+}
+
+.happ-date {
+    font-size: 22px;
+}
+
+.happ-meter {
+    height: 6px;
+    margin-top: 12px;
+    border-radius: 3px;
+    background: #21262d;
+    overflow: hidden;
+}
+
+.happ-meter-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: #3fb950;
+}
+
+.happ-meter-fill.is-warn { background: #d29922; }
+.happ-meter-fill.is-bad { background: #f85149; }
+
+.happ-servers summary {
+    cursor: pointer;
+    color: #8b949e;
+    font-size: 13px;
+    padding: 4px 0;
+    user-select: none;
+}
+
+.happ-servers summary:hover {
+    color: #c9d1d9;
+}
+
+.happ-servers .table {
+    margin-top: 8px;
+}
+
+@media (max-width: 700px) {
+    .happ-card-actions {
+        width: 100%;
+    }
+
+    .happ-card-actions .btn {
+        flex: 1;
+    }
+}

@@ -3,6 +3,8 @@ package outbound
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -445,6 +447,109 @@ func (m *Manager) DeleteOutbound(tag string) error {
 	}
 
 	if err := m.configManager.SaveTempConfig(newData); err != nil {
+		return fmt.Errorf("cannot save temp config: %w", err)
+	}
+
+	return nil
+}
+
+// ReplaceOutbounds заменяет во временном конфиге outbounds с тегами removeTags на outbounds из add.
+// Новые теги добавляются во все системные selector-ы (select-*), удаленные теги убираются из всех групп.
+func (m *Manager) ReplaceOutbounds(removeTags []string, add []map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	config, err := m.configManager.GetTempOrActualConfigParsed()
+	if err != nil {
+		return fmt.Errorf("cannot read config: %w", err)
+	}
+
+	outboundsList, _ := config["outbounds"].([]any)
+
+	addTags := make([]any, 0, len(add))
+
+	for _, item := range add {
+		addTags = append(addTags, item["tag"])
+	}
+
+	removeSet := make(map[any]bool, len(removeTags))
+
+	for _, tag := range removeTags {
+		removeSet[tag] = true
+	}
+
+	// Теги, которые исчезают из конфига насовсем.
+	goneSet := make(map[any]bool, len(removeTags))
+
+	for tag := range removeSet {
+		if !slices.Contains(addTags, tag) {
+			goneSet[tag] = true
+		}
+	}
+
+	kept := make([]any, 0, len(outboundsList)+len(add))
+	insertPosition := -1
+
+	for _, item := range outboundsList {
+		outboundMap, ok := item.(map[string]any)
+		if !ok {
+			kept = append(kept, item)
+
+			continue
+		}
+
+		if removeSet[outboundMap["tag"]] {
+			continue
+		}
+
+		outboundType, _ := outboundMap["type"].(string)
+		outboundTag, _ := outboundMap["tag"].(string)
+
+		if members, ok := outboundMap["outbounds"].([]any); ok {
+			members = slices.DeleteFunc(members, func(tag any) bool {
+				return removeSet[tag]
+			})
+
+			if outboundType == "selector" && strings.HasPrefix(outboundTag, "select") {
+				for _, tag := range addTags {
+					if !slices.Contains(members, tag) {
+						members = append(members, tag)
+					}
+				}
+			}
+
+			outboundMap["outbounds"] = members
+
+			if goneSet[outboundMap["default"]] {
+				delete(outboundMap, "default")
+			}
+		}
+
+		if insertPosition == -1 && (outboundType == "direct" || outboundType == "block") {
+			insertPosition = len(kept)
+		}
+
+		kept = append(kept, outboundMap)
+	}
+
+	if insertPosition == -1 {
+		insertPosition = len(kept)
+	}
+
+	newOutbounds := make([]any, 0, len(add))
+
+	for _, item := range add {
+		newOutbounds = append(newOutbounds, item)
+	}
+
+	config["outbounds"] = slices.Insert(kept, insertPosition, newOutbounds...)
+
+	newData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("cannot marshal config: %w", err)
+	}
+
+	if err = m.configManager.SaveTempConfig(newData); err != nil {
 		return fmt.Errorf("cannot save temp config: %w", err)
 	}
 

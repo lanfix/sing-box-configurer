@@ -2,16 +2,17 @@ package rules
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
 )
 
 // Rule represents a routing rule for VPN
@@ -53,8 +54,8 @@ type Group struct {
 // RulesData stores the rules and URL sources
 type RulesData struct {
 	Rules      []Rule      `json:"rules"`
-	URLSources []URLSource `json:"url_sources,omitempty"`
-	Groups     []Group     `json:"groups,omitempty"`
+	URLSources []URLSource `json:"url_sources"`
+	Groups     []Group     `json:"groups"`
 }
 
 // RuleVersion пятая версия формата правил.
@@ -71,7 +72,7 @@ type SingBoxRuleSet struct {
 type Manager struct {
 	mu               sync.RWMutex
 	data             RulesData
-	appDataPath      string
+	appData          *appdata.File
 	sourceListsProxy func(r *http.Request) (*url.URL, error)
 	urlRules         map[string]RuleSet // URL ID -> rules
 	urlRulesMu       sync.RWMutex
@@ -80,7 +81,7 @@ type Manager struct {
 	migrated         bool // флаг, что была выполнена миграция
 }
 
-func NewManager(appDataPath, sourceListsProxyUrl string) (*Manager, error) {
+func NewManager(appData *appdata.File, sourceListsProxyUrl string) (*Manager, error) {
 	var sourceListsProxy func(r *http.Request) (*url.URL, error)
 
 	if sourceListsProxyUrl != "" {
@@ -95,7 +96,7 @@ func NewManager(appDataPath, sourceListsProxyUrl string) (*Manager, error) {
 	}
 
 	return &Manager{
-		appDataPath:      appDataPath,
+		appData:          appData,
 		sourceListsProxy: sourceListsProxy,
 		urlRules:         map[string]RuleSet{},
 		cancelFuncs:      map[string]context.CancelFunc{},
@@ -118,18 +119,13 @@ func (rm *Manager) Load() error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	data, err := os.ReadFile(rm.appDataPath)
-	if err != nil {
-		if os.IsNotExist(err) {
+	var newData RulesData
+
+	if err := rm.appData.Read(&newData); err != nil {
+		if errors.Is(err, appdata.ErrNotExist) {
 			return rm.save()
 		}
 
-		return err
-	}
-
-	// Try to unmarshal into new format
-	var newData RulesData
-	if err := json.Unmarshal(data, &newData); err != nil {
 		return err
 	}
 
@@ -192,13 +188,9 @@ func (rm *Manager) WasMigrated() bool {
 	return rm.migrated
 }
 
+// save сохраняет правила, URL-источники и группы в app.json, не затрагивая данные других менеджеров.
 func (rm *Manager) save() error {
-	data, err := json.MarshalIndent(rm.data, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(rm.appDataPath, data, 0644)
+	return rm.appData.Merge(rm.data)
 }
 
 func (rm *Manager) GetRules() []Rule {
