@@ -12,12 +12,12 @@ services:
     depends_on:
       - docker-controller
 
+  # Порт docker-controller не публикуется: он доступен только конфигуратору и updater
+  # по внутренней сети compose (http://docker-controller:8081).
   docker-controller:
-    image: docker.io/lanfix/docker-controller:v0.0.1
+    image: docker.io/lanfix/docker-controller:v0.1.0
     container_name: docker-controller
     restart: always
-    ports:
-      - 8081:8081
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./docker-controller.json:/app/config.json:ro

@@ -15,6 +15,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
 	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
+	"github.com/lanfix/sing-box-configurer/internal/update"
 )
 
 type Handler struct {
@@ -25,6 +26,7 @@ type Handler struct {
 	clashAPI                 *singboxclashapi.ClashAPI
 	trafficMonitor           *trafficmonitor.Monitor
 	happManager              *happ.Manager
+	updateService            *update.Service
 }
 
 func NewHandler(
@@ -35,6 +37,7 @@ func NewHandler(
 	clashAPI *singboxclashapi.ClashAPI,
 	trafficMonitor *trafficmonitor.Monitor,
 	happManager *happ.Manager,
+	updateService *update.Service,
 ) *Handler {
 	return &Handler{
 		rulesManager:             rulesManager,
@@ -44,6 +47,7 @@ func NewHandler(
 		clashAPI:                 clashAPI,
 		trafficMonitor:           trafficMonitor,
 		happManager:              happManager,
+		updateService:            updateService,
 	}
 }
 

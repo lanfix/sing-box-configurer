@@ -95,6 +95,36 @@ func (p *Provider) GetTempOrActualConfigParsed() (map[string]any, error) {
 	return config, nil
 }
 
+// GetActualConfigParsed возвращает основной конфиг, распарсенный в map. Комментарии удаляются.
+func (p *Provider) GetActualConfigParsed() (map[string]any, error) {
+	configData, err := p.GetActualConfig()
+	if err != nil {
+		return nil, fmt.Errorf("cannot get config: %w", err)
+	}
+
+	var config map[string]any
+
+	if err = json.Unmarshal(removeComments(configData), &config); err != nil {
+		return nil, fmt.Errorf("cannot parse config json: %w", err)
+	}
+
+	return config, nil
+}
+
+// WriteActualConfig записывает основной конфиг. Файл пишется in-place, чтобы не ломать bind mount.
+func (p *Provider) WriteActualConfig(config map[string]any) error {
+	configData, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("cannot marshal config: %w", err)
+	}
+
+	if err = os.WriteFile(p.actualConfigPath, append(configData, '\n'), 0644); err != nil {
+		return fmt.Errorf("cannot write actual config: %w", err)
+	}
+
+	return nil
+}
+
 // SaveTempConfig сохраняет конфиг во временный файл без применения.
 func (p *Provider) SaveTempConfig(configData []byte) error {
 	// Валидируем JSON (с комментариями).

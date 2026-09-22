@@ -45,6 +45,26 @@ func (f *File) Read(v any) error {
 	return nil
 }
 
+// ReadRaw возвращает поля верхнего уровня файла без разбора значений.
+// Если файла нет или он пустой, возвращается ErrNotExist.
+func (f *File) ReadRaw() (map[string]json.RawMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	raw, err := f.readLocked()
+	if err != nil {
+		return nil, err
+	}
+
+	var fields map[string]json.RawMessage
+
+	if err = json.Unmarshal(raw, &fields); err != nil {
+		return nil, fmt.Errorf("cannot parse app data: %w", err)
+	}
+
+	return fields, nil
+}
+
 // Merge записывает поля верхнего уровня из v в файл, сохраняя остальные поля без изменений.
 // Поля v с omitempty и пустым значением не попадут в файл, и там останется старое значение.
 func (f *File) Merge(v any) error {
@@ -79,8 +99,21 @@ func (f *File) Merge(v any) error {
 		current[key] = value
 	}
 
+	return f.writeLocked(current)
+}
+
+// WriteRaw полностью перезаписывает файл полями fields. Поля, которых нет в fields, удаляются.
+func (f *File) WriteRaw(fields map[string]json.RawMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.writeLocked(fields)
+}
+
+// writeLocked записывает поля в файл. Вызывается под блокировкой.
+func (f *File) writeLocked(fields map[string]json.RawMessage) error {
 	// encoding/json сортирует ключи map, поэтому порядок полей в файле стабилен.
-	result, err := json.MarshalIndent(current, "", "  ")
+	result, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		return fmt.Errorf("cannot marshal app data: %w", err)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/cmd/config"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
 	"github.com/lanfix/sing-box-configurer/internal/happ"
+	"github.com/lanfix/sing-box-configurer/internal/migrations"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
 	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
@@ -21,6 +22,8 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
 	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
+	"github.com/lanfix/sing-box-configurer/internal/update"
+	"github.com/lanfix/sing-box-configurer/internal/version"
 )
 
 //go:embed all:static
@@ -30,26 +33,34 @@ func main() {
 	configPath := flag.String("config", "config.json", "Path to configuration file")
 	flag.Parse()
 
-	cfg, err := config.Read[config.AppConfig](*configPath)
+	cfg, err := config.Read(*configPath)
 	if err != nil {
 		log.Fatal(fmt.Errorf("cannot load configuration: %w", err))
 	}
 
-	log.Printf("Starting Sing-Box Configurer")
-	log.Printf("Config [%s]: %+v", *configPath, cfg)
+	log.Printf("Starting Sing-Box Configurer %s (config: %s)", version.Version, *configPath)
 
 	if cfg.AppDataPath == "" {
 		log.Fatalf("Field app_data_path required in config")
 	}
 
 	appData := appdata.NewFile(cfg.AppDataPath)
+	singBoxConfigProvider := singboxconfig.NewProvider(cfg.SingBoxConfigPath)
+
+	// Миграции выполняются до загрузки данных менеджерами. При ошибке процесс завершается,
+	// а updater по отсутствию health-ответа откатывает обновление и восстанавливает бэкап.
+	migrationResult, err := migrations.Run(appData, singBoxConfigProvider)
+	if err != nil {
+		log.Fatalf("Migrations failed: %v", err)
+	}
+
+	log.Printf("Data schema version: %d (migrated from %d, applied: %d)",
+		migrationResult.ToVersion, migrationResult.FromVersion, len(migrationResult.Applied))
 
 	rulesManager, err := rules.NewManager(appData, cfg.SourceListsProxyUrl)
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize rules manager: %w", err))
 	}
-
-	singBoxConfigProvider := singboxconfig.NewProvider(cfg.SingBoxConfigPath)
 
 	migrationPerformed := false
 
@@ -84,16 +95,11 @@ func main() {
 
 	rulesManager.StartAllURLSourceUpdates()
 
-	dockerControllerProvider := dockercontroller.NewProvider(cfg.DockerControllerURL)
+	dockerControllerProvider := dockercontroller.NewProvider(cfg.DockerControllerURL, cfg.DockerControllerAPIKey)
 
 	outboundManager := outbound.NewManager(singBoxConfigProvider)
 
-	clashAPIBaseURL := cfg.ClashAPIBaseURL
-	if clashAPIBaseURL == "" {
-		clashAPIBaseURL = "http://127.0.0.1:9090"
-	}
-
-	clashAPI := singboxclashapi.NewClashAPI(clashAPIBaseURL, cfg.ClashAPISecret)
+	clashAPI := singboxclashapi.NewClashAPI(cfg.ClashAPIBaseURL, cfg.ClashAPISecret)
 
 	// Окно на 60 измерений — Clash API отдаёт скорость раз в секунду.
 	trafficMonitor := trafficmonitor.New(clashAPI, 60)
@@ -109,7 +115,9 @@ func main() {
 	happManager := happ.NewManager(happStore, happ.NewClient(), outboundManager)
 	happManager.Start(context.Background())
 
-	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager, clashAPI, trafficMonitor, happManager)
+	updateService := update.NewService(dockerControllerProvider, update.NewRegistry(), singBoxConfigProvider, cfg.ListenAddr)
+
+	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager, clashAPI, trafficMonitor, happManager, updateService)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -139,6 +147,8 @@ func main() {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		http.ServeContent(w, r, "index.html", time.Time{}, data.(io.ReadSeeker))
 	})
+
+	http.HandleFunc("/api/health", handler.Health(migrationResult))
 
 	http.HandleFunc("/api/rules", h.GetRules)
 	http.HandleFunc("/api/rules/add", h.AddRule)
@@ -181,6 +191,10 @@ func main() {
 	http.HandleFunc("/api/outbounds", h.GetOutbounds)
 	http.HandleFunc("/api/outbounds/add", h.AddOutbound)
 	http.HandleFunc("/api/outbounds/delete", h.DeleteOutbound)
+
+	http.HandleFunc("/api/update/check", h.CheckUpdates)
+	http.HandleFunc("/api/update/start", h.StartUpdate)
+	http.HandleFunc("/api/update/status", h.UpdateStatus)
 
 	http.HandleFunc("/api/happ/profiles", h.GetHappProfiles)
 	http.HandleFunc("/api/happ/profiles/add", h.AddHappProfile)

@@ -3038,6 +3038,7 @@ function initOverviewInteractions() {
 initOverviewInteractions();
 checkPendingConfig();
 restoreActiveTab();
+initUpdates();
 
 // ============================================================================
 // Outbounds Management
@@ -3612,4 +3613,288 @@ async function copyHappHwid() {
     } catch (error) {
         showMessage('Не удалось скопировать: ' + hwid, 'error');
     }
+}
+
+// ============================================================================
+// Updates
+// ============================================================================
+
+const UPDATE_STEP_TITLES = {
+    'start': 'Запуск',
+    'prepare': 'Проверка',
+    'pull': 'Загрузка образов',
+    'update-controller': 'Обновление docker-controller',
+    'backup': 'Резервная копия',
+    'update-configurer': 'Обновление конфигуратора',
+    'update-compose': 'Обновление compose-файла',
+    'commit': 'Завершение',
+    'rollback': 'Откат',
+};
+
+const updateState = {
+    check: null,           // Результат /api/update/check
+    status: null,          // Результат /api/update/status
+    polling: null,         // Таймер опроса статуса
+    serviceDown: false,    // Сервис недоступен (перезапускается во время обновления)
+    loadedVersion: null,   // Версия, с которой загружена страница
+};
+
+async function initUpdates() {
+    await checkUpdates(false);
+    await refreshUpdateStatus();
+
+    // Если обновление уже идет (например, страницу перезагрузили), продолжаем следить за ним.
+    if (updateState.status && updateState.status.running) {
+        startUpdatePolling();
+    }
+}
+
+async function checkUpdates(force) {
+    const button = document.getElementById('updateCheckBtn');
+    const panel = document.getElementById('updatePanel');
+
+    if (button) button.disabled = true;
+    if (panel) panel.classList.add('is-loading');
+
+    try {
+        const response = await fetch(`/api/update/check${force ? '?force=true' : ''}`);
+        if (!response.ok) throw new Error(await response.text());
+
+        updateState.check = await response.json();
+
+        if (!updateState.loadedVersion) {
+            updateState.loadedVersion = updateState.check.current_version;
+        }
+    } catch (error) {
+        updateState.check = { error: error.message, available: [] };
+    } finally {
+        if (button) button.disabled = false;
+        if (panel) panel.classList.remove('is-loading');
+        renderUpdatePanel();
+    }
+}
+
+async function refreshUpdateStatus() {
+    try {
+        const response = await fetch('/api/update/status');
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) throw new Error(data.error || 'Не удалось получить статус');
+
+        updateState.status = data;
+        updateState.serviceDown = false;
+    } catch (error) {
+        // Во время обновления конфигуратор перезапускается — это ожидаемо.
+        if (updateState.polling) {
+            updateState.serviceDown = true;
+        } else {
+            updateState.status = { exists: false, error_fetch: error.message };
+        }
+    }
+
+    renderUpdatePanel();
+}
+
+function startUpdatePolling() {
+    if (updateState.polling) return;
+
+    updateState.polling = setInterval(async () => {
+        await refreshUpdateStatus();
+
+        const status = updateState.status;
+
+        if (!updateState.serviceDown && status && status.exists && !status.running && status.result) {
+            stopUpdatePolling();
+            onUpdateFinished(status);
+        }
+    }, 2000);
+}
+
+function stopUpdatePolling() {
+    clearInterval(updateState.polling);
+    updateState.polling = null;
+}
+
+async function onUpdateFinished(status) {
+    if (status.result === 'succeeded') {
+        showMessage(`✅ Обновлено до ${status.to_version}`, 'success');
+    } else if (status.result === 'rolled_back') {
+        showMessage('⚠️ Обновление не удалось, выполнен откат на прежнюю версию', 'error');
+    } else {
+        showMessage('❌ Обновление завершилось ошибкой', 'error');
+    }
+
+    await checkUpdates(true);
+
+    // Новая версия отдает новую статику — перезагружаем страницу.
+    if (updateState.check && updateState.check.current_version !== updateState.loadedVersion) {
+        setTimeout(() => window.location.reload(), 3000);
+    }
+}
+
+async function startUpdate() {
+    const select = document.getElementById('updateVersionSelect');
+    const version = select ? select.value : '';
+
+    if (!version) return;
+
+    const current = updateState.check ? updateState.check.current_version : '';
+
+    if (!confirm(`Обновить ${current} → ${version}?\n\nВеб-интерфейс будет недоступен несколько секунд. sing-box продолжит работать.\nПри ошибке обновление откатится автоматически.`)) {
+        return;
+    }
+
+    const button = document.getElementById('updateStartBtn');
+    if (button) button.disabled = true;
+
+    try {
+        const response = await fetch('/api/update/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ version })
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok) throw new Error(result.error || 'Не удалось запустить обновление');
+
+        updateState.status = result;
+        showMessage(`Обновление до ${version} запущено`, 'success');
+        startUpdatePolling();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    } finally {
+        if (button) button.disabled = false;
+        renderUpdatePanel();
+    }
+}
+
+function renderUpdatePanel() {
+    const check = updateState.check || {};
+    const status = updateState.status || {};
+    const summary = document.getElementById('updateSummary');
+    const body = document.getElementById('updateBody');
+    const versionLabel = document.getElementById('appVersion');
+    const badge = document.getElementById('updateTabBadge');
+
+    if (versionLabel && check.current_version) {
+        versionLabel.textContent = check.current_version;
+    }
+
+    const available = check.available || [];
+    const inProgress = Boolean(updateState.polling) || Boolean(status.running);
+
+    if (badge) {
+        badge.style.display = available.length > 0 && !inProgress ? 'inline-block' : 'none';
+    }
+
+    if (!summary || !body) return;
+
+    // Сводка.
+    if (inProgress) {
+        summary.textContent = updateState.serviceDown
+            ? 'Идёт обновление: сервис перезапускается...'
+            : `Идёт обновление до ${status.target || status.to_version || ''}...`;
+    } else if (check.error) {
+        summary.textContent = `Текущая версия ${check.current_version || '—'}. Не удалось проверить обновления: ${check.error}`;
+    } else if (available.length > 0) {
+        summary.textContent = `Текущая версия ${check.current_version}. Доступна ${check.latest_version}.`;
+    } else if (check.current_version) {
+        summary.textContent = `Текущая версия ${check.current_version} — последняя.`;
+    }
+
+    let html = '';
+
+    // Выбор версии и запуск.
+    if (available.length > 0 && !inProgress) {
+        const options = available.map((release, i) =>
+            `<option value="${escapeHTML(release.version)}">${escapeHTML(release.version)}${i === 0 ? ' (последняя)' : ''}</option>`
+        ).join('');
+
+        html += `
+            <div class="update-actions">
+                <select class="form-select" id="updateVersionSelect" onchange="renderUpdateChangelog()">${options}</select>
+                <button class="btn btn-warning" id="updateStartBtn" onclick="startUpdate()">Обновить</button>
+            </div>
+            <div id="updateChangelog"></div>`;
+    }
+
+    // Прогресс или результат последнего обновления.
+    if (status.exists) {
+        html += renderUpdateStatus(status, inProgress);
+    }
+
+    // Сохраняем выбранную версию между перерисовками.
+    const previous = document.getElementById('updateVersionSelect');
+    const selected = previous ? previous.value : null;
+
+    body.innerHTML = html;
+
+    const select = document.getElementById('updateVersionSelect');
+
+    if (select && selected && [...select.options].some(o => o.value === selected)) {
+        select.value = selected;
+    }
+
+    renderUpdateChangelog();
+}
+
+function renderUpdateChangelog() {
+    const container = document.getElementById('updateChangelog');
+    const select = document.getElementById('updateVersionSelect');
+
+    if (!container || !select) return;
+
+    // Показываем изменения всех версий от текущей до выбранной.
+    const available = (updateState.check && updateState.check.available) || [];
+    const index = available.findIndex(r => r.version === select.value);
+    const releases = available.slice(index).filter(r => r.changelog);
+
+    if (releases.length === 0) {
+        container.innerHTML = '<p class="card-hint" style="margin: 12px 0 0;">Список изменений не указан.</p>';
+        return;
+    }
+
+    container.innerHTML = releases.map(r => `
+        <div class="update-changelog">
+            <div class="update-changelog-version">${escapeHTML(r.version)}</div>
+            <pre>${escapeHTML(r.changelog)}</pre>
+        </div>`).join('');
+}
+
+function renderUpdateStatus(status, inProgress) {
+    const results = {
+        'succeeded': { dot: 'is-good', text: `Обновлено ${status.from_version} → ${status.to_version}` },
+        'rolled_back': { dot: 'is-warn', text: `Обновление до ${status.to_version || status.target} не удалось, выполнен откат` },
+        'failed': { dot: 'is-bad', text: `Обновление до ${status.to_version || status.target} завершилось ошибкой` },
+    };
+
+    const header = inProgress
+        ? { dot: 'is-warn', text: `Обновление до ${status.target} выполняется` }
+        : (results[status.result] || { dot: '', text: 'Последнее обновление' });
+
+    const steps = (status.steps || []).map(step => {
+        const time = step.time ? new Date(step.time).toLocaleTimeString('ru-RU') : '';
+        const level = step.level === 'ERROR' ? 'is-bad' : step.level === 'WARN' ? 'is-warn' : '';
+
+        return `
+            <div class="update-step ${level}">
+                <span class="update-step-time">${escapeHTML(time)}</span>
+                <span class="update-step-name">${escapeHTML(UPDATE_STEP_TITLES[step.step] || step.step || '')}</span>
+                <span class="update-step-msg">${escapeHTML(step.message)}${step.error ? `<br><span class="update-step-error">${escapeHTML(step.error)}</span>` : ''}</span>
+            </div>`;
+    }).join('');
+
+    return `
+        <div class="update-status">
+            <div class="update-status-head">
+                <span class="stat-dot ${header.dot}"></span>
+                <span>${escapeHTML(header.text)}</span>
+                ${status.finished_at && !inProgress && !status.finished_at.startsWith('0001') ? `<span class="happ-sep">·</span><span class="card-hint">${escapeHTML(new Date(status.finished_at).toLocaleString('ru-RU'))}</span>` : ''}
+            </div>
+            ${status.error ? `<pre class="update-error">${escapeHTML(status.error)}</pre>` : ''}
+            <details class="happ-servers" ${inProgress ? 'open' : ''}>
+                <summary>Журнал обновления</summary>
+                <div class="update-steps">${steps || '<span class="card-hint">Пока пусто</span>'}</div>
+            </details>
+        </div>`;
 }

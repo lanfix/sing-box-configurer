@@ -19,7 +19,7 @@
                 </div>
                 <div class="logo-text">
                     <span class="title">Sing-Box</span>
-                    <span class="subtitle">Configurer</span>
+                    <span class="subtitle">Configurer <span id="appVersion"></span></span>
                 </div>
             </div>
             <nav class="nav-menu">
@@ -87,6 +87,7 @@
                         </svg>
                     </div>
                     <span>Управление</span>
+                    <span id="updateTabBadge" class="badge-pending" style="display: none;" title="Доступно обновление"></span>
                 </div>
             </nav>
         </aside>
@@ -469,6 +470,18 @@
 
                 <!-- Control Tab -->
                 <div id="control-tab" class="tab-content">
+                    <div class="add-form-card has-progress" id="updatePanel">
+                        <div class="progress-line"></div>
+                        <div class="update-head">
+                            <div>
+                                <div class="form-header" style="margin-bottom: 4px;">Обновление</div>
+                                <p class="card-hint" style="margin: 0;" id="updateSummary">Проверяю версии...</p>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" id="updateCheckBtn" onclick="checkUpdates(true)">Проверить</button>
+                        </div>
+                        <div id="updateBody"></div>
+                    </div>
+
                     <div class="add-form-card has-progress" id="clashPanel">
                         <div class="progress-line"></div>
                         <div class="form-header" style="margin-bottom: 4px;">Прокси-группы</div>
