@@ -203,6 +203,11 @@ func (p *Provider) SyncGroupsToConfig(configPath string, groups []Group) error {
 		ensureServiceRules(route)
 	}
 
+	// Исключения синхронизируются последними: их правило должно стоять перед служебными.
+	if err = EnsureBypass(config); err != nil {
+		return fmt.Errorf("cannot sync bypass: %w", err)
+	}
+
 	configData, err = json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("cannot marshal config: %w", err)

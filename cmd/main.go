@@ -171,6 +171,7 @@ func main() {
 	http.HandleFunc("/api/apply", h.ApplyRules)
 	http.HandleFunc("/api/ruleset", h.GetRuleSet)
 	http.HandleFunc("/api/ruleset/group", h.GetRuleSetByGroup)
+	http.HandleFunc("/api/ruleset/bypass", h.GetBypassRuleSet)
 
 	http.HandleFunc("/api/groups", h.GetGroups)
 	http.HandleFunc("/api/groups/add", h.AddGroup)

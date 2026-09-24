@@ -21,7 +21,8 @@ type Rule struct {
 	Type        string    `json:"type"` // "domain", "domain_suffix", "ip", "cidr"
 	Value       string    `json:"value"`
 	Description string    `json:"description"`
-	Group       string    `json:"group"` // группа, к которой привязано правило
+	Group       string    `json:"group"`  // группа, к которой привязано правило
+	Bypass      bool      `json:"bypass"` // правило исключает трафик из туннелирования sing-box
 	Applied     bool      `json:"applied"`
 	Deleted     bool      `json:"deleted"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -33,6 +34,7 @@ type URLSource struct {
 	URL         string    `json:"url"`
 	Description string    `json:"description"`
 	Group       string    `json:"group"`    // группа, к которой привязан источник
+	Bypass      bool      `json:"bypass"`   // правила источника исключают трафик из туннелирования sing-box
 	Interval    int       `json:"interval"` // in minutes
 	LastUpdate  time.Time `json:"last_update"`
 	LastStatus  string    `json:"last_status"` // "success", "error"
@@ -57,6 +59,10 @@ type RulesData struct {
 	URLSources []URLSource `json:"url_sources"`
 	Groups     []Group     `json:"groups"`
 }
+
+// ReservedGroupName — имя группы, которое нельзя занять: rule-set исключений из туннелирования
+// использует тег, который совпал бы с тегом группы с таким именем.
+const ReservedGroupName = "bypass"
 
 // RuleVersion пятая версия формата правил.
 // https://sing-box.sagernet.org/configuration/rule-set/source-format/#version
@@ -239,7 +245,7 @@ type BulkAddFailure struct {
 
 // AddRuleBulk добавляет несколько правил одновременно.
 func (rm *Manager) AddRuleBulk(
-	ruleType, values, description, group string,
+	ruleType, values, description, group string, bypass bool,
 ) (*BulkAddResult, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -272,6 +278,7 @@ func (rm *Manager) AddRuleBulk(
 			Value:       line,
 			Description: description,
 			Group:       group,
+			Bypass:      bypass,
 			Applied:     false,
 			CreatedAt:   time.Now(),
 		}
@@ -301,7 +308,7 @@ func (rm *Manager) AddRuleBulk(
 }
 
 // EditRule обновляет параметры правила.
-func (rm *Manager) EditRule(id string, description string, group string) error {
+func (rm *Manager) EditRule(id string, description string, group string, bypass bool) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -317,6 +324,7 @@ func (rm *Manager) EditRule(id string, description string, group string) error {
 		if rm.data.Rules[i].ID == id {
 			rm.data.Rules[i].Description = description
 			rm.data.Rules[i].Group = group
+			rm.data.Rules[i].Bypass = bypass
 			found = true
 
 			break
@@ -380,6 +388,7 @@ func (rm *Manager) GetRuleSet() SingBoxRuleSet {
 }
 
 // GetRuleSetByGroup возвращает набор правил для указанной группы.
+// Правила и источники, исключенные из туннелирования, в него не попадают.
 func (rm *Manager) GetRuleSetByGroup(groupName string) SingBoxRuleSet {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
@@ -387,73 +396,90 @@ func (rm *Manager) GetRuleSetByGroup(groupName string) SingBoxRuleSet {
 	return rm.getRuleSetByGroupLocked(groupName)
 }
 
+// GetBypassRuleSet возвращает набор правил, исключенных из туннелирования, из всех групп.
+func (rm *Manager) GetBypassRuleSet() SingBoxRuleSet {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	return rm.getRuleSetLocked(func(_ string, bypass bool) bool {
+		return bypass
+	})
+}
+
 // getRuleSetByGroupLocked возвращает набор правил для указанной группы (без блокировки).
 func (rm *Manager) getRuleSetByGroupLocked(groupName string) SingBoxRuleSet {
-	// Build rule set from applied rules only
-	var rules []map[string]interface{}
+	return rm.getRuleSetLocked(func(group string, bypass bool) bool {
+		return !bypass && group == groupName
+	})
+}
 
-	// Collect all applied rules by type
-	var domains []string
-	var domainSuffixes []string
-	var ipCidrs []string
+// getRuleSetLocked собирает набор из примененных правил и источников, для которых match
+// возвращает true (без блокировки).
+func (rm *Manager) getRuleSetLocked(match func(group string, bypass bool) bool) SingBoxRuleSet {
+	rules := make([]map[string]any, 0, 1)
 
-	// Создаем карту для отслеживания конфликтов между ручными и автоматическими правилами.
+	var (
+		domains        []string
+		domainSuffixes []string
+		ipCidrs        []string
+	)
+
+	// Карты ручных правил для отсечения конфликтующих значений из источников.
 	manualDomains := make(map[string]bool)
 	manualSuffixes := make(map[string]bool)
 
-	// Add manual rules (only applied rules, including those marked for deletion)
+	// Правила, помеченные на удаление, но примененные, остаются в наборе до применения изменений.
 	for _, rule := range rm.data.Rules {
-		// Skip only unapplied rules and rules from other groups
-		// Rules marked as Deleted but Applied should still be included until changes are applied
-		if !rule.Applied || rule.Group != groupName {
+		if !rule.Applied || !match(rule.Group, rule.Bypass) {
 			continue
 		}
 
-		// Add applied rule to corresponding list
 		switch rule.Type {
 		case "domain":
 			domains = append(domains, rule.Value)
 			manualDomains[rule.Value] = true
+
 		case "domain_suffix":
 			domainSuffixes = append(domainSuffixes, rule.Value)
 			manualSuffixes[rule.Value] = true
+
 		case "ip", "cidr":
 			ipCidrs = append(ipCidrs, rule.Value)
 		}
 	}
 
-	// Add URL source rules (from memory, only for applied sources)
-	// Sources marked as Deleted but Applied should still be included until changes are applied
+	// Источники, помеченные на удаление, но примененные, также остаются в наборе.
 	rm.urlRulesMu.RLock()
 
-	for sourceID, ruleSet := range rm.urlRules {
-		for _, source := range rm.data.URLSources {
-			if source.ID == sourceID && source.Applied && source.Group == groupName {
-				// Добавляем IP/CIDR без проверки конфликтов.
-				ipCidrs = append(ipCidrs, ruleSet.CidrList...)
+	for _, source := range rm.data.URLSources {
+		if !source.Applied || !match(source.Group, source.Bypass) {
+			continue
+		}
 
-				// Проверяем конфликты для доменов.
-				for _, domain := range ruleSet.Domains {
-					if !manualDomains[domain] && !hasConflictWithManualRules(domain, "domain", manualDomains, manualSuffixes) {
-						domains = append(domains, domain)
-					}
-				}
+		ruleSet, ok := rm.urlRules[source.ID]
+		if !ok {
+			continue
+		}
 
-				// Проверяем конфликты для суффиксов.
-				for _, suffix := range ruleSet.DomainSuffixes {
-					if !manualSuffixes[suffix] && !hasConflictWithManualRules(suffix, "domain_suffix", manualDomains, manualSuffixes) {
-						domainSuffixes = append(domainSuffixes, suffix)
-					}
-				}
+		// IP/CIDR добавляем без проверки конфликтов.
+		ipCidrs = append(ipCidrs, ruleSet.CidrList...)
 
-				break
+		for _, domain := range ruleSet.Domains {
+			if !manualDomains[domain] && !hasConflictWithManualRules(domain, "domain", manualDomains, manualSuffixes) {
+				domains = append(domains, domain)
+			}
+		}
+
+		for _, suffix := range ruleSet.DomainSuffixes {
+			if !manualSuffixes[suffix] && !hasConflictWithManualRules(suffix, "domain_suffix", manualDomains, manualSuffixes) {
+				domainSuffixes = append(domainSuffixes, suffix)
 			}
 		}
 	}
 
 	rm.urlRulesMu.RUnlock()
 
-	// Create a single rule with all values
+	// Все значения собираются в одно правило.
 	if len(domains) > 0 || len(domainSuffixes) > 0 || len(ipCidrs) > 0 {
 		rule := map[string]any{}
 
@@ -534,6 +560,10 @@ func (rm *Manager) GetGroups() []Group {
 func (rm *Manager) AddGroup(group Group) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
+
+	if group.Name == ReservedGroupName {
+		return fmt.Errorf("имя группы %s зарезервировано", group.Name)
+	}
 
 	// Проверяем, что группа с таким именем не существует.
 	for _, g := range rm.data.Groups {

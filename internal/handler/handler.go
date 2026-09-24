@@ -84,6 +84,7 @@ func (h *Handler) AddRule(w http.ResponseWriter, r *http.Request) {
 		Value       string `json:"value"`
 		Description string `json:"description"`
 		Group       string `json:"group"`
+		Bypass      bool   `json:"bypass"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -112,6 +113,7 @@ func (h *Handler) AddRule(w http.ResponseWriter, r *http.Request) {
 		Value:       req.Value,
 		Description: req.Description,
 		Group:       req.Group,
+		Bypass:      req.Bypass,
 	}
 
 	if err := h.rulesManager.AddRule(rule); err != nil {
@@ -139,6 +141,7 @@ func (h *Handler) AddRuleBulk(w http.ResponseWriter, r *http.Request) {
 		Values      string `json:"values"`
 		Description string `json:"description"`
 		Group       string `json:"group"`
+		Bypass      bool   `json:"bypass"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -160,7 +163,7 @@ func (h *Handler) AddRuleBulk(w http.ResponseWriter, r *http.Request) {
 		req.Group = "default"
 	}
 
-	result, err := h.rulesManager.AddRuleBulk(req.Type, req.Values, req.Description, req.Group)
+	result, err := h.rulesManager.AddRuleBulk(req.Type, req.Values, req.Description, req.Group, req.Bypass)
 	if err != nil {
 		log.Printf("Error in bulk add: %v", err)
 		http.Error(w, "Failed to process bulk add: "+err.Error(), http.StatusBadRequest)
@@ -214,6 +217,7 @@ func (h *Handler) EditRule(w http.ResponseWriter, r *http.Request) {
 		ID          string `json:"id"`
 		Description string `json:"description"`
 		Group       string `json:"group"`
+		Bypass      bool   `json:"bypass"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -231,7 +235,7 @@ func (h *Handler) EditRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.rulesManager.EditRule(req.ID, req.Description, req.Group); err != nil {
+	if err := h.rulesManager.EditRule(req.ID, req.Description, req.Group, req.Bypass); err != nil {
 		log.Printf("Error editing rule: %v", err)
 		http.Error(w, "Failed to edit rule: "+err.Error(), http.StatusBadRequest)
 		return
@@ -292,6 +296,17 @@ func (h *Handler) GetRuleSetByGroup(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ruleSet)
+}
+
+// GetBypassRuleSet возвращает ruleset правил, исключенных из туннелирования sing-box.
+func (h *Handler) GetBypassRuleSet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, h.rulesManager.GetBypassRuleSet())
 }
 
 // GetGroups возвращает список всех групп.
@@ -446,6 +461,7 @@ func (h *Handler) AddURLSource(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 		Interval    int    `json:"interval"`
 		Group       string `json:"group"`
+		Bypass      bool   `json:"bypass"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -473,6 +489,7 @@ func (h *Handler) AddURLSource(w http.ResponseWriter, r *http.Request) {
 		Description: req.Description,
 		Interval:    req.Interval,
 		Group:       req.Group,
+		Bypass:      req.Bypass,
 	}
 
 	if err := h.rulesManager.AddURLSource(source); err != nil {
@@ -574,6 +591,7 @@ func (h *Handler) EditURLSource(w http.ResponseWriter, r *http.Request) {
 		ID          string `json:"id"`
 		Description string `json:"description"`
 		Group       string `json:"group"`
+		Bypass      bool   `json:"bypass"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -591,7 +609,7 @@ func (h *Handler) EditURLSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.rulesManager.EditURLSource(req.ID, req.Description, req.Group); err != nil {
+	if err := h.rulesManager.EditURLSource(req.ID, req.Description, req.Group, req.Bypass); err != nil {
 		log.Printf("Error editing URL source: %v", err)
 		http.Error(w, "Failed to edit URL source: "+err.Error(), http.StatusBadRequest)
 		return

@@ -35,6 +35,10 @@ func (p *Provider) SyncSingleGroup(group Group, allGroups []Group) error {
 		return fmt.Errorf("cannot sync group: %w", err)
 	}
 
+	if err = EnsureBypass(config); err != nil {
+		return fmt.Errorf("cannot sync bypass: %w", err)
+	}
+
 	// Сохраняем конфиг обратно.
 	configData, err = json.MarshalIndent(config, "", "  ")
 	if err != nil {

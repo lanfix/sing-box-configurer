@@ -26,7 +26,8 @@
         "domain_resolver": "yandex"
       }
     ],
-    "strategy": "ipv4_only"
+    "strategy": "ipv4_only",
+    "reverse_mapping": true
   },
   "experimental": {
     "clash_api": {
@@ -49,7 +50,10 @@
       "interface_name": "tun0",
       "auto_redirect": true,
       "stack": "system",
-      "mtu": 1420
+      "mtu": 1420,
+      "route_exclude_address_set": [
+        "configurer-bypass"
+      ]
     },
     {
       "type": "mixed",
@@ -102,6 +106,10 @@
     "final": "select-default",
     "rules": [
       {
+        "action": "bypass",
+        "rule_set": "configurer-bypass"
+      },
+      {
         "action": "sniff"
       },
       {
@@ -127,6 +135,16 @@
         "type": "remote",
         "format": "source",
         "url": "http://127.0.0.1:8080/api/ruleset",
+        "update_interval": "30s",
+        "http_client": {
+          "tag": "default_http_client"
+        }
+      },
+      {
+        "tag": "configurer-bypass",
+        "type": "remote",
+        "format": "source",
+        "url": "http://127.0.0.1:8080/api/ruleset/bypass",
         "update_interval": "30s",
         "http_client": {
           "tag": "default_http_client"

@@ -473,7 +473,7 @@ function displayRules(rules) {
                     ${rule.deleted ? 'К удалению' : (rule.applied ? 'Применено' : 'Ожидает')}
                 </span>
             </td>
-            <td><span class="badge badge-group">${escapeHTML(rule.group || 'default')}</span></td>
+            <td>${groupBadge(rule)}</td>
             <td><span class="badge badge-${escapeHTML(rule.type)}">${getTypeLabel(rule.type)}</span></td>
             <td><code>${escapeHTML(rule.value)}</code></td>
             <td class="description-cell">${escapeHTML(rule.description || '')}</td>
@@ -487,6 +487,26 @@ function displayRules(rules) {
             </td>
         </tr>
     `).join('');
+}
+
+// Бейдж группы; для исключений из туннелирования группа не используется.
+function groupBadge(item) {
+    if (item.bypass) {
+        return '<span class="badge badge-bypass" title="sing-box не перехватывает этот трафик">мимо туннеля</span>';
+    }
+
+    return `<span class="badge badge-group">${escapeHTML(item.group || 'default')}</span>`;
+}
+
+// Чекбокс исключения из туннелирования для модальных окон редактирования.
+function bypassCheckbox(id, checked) {
+    return `
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} style="cursor: pointer;">
+                            <span>Мимо туннеля (sing-box не будет перехватывать трафик, группа не используется)</span>
+                        </label>
+                    </div>`;
 }
 
 function getTypeLabel(type) {
@@ -516,6 +536,7 @@ async function addRuleSingle(event) {
     const value = document.getElementById('ruleValue').value;
     const description = document.getElementById('ruleDescription').value;
     const group = document.getElementById('ruleGroup').value;
+    const bypass = document.getElementById('ruleBypass').checked;
 
     try {
         const response = await fetch('/api/rules/add', {
@@ -523,7 +544,7 @@ async function addRuleSingle(event) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ type, value, description, group })
+            body: JSON.stringify({ type, value, description, group, bypass })
         });
 
         if (!response.ok) {
@@ -545,6 +566,7 @@ async function addRuleBulk(event) {
     const values = document.getElementById('ruleBulkValues').value;
     const description = document.getElementById('ruleDescription').value;
     const group = document.getElementById('ruleGroup').value;
+    const bypass = document.getElementById('ruleBypass').checked;
 
     if (!values.trim()) {
         showMessage('Введите хотя бы одно значение', 'error');
@@ -557,7 +579,7 @@ async function addRuleBulk(event) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ type, values, description, group })
+            body: JSON.stringify({ type, values, description, group, bypass })
         });
 
         if (!response.ok) {
@@ -664,6 +686,7 @@ async function editRule(rule) {
                         <label class="form-label" for="editRuleDescription">Описание</label>
                         <textarea class="form-textarea" id="editRuleDescription">${escapeHTML(rule.description || '')}</textarea>
                     </div>
+                    ${bypassCheckbox('editRuleBypass', rule.bypass)}
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Отмена</button>
                         <button type="submit" class="btn btn-primary">Сохранить</button>
@@ -680,6 +703,7 @@ async function submitEditRule(event, id) {
 
     const group = document.getElementById('editRuleGroup').value;
     const description = document.getElementById('editRuleDescription').value;
+    const bypass = document.getElementById('editRuleBypass').checked;
 
     try {
         const response = await fetch('/api/rules/edit', {
@@ -688,9 +712,10 @@ async function submitEditRule(event, id) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ 
-                id, 
+                id,
                 group,
-                description
+                description,
+                bypass
             })
         });
 
@@ -776,7 +801,7 @@ function displayURLSources(sources) {
                     </div>
                     ${source.last_error ? `<div class="source-error" title="${escapeHTML(source.last_error)}">${escapeHTML(source.last_error)}</div>` : ''}
                 </td>
-                <td><span class="badge badge-group">${escapeHTML(source.group || 'default')}</span></td>
+                <td>${groupBadge(source)}</td>
                 <td class="url-cell" title="${url}">${url}</td>
                 <td class="description-cell">${escapeHTML(source.description || '')}</td>
                 <td>${escapeHTML(source.interval)} мин</td>
@@ -837,6 +862,7 @@ async function addURLSource(event) {
     const interval = parseInt(document.getElementById('urlSourceInterval').value, 10);
     const description = document.getElementById('urlSourceDescription').value;
     const group = document.getElementById('urlSourceGroup').value;
+    const bypass = document.getElementById('urlSourceBypass').checked;
 
     try {
         const response = await fetch('/api/url-sources/add', {
@@ -844,7 +870,7 @@ async function addURLSource(event) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ url, interval, description, group })
+            body: JSON.stringify({ url, interval, description, group, bypass })
         });
 
         if (!response.ok) {
@@ -939,6 +965,7 @@ async function editURLSource(source) {
                         <label class="form-label" for="editURLSourceDescription">Описание</label>
                         <textarea class="form-textarea" id="editURLSourceDescription">${escapeHTML(source.description || '')}</textarea>
                     </div>
+                    ${bypassCheckbox('editURLSourceBypass', source.bypass)}
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Отмена</button>
                         <button type="submit" class="btn btn-primary">Сохранить</button>
@@ -955,6 +982,7 @@ async function submitEditURLSource(event, id) {
 
     const group = document.getElementById('editURLSourceGroup').value;
     const description = document.getElementById('editURLSourceDescription').value;
+    const bypass = document.getElementById('editURLSourceBypass').checked;
 
     try {
         const response = await fetch('/api/url-sources/edit', {
@@ -963,9 +991,10 @@ async function submitEditURLSource(event, id) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ 
-                id, 
+                id,
                 group,
-                description
+                description,
+                bypass
             })
         });
 

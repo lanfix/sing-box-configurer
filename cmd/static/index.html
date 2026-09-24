@@ -197,6 +197,13 @@
                                         <span>Массовое добавление</span>
                                     </label>
                                 </div>
+                                <div class="form-group">
+                                    <label class="form-label">Туннелирование</label>
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;" title="sing-box не будет перехватывать трафик: IP исключаются в nftables, домены — по DNS-ответам sing-box. Группа при этом не используется.">
+                                        <input type="checkbox" id="ruleBypass" style="cursor: pointer;">
+                                        <span style="white-space: nowrap;">Мимо туннеля</span>
+                                    </label>
+                                </div>
                             </div>
                             <div class="form-row" id="singleValueRow">
                                 <div class="form-group" style="flex: 1;">
@@ -262,6 +269,13 @@
                                 <div class="form-group">
                                     <label class="form-label" for="urlSourceInterval">Интервал (мин)</label>
                                     <input class="form-input" type="number" id="urlSourceInterval" placeholder="60" min="1" value="60" required>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Туннелирование</label>
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;" title="sing-box не будет перехватывать трафик: IP исключаются в nftables, домены — по DNS-ответам sing-box. Группа при этом не используется.">
+                                        <input type="checkbox" id="urlSourceBypass" style="cursor: pointer;">
+                                        <span style="white-space: nowrap;">Мимо туннеля</span>
+                                    </label>
                                 </div>
                             </div>
                             <div class="form-row">
