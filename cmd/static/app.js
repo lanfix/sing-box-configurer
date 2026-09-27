@@ -57,6 +57,8 @@ function activateTab(tabName) {
         autoRefreshInterval = setInterval(loadURLSources, 5000);
     } else if (tabName === 'groups') {
         loadGroups();
+    } else if (tabName === 'dns-records') {
+        loadDNSRecords();
     } else if (tabName === 'outbounds') {
         loadOutbounds();
     } else if (tabName === 'happ') {
@@ -91,6 +93,7 @@ function updateTopBar(tabName) {
         'rules': 'Правила маршрутизации',
         'url-sources': 'URL Источники',
         'groups': 'Группы',
+        'dns-records': 'DNS-записи',
         'outbounds': 'Outbounds',
         'happ': 'Подписки',
         'config': 'Конфигурация',
@@ -455,6 +458,205 @@ function displayGroupSyncWarnings(statuses) {
             </div>
         `;
     }).join('');
+}
+
+// DNS records
+
+let dnsRecords = [];
+
+// Разбирает список IP-адресов, разделенных запятыми или пробелами.
+function parseAddresses(value) {
+    return value.split(/[\s,;]+/).map(v => v.trim()).filter(v => v !== '');
+}
+
+async function loadDNSRecords() {
+    try {
+        const response = await fetch('/api/dns-records');
+        const data = await response.json();
+        dnsRecords = data.records || [];
+        displayDNSRecords(dnsRecords);
+        checkDNSRecordsSync();
+    } catch (error) {
+        showMessage('Ошибка загрузки DNS-записей: ' + error.message, 'error');
+    }
+}
+
+function displayDNSRecords(records) {
+    const tbody = document.getElementById('dnsRecordsBody');
+
+    if (records.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Нет DNS-записей.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = records.map(record => `
+        <tr>
+            <td><strong>${escapeHTML(record.domain)}</strong></td>
+            <td>${record.addresses.map(a => escapeHTML(a)).join('<br>')}</td>
+            <td class="description-cell">${escapeHTML(record.description || '')}</td>
+            <td class="actions-cell">
+                <button class="btn btn-secondary" onclick="editDNSRecord('${escapeHTML(record.id)}')">Редактировать</button>
+                <button class="btn btn-danger" onclick="deleteDNSRecord('${escapeHTML(record.id)}')">Удалить</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Отправляет POST-запрос к API DNS-записей и возвращает ответ, бросая ошибку с текстом сервера.
+async function postDNSRecords(path, body) {
+    const response = await fetch(path, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+        throw new Error((await response.text()) || 'Ошибка запроса');
+    }
+
+    return response.json();
+}
+
+async function addDNSRecord(event) {
+    event.preventDefault();
+
+    const domain = document.getElementById('dnsRecordDomain').value.trim();
+    const addresses = parseAddresses(document.getElementById('dnsRecordAddresses').value);
+    const description = document.getElementById('dnsRecordDescription').value.trim();
+
+    try {
+        await postDNSRecords('/api/dns-records/add', { domain, addresses, description });
+
+        showMessage('DNS-запись добавлена. Синхронизируйте ее в конфиг.', 'success');
+        document.getElementById('dnsRecordDomain').value = '';
+        document.getElementById('dnsRecordAddresses').value = '';
+        document.getElementById('dnsRecordDescription').value = '';
+        await loadDNSRecords();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+function editDNSRecord(id) {
+    const record = dnsRecords.find(r => r.id === id);
+    if (!record) return;
+
+    const modal = `
+        <div class="modal-overlay" onclick="closeEditModal(event)">
+            <div class="modal" onclick="event.stopPropagation()">
+                <h3>Редактировать DNS-запись</h3>
+                <form onsubmit="submitEditDNSRecord(event, '${escapeHTML(id)}')">
+                    <div class="form-group">
+                        <label class="form-label" for="editDNSRecordDomain">Домен</label>
+                        <input class="form-input" type="text" id="editDNSRecordDomain" value="${escapeHTML(record.domain)}" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="editDNSRecordAddresses">IP-адреса</label>
+                        <input class="form-input" type="text" id="editDNSRecordAddresses" value="${escapeHTML(record.addresses.join(', '))}" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="editDNSRecordDescription">Описание</label>
+                        <input class="form-input" type="text" id="editDNSRecordDescription" value="${escapeHTML(record.description || '')}">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Отмена</button>
+                        <button type="submit" class="btn btn-primary">Сохранить</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', modal);
+}
+
+async function submitEditDNSRecord(event, id) {
+    event.preventDefault();
+
+    const domain = document.getElementById('editDNSRecordDomain').value.trim();
+    const addresses = parseAddresses(document.getElementById('editDNSRecordAddresses').value);
+    const description = document.getElementById('editDNSRecordDescription').value.trim();
+
+    try {
+        await postDNSRecords('/api/dns-records/edit', { id, domain, addresses, description });
+
+        showMessage('DNS-запись обновлена. Синхронизируйте ее в конфиг.', 'success');
+        closeEditModal();
+        await loadDNSRecords();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function deleteDNSRecord(id) {
+    const record = dnsRecords.find(r => r.id === id);
+
+    if (!confirm(`Удалить DNS-запись "${record ? record.domain : id}"?`)) {
+        return;
+    }
+
+    try {
+        await postDNSRecords('/api/dns-records/delete', { id });
+
+        showMessage('DNS-запись удалена. Синхронизируйте изменения в конфиг.', 'success');
+        await loadDNSRecords();
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function syncDNSRecords() {
+    try {
+        await postDNSRecords('/api/dns-records/sync', {});
+
+        showMessage('DNS-записи синхронизированы во временный конфиг.', 'success');
+        checkPendingConfig();
+        checkDNSRecordsSync();
+
+        if (document.getElementById('config-tab').classList.contains('active')) {
+            await loadConfig();
+        }
+    } catch (error) {
+        showMessage('Ошибка: ' + error.message, 'error');
+    }
+}
+
+async function checkDNSRecordsSync() {
+    try {
+        const response = await fetch('/api/dns-records/check-sync');
+        if (!response.ok) {
+            console.error('Failed to check dns records sync');
+            return;
+        }
+
+        const data = await response.json();
+        const html = data.synced ? '' : `
+            <div class="warning-box" style="background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <strong>⚠️ DNS-записи не синхронизированы</strong>
+                        <div style="margin-top: 5px; color: #856404; font-size: 14px;">
+                            Записи отличаются от конфига sing-box.
+                        </div>
+                    </div>
+                    <button class="btn btn-warning" onclick="syncDNSRecords()" style="white-space: nowrap;">
+                        🔄 Синхронизировать
+                    </button>
+                </div>
+            </div>
+        `;
+
+        ['dnsRecordsSyncWarning', 'configDNSRecordsSyncWarning'].forEach(id => {
+            const container = document.getElementById(id);
+
+            if (container) {
+                container.innerHTML = html;
+            }
+        });
+    } catch (error) {
+        console.error('Failed to check dns records sync:', error);
+    }
 }
 
 // Rules
@@ -2950,6 +3152,7 @@ function openConfigTab() {
 
     loadConfig();
     checkGroupsSync();
+    checkDNSRecordsSync();
 }
 
 async function loadConfig() {

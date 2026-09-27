@@ -13,6 +13,7 @@ import (
 
 	"github.com/lanfix/sing-box-configurer/cmd/config"
 	"github.com/lanfix/sing-box-configurer/internal/amnezia"
+	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
 	"github.com/lanfix/sing-box-configurer/internal/happ"
 	"github.com/lanfix/sing-box-configurer/internal/migrations"
@@ -121,7 +122,12 @@ func main() {
 
 	amneziaManager.Start(context.Background())
 
-	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager, clashAPI, trafficMonitor, happManager, updateService, amneziaManager)
+	dnsRecordsManager, err := dnsrecords.NewManager(appData)
+	if err != nil {
+		log.Fatal(fmt.Errorf("failed to initialize dns records manager: %w", err))
+	}
+
+	h := handler.NewHandler(rulesManager, dockerControllerProvider, singBoxConfigProvider, outboundManager, clashAPI, trafficMonitor, happManager, updateService, amneziaManager, dnsRecordsManager)
 
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
@@ -165,6 +171,13 @@ func main() {
 	http.HandleFunc("/api/ruleset/domain", h.GetRuleSetByGroupKind(rules.RuleSetKindDomain))
 	http.HandleFunc("/api/ruleset/ip", h.GetRuleSetByGroupKind(rules.RuleSetKindIP))
 	http.HandleFunc("/api/ruleset/bypass", h.GetBypassRuleSet)
+
+	http.HandleFunc("/api/dns-records", h.GetDNSRecords)
+	http.HandleFunc("/api/dns-records/add", h.AddDNSRecord)
+	http.HandleFunc("/api/dns-records/edit", h.EditDNSRecord)
+	http.HandleFunc("/api/dns-records/delete", h.DeleteDNSRecord)
+	http.HandleFunc("/api/dns-records/sync", h.SyncDNSRecords)
+	http.HandleFunc("/api/dns-records/check-sync", h.CheckDNSRecordsSync)
 
 	http.HandleFunc("/api/groups", h.GetGroups)
 	http.HandleFunc("/api/groups/add", h.AddGroup)

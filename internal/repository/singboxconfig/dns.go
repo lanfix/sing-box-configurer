@@ -59,12 +59,20 @@ func syncDNSRules(config map[string]any, targets []Group, allGroups []Group) err
 	}
 
 	userRules := make([]any, 0, len(rules))
+	hostsRules := make([]any, 0, 1)
 	systemRules := map[string]*groupDNSRules{}
 
 	for _, item := range rules {
 		rule, ok := item.(map[string]any)
 		if !ok {
 			userRules = append(userRules, item)
+
+			continue
+		}
+
+		// Правило DNS-записей конфигуратора всегда остается первым.
+		if isHostsRule(rule) {
+			hostsRules = append(hostsRules, rule)
 
 			continue
 		}
@@ -120,7 +128,7 @@ func syncDNSRules(config map[string]any, targets []Group, allGroups []Group) err
 		head = slices.Insert(head, 0, any(newHTTPSFilterRule()))
 	}
 
-	dns["rules"] = slices.Concat(head, userRules, tail)
+	dns["rules"] = slices.Concat(hostsRules, head, userRules, tail)
 
 	return nil
 }

@@ -277,3 +277,61 @@ func TestMigrateGroupDNSServers(t *testing.T) {
 		t.Errorf("sing-box config must not be written, writes=%d", singBox.writes)
 	}
 }
+
+// TestMigrateHostsToDNSRecords проверяет перенос hosts-сервера из конфига sing-box в DNS-записи.
+func TestMigrateHostsToDNSRecords(t *testing.T) {
+	appData, path := newAppData(t, `{"schema_version": 3}`)
+
+	singBox := &fakeSingBox{
+		config: map[string]any{
+			"dns": map[string]any{
+				"servers": []any{
+					map[string]any{
+						"type":       "hosts",
+						"tag":        "static-hosts",
+						"predefined": map[string]any{"ha.home.lab": []any{"192.168.50.8"}},
+					},
+				},
+				"rules": []any{
+					map[string]any{
+						"action":     "predefined",
+						"query_type": []any{"HTTPS"},
+						"rcode":      "NOERROR",
+					},
+					map[string]any{
+						"domain": []any{"ha.home.lab"},
+						"server": "static-hosts",
+					},
+				},
+			},
+		},
+		writes: 0,
+	}
+
+	if _, err := run(appData, singBox, registry); err != nil {
+		t.Fatal(err)
+	}
+
+	records, _ := readFields(t, path)["dns_records"].([]any)
+
+	if len(records) != 1 || records[0].(map[string]any)["domain"] != "ha.home.lab" {
+		t.Fatalf("dns_records = %v", records)
+	}
+
+	if singBox.writes != 1 {
+		t.Fatalf("sing-box config must be written once, writes=%d", singBox.writes)
+	}
+
+	dns := singBox.config["dns"].(map[string]any)
+	servers := dns["servers"].([]any)
+	rules := dns["rules"].([]any)
+
+	if len(servers) != 1 || servers[0].(map[string]any)["tag"] != "configurer-hosts" {
+		t.Errorf("servers = %v", servers)
+	}
+
+	// Правило записей становится первым, HTTPS-фильтр остается.
+	if rules[0].(map[string]any)["server"] != "configurer-hosts" || len(rules) != 2 {
+		t.Errorf("rules = %v", rules)
+	}
+}

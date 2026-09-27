@@ -135,6 +135,11 @@ func (h *Handler) ApplySingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Warning: failed to sync groups to config: %v", err)
 	}
 
+	// DNS-записи синхронизируются после групп: их правило должно стоять первым.
+	if err := h.singBoxConfigProvider.SyncDNSRecordsToConfig(actualConfigPath, h.dnsRecordsManager.ConfigRecords()); err != nil {
+		log.Printf("Warning: failed to sync dns records to config: %v", err)
+	}
+
 	// Перезапускаем контейнер sing-box.
 	labels := map[string]string{
 		"app":     "sing-box",
