@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
+	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 )
 
 // Rule represents a routing rule for VPN
@@ -50,7 +51,29 @@ type Group struct {
 	Name            string    `json:"name"`
 	Description     string    `json:"description"`
 	DefaultOutbound string    `json:"default_outbound,omitempty"`
+	DNSServer       string    `json:"dns_server,omitempty"` // тег DNS-сервера для доменов и IP группы
 	CreatedAt       time.Time `json:"created_at"`
+}
+
+// ConfigGroup возвращает группу в формате для синхронизации в конфиг sing-box.
+func (g Group) ConfigGroup() singboxconfig.Group {
+	return singboxconfig.Group{
+		Name:            g.Name,
+		Description:     g.Description,
+		DefaultOutbound: g.DefaultOutbound,
+		DNSServer:       g.DNSServer,
+	}
+}
+
+// ConfigGroups возвращает группы в формате для синхронизации в конфиг sing-box (порядок сохраняется).
+func ConfigGroups(groups []Group) []singboxconfig.Group {
+	configGroups := make([]singboxconfig.Group, 0, len(groups))
+
+	for _, group := range groups {
+		configGroups = append(configGroups, group.ConfigGroup())
+	}
+
+	return configGroups
 }
 
 // RulesData stores the rules and URL sources
@@ -67,6 +90,35 @@ const ReservedGroupName = "bypass"
 // RuleVersion пятая версия формата правил.
 // https://sing-box.sagernet.org/configuration/rule-set/source-format/#version
 const RuleVersion = 4
+
+// RuleSetKind определяет, какие типы значений попадают в набор правил.
+type RuleSetKind string
+
+const (
+	// RuleSetKindAll — домены, суффиксы и IP/CIDR в одном наборе.
+	RuleSetKindAll RuleSetKind = ""
+
+	// RuleSetKindDomain — только домены и суффиксы. Такой набор можно использовать в DNS-правилах
+	// без legacy address filter.
+	RuleSetKindDomain RuleSetKind = "domain"
+
+	// RuleSetKindIP — только IP/CIDR.
+	RuleSetKindIP RuleSetKind = "ip"
+)
+
+// ErrRuleSetNotReady возвращается, пока URL-источники набора не загружены после старта.
+// Неполный набор отдавать нельзя: sing-box закэширует его и отправит трафик мимо туннеля.
+var ErrRuleSetNotReady = errors.New("rule-set is not ready")
+
+// includesDomains проверяет, попадают ли в набор домены и суффиксы.
+func (k RuleSetKind) includesDomains() bool {
+	return k != RuleSetKindIP
+}
+
+// includesIPs проверяет, попадают ли в набор IP/CIDR.
+func (k RuleSetKind) includesIPs() bool {
+	return k != RuleSetKindDomain
+}
 
 type SingBoxRuleSet struct {
 	// Version определяет формат правил, которые будет считывать sing-box.
@@ -378,44 +430,38 @@ func (rm *Manager) ApplyRules() error {
 	return rm.save()
 }
 
-func (rm *Manager) GetRuleSet() SingBoxRuleSet {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
-	// Deprecated: этот метод оставлен для обратной совместимости.
-	// Используйте GetRuleSetByGroup для получения правил конкретной группы.
-	return rm.getRuleSetByGroupLocked("default")
+// GetRuleSet возвращает полный набор правил группы default.
+//
+// Deprecated: используйте GetRuleSetByGroup для получения правил конкретной группы.
+func (rm *Manager) GetRuleSet() (SingBoxRuleSet, error) {
+	return rm.GetRuleSetByGroup("default", RuleSetKindAll)
 }
 
-// GetRuleSetByGroup возвращает набор правил для указанной группы.
+// GetRuleSetByGroup возвращает набор правил вида kind для указанной группы.
 // Правила и источники, исключенные из туннелирования, в него не попадают.
-func (rm *Manager) GetRuleSetByGroup(groupName string) SingBoxRuleSet {
+func (rm *Manager) GetRuleSetByGroup(groupName string, kind RuleSetKind) (SingBoxRuleSet, error) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	return rm.getRuleSetByGroupLocked(groupName)
-}
-
-// GetBypassRuleSet возвращает набор правил, исключенных из туннелирования, из всех групп.
-func (rm *Manager) GetBypassRuleSet() SingBoxRuleSet {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
-	return rm.getRuleSetLocked(func(_ string, bypass bool) bool {
-		return bypass
-	})
-}
-
-// getRuleSetByGroupLocked возвращает набор правил для указанной группы (без блокировки).
-func (rm *Manager) getRuleSetByGroupLocked(groupName string) SingBoxRuleSet {
-	return rm.getRuleSetLocked(func(group string, bypass bool) bool {
+	return rm.getRuleSetLocked(kind, func(group string, bypass bool) bool {
 		return !bypass && group == groupName
 	})
 }
 
-// getRuleSetLocked собирает набор из примененных правил и источников, для которых match
-// возвращает true (без блокировки).
-func (rm *Manager) getRuleSetLocked(match func(group string, bypass bool) bool) SingBoxRuleSet {
+// GetBypassRuleSet возвращает набор правил, исключенных из туннелирования, из всех групп.
+func (rm *Manager) GetBypassRuleSet() (SingBoxRuleSet, error) {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	return rm.getRuleSetLocked(RuleSetKindAll, func(_ string, bypass bool) bool {
+		return bypass
+	})
+}
+
+// getRuleSetLocked собирает набор вида kind из примененных правил и источников, для которых match
+// возвращает true (без блокировки). Если какой-то из источников еще не загружен после старта,
+// возвращает ErrRuleSetNotReady.
+func (rm *Manager) getRuleSetLocked(kind RuleSetKind, match func(group string, bypass bool) bool) (SingBoxRuleSet, error) {
 	rules := make([]map[string]any, 0, 1)
 
 	var (
@@ -436,17 +482,26 @@ func (rm *Manager) getRuleSetLocked(match func(group string, bypass bool) bool) 
 
 		switch rule.Type {
 		case "domain":
-			domains = append(domains, rule.Value)
-			manualDomains[rule.Value] = true
+			if kind.includesDomains() {
+				domains = append(domains, rule.Value)
+				manualDomains[rule.Value] = true
+			}
 
 		case "domain_suffix":
-			domainSuffixes = append(domainSuffixes, rule.Value)
-			manualSuffixes[rule.Value] = true
+			if kind.includesDomains() {
+				domainSuffixes = append(domainSuffixes, rule.Value)
+				manualSuffixes[rule.Value] = true
+			}
 
 		case "ip", "cidr":
-			ipCidrs = append(ipCidrs, rule.Value)
+			if kind.includesIPs() {
+				ipCidrs = append(ipCidrs, rule.Value)
+			}
 		}
 	}
+
+	// Источники, еще не загруженные после старта.
+	var notLoaded []string
 
 	// Источники, помеченные на удаление, но примененные, также остаются в наборе.
 	rm.urlRulesMu.RLock()
@@ -458,11 +513,19 @@ func (rm *Manager) getRuleSetLocked(match func(group string, bypass bool) bool) 
 
 		ruleSet, ok := rm.urlRules[source.ID]
 		if !ok {
+			notLoaded = append(notLoaded, source.Description)
+
 			continue
 		}
 
 		// IP/CIDR добавляем без проверки конфликтов.
-		ipCidrs = append(ipCidrs, ruleSet.CidrList...)
+		if kind.includesIPs() {
+			ipCidrs = append(ipCidrs, ruleSet.CidrList...)
+		}
+
+		if !kind.includesDomains() {
+			continue
+		}
 
 		for _, domain := range ruleSet.Domains {
 			if !manualDomains[domain] && !hasConflictWithManualRules(domain, "domain", manualDomains, manualSuffixes) {
@@ -478,6 +541,10 @@ func (rm *Manager) getRuleSetLocked(match func(group string, bypass bool) bool) 
 	}
 
 	rm.urlRulesMu.RUnlock()
+
+	if len(notLoaded) > 0 {
+		return SingBoxRuleSet{}, fmt.Errorf("%w: url sources not loaded: %s", ErrRuleSetNotReady, strings.Join(notLoaded, ", "))
+	}
 
 	// Все значения собираются в одно правило.
 	if len(domains) > 0 || len(domainSuffixes) > 0 || len(ipCidrs) > 0 {
@@ -501,7 +568,7 @@ func (rm *Manager) getRuleSetLocked(match func(group string, bypass bool) bool) 
 	return SingBoxRuleSet{
 		Version: RuleVersion,
 		Rules:   rules,
-	}
+	}, nil
 }
 
 // hasConflictWithManualRules проверяет, конфликтует ли правило с ручными правилами.
@@ -579,7 +646,7 @@ func (rm *Manager) AddGroup(group Group) error {
 }
 
 // EditGroup обновляет параметры группы.
-func (rm *Manager) EditGroup(name string, description string, defaultOutbound string) error {
+func (rm *Manager) EditGroup(name, description, defaultOutbound, dnsServer string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -590,6 +657,7 @@ func (rm *Manager) EditGroup(name string, description string, defaultOutbound st
 		if rm.data.Groups[i].Name == name {
 			rm.data.Groups[i].Description = description
 			rm.data.Groups[i].DefaultOutbound = defaultOutbound
+			rm.data.Groups[i].DNSServer = dnsServer
 			found = true
 
 			break

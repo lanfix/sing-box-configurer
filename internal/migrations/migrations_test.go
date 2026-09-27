@@ -218,3 +218,62 @@ func TestValidate(t *testing.T) {
 		t.Error("expected error for version gap")
 	}
 }
+
+// TestMigrateGroupDNSServers проверяет перенос DNS-серверов групп из ручных DNS-правил.
+func TestMigrateGroupDNSServers(t *testing.T) {
+	appData, path := newAppData(t, `{
+		"schema_version": 2,
+		"groups": [
+			{"name": "default", "description": "Группа по умолчанию"},
+			{"name": "claude", "dns_server": "google"},
+			{"name": "block"}
+		]
+	}`)
+
+	singBox := &fakeSingBox{
+		config: map[string]any{
+			"dns": map[string]any{
+				"rules": []any{
+					map[string]any{
+						"rule_set": "configurer-default",
+						"server":   "cloudflare",
+					},
+					map[string]any{
+						"rule_set": "configurer-claude",
+						"server":   "cloudflare",
+					},
+				},
+			},
+		},
+		writes: 0,
+	}
+
+	if _, err := run(appData, singBox, registry); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, _ := readFields(t, path)["groups"].([]any)
+	servers := map[string]any{}
+
+	for _, item := range groups {
+		group := item.(map[string]any)
+		servers[group["name"].(string)] = group["dns_server"]
+	}
+
+	// Уже заданный DNS-сервер не перезаписывается, у группы без правила он не появляется.
+	want := map[string]any{
+		"default": "cloudflare",
+		"claude":  "google",
+		"block":   nil,
+	}
+
+	for name, server := range want {
+		if servers[name] != server {
+			t.Errorf("group %s dns_server = %v, want %v", name, servers[name], server)
+		}
+	}
+
+	if singBox.writes != 0 {
+		t.Errorf("sing-box config must not be written, writes=%d", singBox.writes)
+	}
+}

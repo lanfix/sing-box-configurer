@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // GroupSyncStatus представляет статус синхронизации группы.
@@ -15,6 +16,9 @@ type GroupSyncStatus struct {
 	HasSelector     bool   `json:"has_selector"`
 	DefaultOutbound string `json:"default_outbound"`
 	ActualOutbound  string `json:"actual_outbound"`
+	DNSSynced       bool   `json:"dns_synced"`
+	DNSServer       string `json:"dns_server"`
+	ActualDNSServer string `json:"actual_dns_server"`
 }
 
 // CheckGroupsSync проверяет состояние синхронизации групп в конфиге.
@@ -77,7 +81,7 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 		existingRuleSets[tag] = true
 	}
 
-	// Собираем информацию о существующих правилах.
+	// Собираем информацию о существующих правилах: ключ — список тегов rule-set-ов правила.
 	existingRules := make(map[string]bool)
 
 	for _, rule := range rules {
@@ -86,13 +90,16 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 			continue
 		}
 
-		ruleSet, ok := ruleMap["rule_set"].(string)
-		if !ok {
+		tags := extractRuleSetTags(ruleMap)
+		if len(tags) == 0 {
 			continue
 		}
 
-		existingRules[ruleSet] = true
+		existingRules[strings.Join(tags, ",")] = true
 	}
+
+	actualDNSServers := GetGroupDNSServers(config)
+	hasHTTPSFilter := hasHTTPSFilterRule(config)
 
 	// Собираем информацию о существующих селекторах и доступных outbounds.
 	existingSelectors := make(map[string]string)
@@ -151,12 +158,21 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 	statuses := make([]GroupSyncStatus, 0, len(groups))
 
 	for _, group := range groups {
-		ruleSetTag := "configurer-" + group.Name
-		selectorTag := "select-" + group.Name
+		ruleSetTag := getRuleSetTagForGroup(group.Name)
+		ipRuleSetTag := getIPRuleSetTagForGroup(group.Name)
+		selectorTag := getSelectorTagForGroup(group.Name)
 
-		hasRuleSet := existingRuleSets[ruleSetTag]
-		hasRule := existingRules[ruleSetTag]
+		hasRuleSet := existingRuleSets[ruleSetTag] && existingRuleSets[ipRuleSetTag]
+		hasRule := existingRules[ruleSetTag+","+ipRuleSetTag]
 		actualOutbound, hasSelector := existingSelectors[selectorTag]
+
+		// Без DNS-сервера у группы не должно быть системных DNS-правил.
+		actualDNSServer := actualDNSServers[group.Name]
+		dnsSynced := actualDNSServer == group.DNSServer
+
+		if group.DNSServer != "" {
+			dnsSynced = dnsSynced && hasHTTPSFilter && hasGroupDNSRules(config, group)
+		}
 
 		// Нормализуем actualOutbound так же, как и при создании selector.
 		if actualOutbound == "" {
@@ -174,7 +190,7 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 			expectedOutbound = "block"
 		}
 
-		synced := hasRuleSet && hasRule && hasSelector && (actualOutbound == expectedOutbound)
+		synced := hasRuleSet && hasRule && hasSelector && (actualOutbound == expectedOutbound) && dnsSynced
 
 		statuses = append(statuses, GroupSyncStatus{
 			Name:            group.Name,
@@ -184,6 +200,9 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 			HasSelector:     hasSelector,
 			DefaultOutbound: expectedOutbound,
 			ActualOutbound:  actualOutbound,
+			DNSSynced:       dnsSynced,
+			DNSServer:       group.DNSServer,
+			ActualDNSServer: actualDNSServer,
 		})
 	}
 

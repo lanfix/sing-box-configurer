@@ -36,6 +36,21 @@ func ruleSetValues(t *testing.T, ruleSet SingBoxRuleSet, key string) []string {
 	return values
 }
 
+// mustRuleSet возвращает функцию, которая проверяет, что набор собран без ошибки.
+func mustRuleSet(t *testing.T) func(SingBoxRuleSet, error) SingBoxRuleSet {
+	t.Helper()
+
+	return func(ruleSet SingBoxRuleSet, err error) SingBoxRuleSet {
+		t.Helper()
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return ruleSet
+	}
+}
+
 func TestGetRuleSetSplitsBypass(t *testing.T) {
 	manager := newTestManager(
 		[]Rule{
@@ -100,7 +115,7 @@ func TestGetRuleSetSplitsBypass(t *testing.T) {
 		},
 	)
 
-	group := manager.GetRuleSetByGroup("default")
+	group := mustRuleSet(t)(manager.GetRuleSetByGroup("default", RuleSetKindAll))
 
 	if got, want := ruleSetValues(t, group, "domain_suffix"), []string{"proxied.com", "proxy-list.com"}; !slices.Equal(got, want) {
 		t.Errorf("default domain_suffix = %v, want %v", got, want)
@@ -111,11 +126,11 @@ func TestGetRuleSetSplitsBypass(t *testing.T) {
 	}
 
 	// В группе claude только исключения, поэтому ее набор пустой.
-	if claude := manager.GetRuleSetByGroup("claude"); len(claude.Rules) != 0 {
+	if claude := mustRuleSet(t)(manager.GetRuleSetByGroup("claude", RuleSetKindAll)); len(claude.Rules) != 0 {
 		t.Errorf("claude rules = %v, want empty", claude.Rules)
 	}
 
-	bypass := manager.GetBypassRuleSet()
+	bypass := mustRuleSet(t)(manager.GetBypassRuleSet())
 
 	// sub.direct.ru из источника перекрыт ручным суффиксом direct.ru, pending.ru еще не применен.
 	if got, want := ruleSetValues(t, bypass, "domain_suffix"), []string{"direct.ru", "yandex.ru"}; !slices.Equal(got, want) {
@@ -134,7 +149,7 @@ func TestGetRuleSetSplitsBypass(t *testing.T) {
 func TestEmptyRuleSetHasNoNullRules(t *testing.T) {
 	manager := newTestManager([]Rule{}, []URLSource{}, map[string]RuleSet{})
 
-	ruleSet := manager.GetBypassRuleSet()
+	ruleSet := mustRuleSet(t)(manager.GetBypassRuleSet())
 
 	if ruleSet.Rules == nil {
 		t.Fatal("rules should be empty slice, not nil")

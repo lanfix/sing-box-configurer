@@ -76,16 +76,7 @@ func main() {
 	if migrationPerformed {
 		log.Println("Syncing groups to sing-box config after migration...")
 
-		groups := rulesManager.GetGroups()
-		var configGroups []singboxconfig.Group
-
-		for _, g := range groups {
-			configGroups = append(configGroups, singboxconfig.Group{
-				Name:            g.Name,
-				Description:     g.Description,
-				DefaultOutbound: g.DefaultOutbound,
-			})
-		}
+		configGroups := rules.ConfigGroups(rulesManager.GetGroups())
 
 		if err := singBoxConfigProvider.SyncGroupsToConfig(cfg.SingBoxConfigPath, configGroups); err != nil {
 			log.Printf("Warning: failed to sync groups to config after migration: %v", err)
@@ -171,6 +162,8 @@ func main() {
 	http.HandleFunc("/api/apply", h.ApplyRules)
 	http.HandleFunc("/api/ruleset", h.GetRuleSet)
 	http.HandleFunc("/api/ruleset/group", h.GetRuleSetByGroup)
+	http.HandleFunc("/api/ruleset/domain", h.GetRuleSetByGroupKind(rules.RuleSetKindDomain))
+	http.HandleFunc("/api/ruleset/ip", h.GetRuleSetByGroupKind(rules.RuleSetKindIP))
 	http.HandleFunc("/api/ruleset/bypass", h.GetBypassRuleSet)
 
 	http.HandleFunc("/api/groups", h.GetGroups)

@@ -1,6 +1,7 @@
 package migrations
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
@@ -40,4 +41,62 @@ var registry = []Migration{
 			return nil
 		},
 	},
+	{
+		Version: 3,
+		Name:    "move group dns servers from manual dns rules",
+		Up:      migrateGroupDNSServers,
+	},
+}
+
+// migrateGroupDNSServers переносит DNS-серверы групп из вручную заданных DNS-правил вида
+// {"rule_set": "configurer-<group>", "server": "..."} в настройки групп. Конфиг sing-box не меняется:
+// новые DNS-правила и разделенные rule-set-ы появятся после синхронизации групп (через diff в редакторе).
+func migrateGroupDNSServers(state *State) error {
+	raw, ok := state.AppData["groups"]
+	if !ok {
+		return nil
+	}
+
+	var groups []map[string]any
+
+	if err := json.Unmarshal(raw, &groups); err != nil {
+		return fmt.Errorf("cannot parse groups: %w", err)
+	}
+
+	config, err := state.SingBoxConfig()
+	if err != nil {
+		return err
+	}
+
+	servers := singboxconfig.GetGroupDNSServers(config)
+	changed := false
+
+	for _, group := range groups {
+		name, _ := group["name"].(string)
+		server, ok := servers[name]
+
+		if !ok {
+			continue
+		}
+
+		if current, _ := group["dns_server"].(string); current != "" {
+			continue
+		}
+
+		group["dns_server"] = server
+		changed = true
+	}
+
+	if !changed {
+		return nil
+	}
+
+	raw, err = json.Marshal(groups)
+	if err != nil {
+		return fmt.Errorf("cannot marshal groups: %w", err)
+	}
+
+	state.AppData["groups"] = raw
+
+	return nil
 }

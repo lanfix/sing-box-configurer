@@ -272,11 +272,10 @@ func (h *Handler) GetRuleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Deprecated: используйте /api/ruleset/{group} вместо этого.
-	ruleSet := h.rulesManager.GetRuleSet()
+	// Deprecated: используйте /api/ruleset/group вместо этого.
+	ruleSet, err := h.rulesManager.GetRuleSet()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ruleSet)
+	writeRuleSet(w, ruleSet, err)
 }
 
 // GetRuleSetByGroup возвращает ruleset для конкретной группы.
@@ -292,10 +291,31 @@ func (h *Handler) GetRuleSetByGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ruleSet := h.rulesManager.GetRuleSetByGroup(groupName)
+	ruleSet, err := h.rulesManager.GetRuleSetByGroup(groupName, rules.RuleSetKindAll)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ruleSet)
+	writeRuleSet(w, ruleSet, err)
+}
+
+// GetRuleSetByGroupKind возвращает обработчик, отдающий ruleset группы только с доменами или только с IP/CIDR.
+func (h *Handler) GetRuleSetByGroupKind(kind rules.RuleSetKind) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+			return
+		}
+
+		groupName := r.URL.Query().Get("group")
+		if groupName == "" {
+			http.Error(w, "Group parameter is required", http.StatusBadRequest)
+
+			return
+		}
+
+		ruleSet, err := h.rulesManager.GetRuleSetByGroup(groupName, kind)
+
+		writeRuleSet(w, ruleSet, err)
+	}
 }
 
 // GetBypassRuleSet возвращает ruleset правил, исключенных из туннелирования sing-box.
@@ -306,7 +326,28 @@ func (h *Handler) GetBypassRuleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, h.rulesManager.GetBypassRuleSet())
+	ruleSet, err := h.rulesManager.GetBypassRuleSet()
+
+	writeRuleSet(w, ruleSet, err)
+}
+
+// writeRuleSet отправляет ruleset для sing-box. Пока набор не готов, отвечает 503: sing-box оставит
+// прежний (закэшированный) набор, а при первом запуске без кэша не стартует до готовности набора.
+func writeRuleSet(w http.ResponseWriter, ruleSet rules.SingBoxRuleSet, err error) {
+	if errors.Is(err, rules.ErrRuleSetNotReady) {
+		log.Printf("Rule-set requested before it is ready: %v", err)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+
+		return
+	}
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, ruleSet)
 }
 
 // GetGroups возвращает список всех групп.
@@ -335,6 +376,7 @@ func (h *Handler) AddGroup(w http.ResponseWriter, r *http.Request) {
 		Name            string `json:"name"`
 		Description     string `json:"description"`
 		DefaultOutbound string `json:"default_outbound"`
+		DNSServer       string `json:"dns_server"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -351,6 +393,7 @@ func (h *Handler) AddGroup(w http.ResponseWriter, r *http.Request) {
 		Name:            req.Name,
 		Description:     req.Description,
 		DefaultOutbound: req.DefaultOutbound,
+		DNSServer:       req.DNSServer,
 	}
 
 	if err := h.rulesManager.AddGroup(group); err != nil {
@@ -410,6 +453,7 @@ func (h *Handler) EditGroup(w http.ResponseWriter, r *http.Request) {
 		Name            string `json:"name"`
 		Description     string `json:"description"`
 		DefaultOutbound string `json:"default_outbound"`
+		DNSServer       string `json:"dns_server"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -422,7 +466,7 @@ func (h *Handler) EditGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.rulesManager.EditGroup(req.Name, req.Description, req.DefaultOutbound); err != nil {
+	if err := h.rulesManager.EditGroup(req.Name, req.Description, req.DefaultOutbound, req.DNSServer); err != nil {
 		log.Printf("Error editing group: %v", err)
 		http.Error(w, "Failed to edit group: "+err.Error(), http.StatusBadRequest)
 		return

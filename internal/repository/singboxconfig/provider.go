@@ -19,6 +19,9 @@ type Group struct {
 	Name            string
 	Description     string
 	DefaultOutbound string
+
+	// DNSServer — тег DNS-сервера для доменов и IP группы. Пустое значение — DNS-правила группы не нужны.
+	DNSServer string
 }
 
 func NewProvider(actualConfigPath string) *Provider {

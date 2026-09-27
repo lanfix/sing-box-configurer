@@ -118,6 +118,10 @@ func syncGroups(config map[string]any, targets []Group, allGroups []Group) error
 
 	config["outbounds"] = getDesiredOutboundsList(outbounds, endpoints, targets, allGroups)
 
+	if err := syncDNSRules(config, targets, allGroups); err != nil {
+		return fmt.Errorf("cannot sync dns rules: %w", err)
+	}
+
 	return nil
 }
 
@@ -154,35 +158,48 @@ func getDesiredRuleSetList(actualRuleSetList []any, targets []Group, allGroups [
 		systemRuleSetMap[tag] = actualRuleSetList[i]
 	}
 
-	// Обновляем данные rule-set-ов.
+	// Обновляем данные rule-set-ов. Домены и IP разнесены по разным rule-set-ам: набор с ip_cidr
+	// в DNS-правиле включает legacy address filter, поэтому в DNS используется только доменный набор.
 	for _, group := range targets {
-		desiredRuleSetTag := getRuleSetTagForGroup(group.Name)
+		domainTag := getRuleSetTagForGroup(group.Name)
+		ipTag := getIPRuleSetTagForGroup(group.Name)
 
-		systemRuleSetMap[desiredRuleSetTag] = map[string]any{
-			"format": "source",
-			"http_client": map[string]any{
-				"tag": "default_http_client",
-			},
-			"tag":             desiredRuleSetTag,
-			"type":            "remote",
-			"update_interval": "30s",
-			"url":             fmt.Sprintf("http://127.0.0.1:8080/api/ruleset/group?group=%s", group.Name), // TODO: Вынести хост в конфиг.
-		}
+		systemRuleSetMap[domainTag] = newRemoteRuleSet(domainTag, "domain", group.Name)
+		systemRuleSetMap[ipTag] = newRemoteRuleSet(ipTag, "ip", group.Name)
 	}
 
 	// Выстраиваем системные rule-set-ы в порядке из allGroups.
 	for i := range allGroups {
-		tag := getRuleSetTagForGroup(allGroups[i].Name)
-
-		ruleSet, ok := systemRuleSetMap[tag]
-		if !ok {
-			continue
+		tags := []string{
+			getRuleSetTagForGroup(allGroups[i].Name),
+			getIPRuleSetTagForGroup(allGroups[i].Name),
 		}
 
-		desiredRuleSetList = append(desiredRuleSetList, ruleSet)
+		for _, tag := range tags {
+			ruleSet, ok := systemRuleSetMap[tag]
+			if !ok {
+				continue
+			}
+
+			desiredRuleSetList = append(desiredRuleSetList, ruleSet)
+		}
 	}
 
 	return desiredRuleSetList
+}
+
+// newRemoteRuleSet возвращает описание системного remote rule-set-а вида kind (domain или ip) группы groupName.
+func newRemoteRuleSet(tag, kind, groupName string) map[string]any {
+	return map[string]any{
+		"format": "source",
+		"http_client": map[string]any{
+			"tag": "default_http_client",
+		},
+		"tag":             tag,
+		"type":            "remote",
+		"update_interval": "30s",
+		"url":             fmt.Sprintf("http://127.0.0.1:8080/api/ruleset/%s?group=%s", kind, groupName), // TODO: Вынести хост в конфиг.
+	}
 }
 
 // getDesiredRulesList возвращает список правил с актуальными системными правилами групп targets в конце.
@@ -205,12 +222,15 @@ func getDesiredRulesList(actualRulesList []any, targets []Group, allGroups []Gro
 			continue
 		}
 
-		ruleSetTag, ok := extractFiledFromMapAny(ruleMap, "rule_set")
-		if !ok {
+		// Системное правило ссылается на rule-set-ы группы, первым идет доменный.
+		ruleSetTags := extractRuleSetTags(ruleMap)
+		if len(ruleSetTags) == 0 {
 			desiredRules = append(desiredRules, ruleMap)
 
 			continue
 		}
+
+		ruleSetTag := ruleSetTags[0]
 
 		if !strings.HasPrefix(outboundTag, selectorTagPrefix) || !strings.HasPrefix(ruleSetTag, ruleSetTagPrefix) {
 			// Если нет специальных системных префиксов в именах тегов, то это обычное пользовательское правило.
@@ -227,7 +247,10 @@ func getDesiredRulesList(actualRulesList []any, targets []Group, allGroups []Gro
 
 		systemRulesMap[desiredRuleSetTag] = map[string]any{
 			"outbound": getSelectorTagForGroup(group.Name),
-			"rule_set": desiredRuleSetTag,
+			"rule_set": []any{
+				desiredRuleSetTag,
+				getIPRuleSetTagForGroup(group.Name),
+			},
 		}
 	}
 
@@ -325,12 +348,41 @@ func getDesiredOutboundsList(actualOutboundsList, actualEndpointsList []any, tar
 	return desiredOutbounds
 }
 
+// getRuleSetTagForGroup возвращает тег rule-set-а с доменами группы.
 func getRuleSetTagForGroup(groupName string) string {
 	return fmt.Sprintf("%s-%s", ruleSetTagPrefix, groupName)
 }
 
+// getIPRuleSetTagForGroup возвращает тег rule-set-а с IP/CIDR группы.
+func getIPRuleSetTagForGroup(groupName string) string {
+	return getRuleSetTagForGroup(groupName) + ipRuleSetTagSuffix
+}
+
+// getSelectorTagForGroup возвращает тег selector-а группы.
 func getSelectorTagForGroup(groupName string) string {
 	return fmt.Sprintf("%s-%s", selectorTagPrefix, groupName)
+}
+
+// extractRuleSetTags возвращает теги из поля rule_set правила (строка или список строк).
+func extractRuleSetTags(rule map[string]any) []string {
+	switch value := rule["rule_set"].(type) {
+	case string:
+		return []string{value}
+
+	case []any:
+		tags := make([]string, 0, len(value))
+
+		for _, item := range value {
+			if tag, ok := item.(string); ok {
+				tags = append(tags, tag)
+			}
+		}
+
+		return tags
+
+	default:
+		return nil
+	}
 }
 
 func extractFiledFromMapAny(data map[string]any, key string) (string, bool) {

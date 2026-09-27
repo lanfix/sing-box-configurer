@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
+	"github.com/lanfix/sing-box-configurer/internal/rules"
 )
 
 func (h *Handler) GetSingBoxConfig(w http.ResponseWriter, r *http.Request) {
@@ -127,18 +128,7 @@ func (h *Handler) ApplySingBoxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Синхронизируем группы в конфиг sing-box.
-	groups := h.rulesManager.GetGroups()
-
-	// Преобразуем группы в формат для singboxconfig.
-	var configGroups []singboxconfig.Group
-
-	for _, g := range groups {
-		configGroups = append(configGroups, singboxconfig.Group{
-			Name:            g.Name,
-			Description:     g.Description,
-			DefaultOutbound: g.DefaultOutbound,
-		})
-	}
+	configGroups := rules.ConfigGroups(h.rulesManager.GetGroups())
 
 	actualConfigPath := h.singBoxConfigProvider.GetActualPath()
 	if err := h.singBoxConfigProvider.SyncGroupsToConfig(actualConfigPath, configGroups); err != nil {
@@ -235,11 +225,8 @@ func (h *Handler) SyncGroups(w http.ResponseWriter, r *http.Request) {
 
 	for _, g := range groups {
 		if g.Name == req.GroupName {
-			targetGroup = &singboxconfig.Group{
-				Name:            g.Name,
-				Description:     g.Description,
-				DefaultOutbound: g.DefaultOutbound,
-			}
+			configGroup := g.ConfigGroup()
+			targetGroup = &configGroup
 
 			break
 		}
@@ -251,15 +238,7 @@ func (h *Handler) SyncGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Преобразуем все группы в формат для singboxconfig (сохраняем порядок).
-	var configGroups []singboxconfig.Group
-
-	for _, g := range groups {
-		configGroups = append(configGroups, singboxconfig.Group{
-			Name:            g.Name,
-			Description:     g.Description,
-			DefaultOutbound: g.DefaultOutbound,
-		})
-	}
+	configGroups := rules.ConfigGroups(groups)
 
 	if err := h.singBoxConfigProvider.SyncSingleGroup(*targetGroup, configGroups); err != nil {
 		log.Printf("Error syncing group to config: %v", err)
@@ -283,18 +262,7 @@ func (h *Handler) CheckGroupsSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groups := h.rulesManager.GetGroups()
-
-	// Преобразуем группы в формат для singboxconfig.
-	var configGroups []singboxconfig.Group
-
-	for _, g := range groups {
-		configGroups = append(configGroups, singboxconfig.Group{
-			Name:            g.Name,
-			Description:     g.Description,
-			DefaultOutbound: g.DefaultOutbound,
-		})
-	}
+	configGroups := rules.ConfigGroups(h.rulesManager.GetGroups())
 
 	// Проверяем статус в актуальном или временном конфиге.
 	var targetPath string

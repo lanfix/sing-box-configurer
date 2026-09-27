@@ -191,7 +191,7 @@ function displayGroups(groups) {
     const tbody = document.getElementById('groupsBody');
 
     if (groups.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Нет групп.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Нет групп.</td></tr>';
         return;
     }
 
@@ -199,7 +199,8 @@ function displayGroups(groups) {
         const createdAt = new Date(group.created_at).toLocaleString('ru-RU');
         const isDefault = group.name === 'default';
         const defaultOutbound = group.default_outbound || 'direct';
-        
+        const dnsServer = group.dns_server || '';
+
         return `
             <tr>
                 <td>
@@ -208,9 +209,10 @@ function displayGroups(groups) {
                 </td>
                 <td class="description-cell">${escapeHTML(group.description || '')}</td>
                 <td>${escapeHTML(defaultOutbound)}</td>
+                <td>${dnsServer ? escapeHTML(dnsServer) : '<span style="color: #8b949e;">dns.final</span>'}</td>
                 <td class="date-cell">${createdAt}</td>
                 <td class="actions-cell">
-                    <button class="btn btn-secondary" onclick="editGroup('${escapeHTML(group.name)}', '${escapeHTML(group.description || '')}', '${escapeHTML(defaultOutbound)}')">
+                    <button class="btn btn-secondary" onclick="editGroup('${escapeHTML(group.name)}', '${escapeHTML(group.description || '')}', '${escapeHTML(defaultOutbound)}', '${escapeHTML(dnsServer)}')">
                         Редактировать
                     </button>
                     <button class="btn btn-danger" onclick="deleteGroup('${escapeHTML(group.name)}')" ${isDefault ? 'disabled' : ''}>
@@ -228,6 +230,7 @@ async function addGroup(event) {
     const name = document.getElementById('groupName').value.trim();
     const description = document.getElementById('groupDescription').value;
     const defaultOutbound = document.getElementById('groupDefaultOutbound').value.trim();
+    const dnsServer = document.getElementById('groupDNSServer').value.trim();
 
     if (!name) {
         showMessage('Введите имя группы', 'error');
@@ -243,7 +246,8 @@ async function addGroup(event) {
             body: JSON.stringify({ 
                 name, 
                 description,
-                default_outbound: defaultOutbound || ''
+                default_outbound: defaultOutbound || '',
+                dns_server: dnsServer
             })
         });
 
@@ -256,6 +260,7 @@ async function addGroup(event) {
         document.getElementById('groupName').value = '';
         document.getElementById('groupDescription').value = '';
         document.getElementById('groupDefaultOutbound').value = '';
+        document.getElementById('groupDNSServer').value = '';
         await loadGroups();
         await loadGroupsForSelect();
     } catch (error) {
@@ -290,7 +295,7 @@ async function deleteGroup(name) {
     }
 }
 
-async function editGroup(name, description, defaultOutbound) {
+async function editGroup(name, description, defaultOutbound, dnsServer) {
     const modal = `
         <div class="modal-overlay" onclick="closeEditModal(event)">
             <div class="modal" onclick="event.stopPropagation()">
@@ -303,6 +308,10 @@ async function editGroup(name, description, defaultOutbound) {
                     <div class="form-group">
                         <label class="form-label" for="editGroupDefaultOutbound">Default Outbound</label>
                         <input class="form-input" type="text" id="editGroupDefaultOutbound" value="${escapeHTML(defaultOutbound)}" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="editGroupDNSServer">DNS-сервер</label>
+                        <input class="form-input" type="text" id="editGroupDNSServer" value="${escapeHTML(dnsServer || '')}" placeholder="пусто — через dns.final">
                     </div>
                     <div class="form-actions">
                         <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Отмена</button>
@@ -320,6 +329,7 @@ async function submitEditGroup(event, name) {
 
     const description = document.getElementById('editGroupDescription').value;
     const defaultOutbound = document.getElementById('editGroupDefaultOutbound').value;
+    const dnsServer = document.getElementById('editGroupDNSServer').value.trim();
 
     try {
         const response = await fetch('/api/groups/edit', {
@@ -327,10 +337,11 @@ async function submitEditGroup(event, name) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ 
-                name, 
+            body: JSON.stringify({
+                name,
                 description,
-                default_outbound: defaultOutbound
+                default_outbound: defaultOutbound,
+                dns_server: dnsServer
             })
         });
 
@@ -421,6 +432,11 @@ function displayGroupSyncWarnings(statuses) {
         if (!status.has_selector) issues.push('отсутствует selector');
         if (status.has_selector && status.actual_outbound !== status.default_outbound) {
             issues.push(`outbound: ${status.actual_outbound} → ${status.default_outbound}`);
+        }
+        if (!status.dns_synced) {
+            const actual = status.actual_dns_server || 'dns.final';
+            const expected = status.dns_server || 'dns.final';
+            issues.push(actual === expected ? `неполные DNS-правила (${expected})` : `DNS: ${actual} → ${expected}`);
         }
 
         return `
