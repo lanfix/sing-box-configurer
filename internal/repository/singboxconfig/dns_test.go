@@ -107,10 +107,6 @@ func TestSyncGroupsDNSRules(t *testing.T) {
 		`{"domain":["ha.home.lab"],"server":"static-hosts"}`,
 		`{"domain":["claude.ai"],"server":"cloudflare"}`,
 		`{"action":"route","preferred_by":["local"],"server":"local"}`,
-		`{"action":"evaluate","query_type":["A","AAAA"],"server":"cloudflare","tag":"configurer-default@dns"}`,
-		`{"action":"respond","match_response":"configurer-default@dns","query_type":["A","AAAA"],"rule_set":"configurer-default@ip"}`,
-		`{"action":"evaluate","query_type":["A","AAAA"],"server":"cloudflare","tag":"configurer-claude@dns"}`,
-		`{"action":"respond","match_response":"configurer-claude@dns","query_type":["A","AAAA"],"rule_set":"configurer-claude@ip"}`,
 	}
 
 	if got := dnsRules(t, config); !slices.Equal(got, want) {
@@ -199,8 +195,6 @@ func TestSyncSingleGroupKeepsOtherDNSRules(t *testing.T) {
 		`{"domain":["ha.home.lab"],"server":"static-hosts"}`,
 		`{"domain":["claude.ai"],"server":"cloudflare"}`,
 		`{"action":"route","preferred_by":["local"],"server":"local"}`,
-		`{"action":"evaluate","query_type":["A","AAAA"],"server":"cloudflare","tag":"configurer-claude@dns"}`,
-		`{"action":"respond","match_response":"configurer-claude@dns","query_type":["A","AAAA"],"rule_set":"configurer-claude@ip"}`,
 	}
 
 	if got := dnsRules(t, config); !slices.Equal(got, want) {
@@ -284,7 +278,7 @@ func TestCheckGroupsSyncDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// До синхронизации rule-set-ы не разделены, evaluate-правил нет.
+	// До синхронизации rule-set-ы не разделены.
 	for _, status := range statuses {
 		if status.Synced {
 			t.Errorf("group %s should not be synced before split", status.Name)
@@ -307,6 +301,83 @@ func TestCheckGroupsSyncDNS(t *testing.T) {
 
 		if !status.HasRuleSet || !status.HasRule {
 			t.Errorf("group %s: rule-sets %v, rule %v", status.Name, status.HasRuleSet, status.HasRule)
+		}
+	}
+}
+
+// legacyEvaluateConfig — DNS-правила, которые создавала версия 0.4.0.
+const legacyEvaluateConfig = `{
+	"dns": {
+		"rules": [
+			{"action": "predefined", "query_type": ["HTTPS"], "rcode": "NOERROR"},
+			{"rule_set": "configurer-default", "server": "cloudflare"},
+			{"rule_set": "configurer-claude", "server": "cloudflare"},
+			{"domain": ["ha.home.lab"], "server": "static-hosts"},
+			{"action": "evaluate", "query_type": ["A", "AAAA"], "server": "cloudflare", "tag": "configurer-default@dns"},
+			{"action": "respond", "match_response": "configurer-default@dns", "query_type": ["A", "AAAA"], "rule_set": "configurer-default@ip"},
+			{"action": "evaluate", "query_type": ["A", "AAAA"], "server": "cloudflare", "tag": "configurer-claude@dns"},
+			{"action": "respond", "match_response": "configurer-claude@dns", "query_type": ["A", "AAAA"], "rule_set": "configurer-claude@ip"}
+		]
+	},
+	"route": {"rules": []},
+	"outbounds": []
+}`
+
+func TestSyncGroupsRemovesLegacyEvaluate(t *testing.T) {
+	config := parseConfig(t, legacyEvaluateConfig)
+
+	// Синхронизация одной группы убирает только ее правила evaluate/respond.
+	if err := syncGroups(config, testGroups[:1], testGroups); err != nil {
+		t.Fatal(err)
+	}
+
+	if hasLegacyGroupDNSRules(config, "default") || !hasLegacyGroupDNSRules(config, "claude") {
+		t.Errorf("after default sync: %v", dnsRules(t, config))
+	}
+
+	if err := syncGroups(config, testGroups, testGroups); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		`{"action":"predefined","query_type":["HTTPS"],"rcode":"NOERROR"}`,
+		`{"rule_set":"configurer-default","server":"cloudflare"}`,
+		`{"rule_set":"configurer-claude","server":"cloudflare"}`,
+		`{"domain":["ha.home.lab"],"server":"static-hosts"}`,
+	}
+
+	if got := dnsRules(t, config); !slices.Equal(got, want) {
+		t.Errorf("dns rules:\n got %v\nwant %v", got, want)
+	}
+}
+
+func TestCheckGroupsSyncDetectsLegacyEvaluate(t *testing.T) {
+	provider := NewProvider("")
+	path := filepath.Join(t.TempDir(), "config.json")
+
+	config := parseConfig(t, legacyEvaluateConfig)
+
+	if err := syncGroups(config, nil, testGroups); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = os.WriteFile(path, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	statuses, err := provider.CheckGroupsSync(path, testGroups)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, status := range statuses {
+		if status.Name != "block" && status.DNSSynced {
+			t.Errorf("group %s: legacy evaluate rules must mark dns as not synced", status.Name)
 		}
 	}
 }

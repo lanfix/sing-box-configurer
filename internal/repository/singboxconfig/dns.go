@@ -11,29 +11,26 @@ const (
 	// поэтому тег не пересекается с тегами других групп.
 	ipRuleSetTagSuffix = "@ip"
 
-	// dnsEvaluateTagSuffix — суффикс тега evaluate-ответа группы в DNS-правилах.
+	// dnsEvaluateTagSuffix — суффикс тега evaluate-ответа группы. Такие правила создавала версия 0.4.0,
+	// теперь они только удаляются при синхронизации.
 	dnsEvaluateTagSuffix = "@dns"
 )
-
-// dnsAddressQueryTypes — типы запросов, ответы на которые сверяются с IP/CIDR групп.
-var dnsAddressQueryTypes = []any{"A", "AAAA"}
 
 // groupDNSRules — системные DNS-правила одной группы.
 type groupDNSRules struct {
 	// head — правила в начале dns.rules (домены группы).
 	head []any
 
-	// tail — правила в конце dns.rules (сверка ответа с IP/CIDR группы).
-	tail []any
+	// legacy — правила evaluate/respond в конце dns.rules, созданные версией 0.4.0.
+	legacy []any
 }
 
 // syncDNSRules приводит системные DNS-правила групп targets к желаемому состоянию. Системные правила
 // остальных групп из allGroups сохраняются как есть, пользовательские правила не трогаются.
 //
-// Для группы с DNS-сервером создаются:
-//   - в начале dns.rules: запросы к доменам группы уходят на сервер группы;
-//   - в конце dns.rules: A/AAAA-запросы вычисляются через сервер группы (evaluate), и если ответ
-//     попадает в IP/CIDR группы, возвращается он (respond). Остальные запросы идут дальше, к dns.final.
+// Для группы с DNS-сервером в начале dns.rules создается правило: запросы к доменам группы уходят на ее
+// сервер. Остальные запросы, в том числе к адресам из IP/CIDR групп, идут дальше, к dns.final.
+// Правила evaluate/respond, оставшиеся от версии 0.4.0, у групп targets удаляются.
 //
 // Пока DNS-правила есть хотя бы у одной группы, первым добавляется фильтр HTTPS-записей: без ECH-ключей
 // клиенты отправляют настоящий SNI, и sniff маршрутизирует соединение по домену, а не по cloudflare-ech.com.
@@ -92,8 +89,8 @@ func syncDNSRules(config map[string]any, targets []Group, allGroups []Group) err
 		groupRules, ok := systemRules[groupName]
 		if !ok {
 			groupRules = &groupDNSRules{
-				head: []any{},
-				tail: []any{},
+				head:   []any{},
+				legacy: []any{},
 			}
 			systemRules[groupName] = groupRules
 		}
@@ -101,7 +98,7 @@ func syncDNSRules(config map[string]any, targets []Group, allGroups []Group) err
 		if isHead {
 			groupRules.head = append(groupRules.head, rule)
 		} else {
-			groupRules.tail = append(groupRules.tail, rule)
+			groupRules.legacy = append(groupRules.legacy, rule)
 		}
 	}
 
@@ -120,7 +117,7 @@ func syncDNSRules(config map[string]any, targets []Group, allGroups []Group) err
 		}
 
 		head = append(head, groupRules.head...)
-		tail = append(tail, groupRules.tail...)
+		tail = append(tail, groupRules.legacy...)
 	}
 
 	// Фильтр системный: созданный ранее конфигуратором не отличить от добавленного вручную.
@@ -137,12 +134,10 @@ func syncDNSRules(config map[string]any, targets []Group, allGroups []Group) err
 func newGroupDNSRules(group Group) *groupDNSRules {
 	if group.DNSServer == "" {
 		return &groupDNSRules{
-			head: []any{},
-			tail: []any{},
+			head:   []any{},
+			legacy: []any{},
 		}
 	}
-
-	evaluateTag := getDNSEvaluateTagForGroup(group.Name)
 
 	return &groupDNSRules{
 		head: []any{
@@ -151,20 +146,7 @@ func newGroupDNSRules(group Group) *groupDNSRules {
 				"server":   group.DNSServer,
 			},
 		},
-		tail: []any{
-			map[string]any{
-				"action":     "evaluate",
-				"query_type": slices.Clone(dnsAddressQueryTypes),
-				"server":     group.DNSServer,
-				"tag":        evaluateTag,
-			},
-			map[string]any{
-				"action":         "respond",
-				"match_response": evaluateTag,
-				"query_type":     slices.Clone(dnsAddressQueryTypes),
-				"rule_set":       getIPRuleSetTagForGroup(group.Name),
-			},
-		},
+		legacy: []any{},
 	}
 }
 
@@ -243,11 +225,6 @@ func isGroupRuleSetTag(tag string) bool {
 	return !strings.Contains(tag, "@")
 }
 
-// getDNSEvaluateTagForGroup возвращает тег evaluate-ответа группы.
-func getDNSEvaluateTagForGroup(groupName string) string {
-	return getRuleSetTagForGroup(groupName) + dnsEvaluateTagSuffix
-}
-
 // parseDNSEvaluateTag возвращает имя группы из тега evaluate-ответа.
 func parseDNSEvaluateTag(tag string) (string, bool) {
 	if !strings.HasPrefix(tag, ruleSetTagPrefix+"-") || !strings.HasSuffix(tag, dnsEvaluateTagSuffix) {
@@ -296,35 +273,19 @@ func hasHTTPSFilterRule(config map[string]any) bool {
 	})
 }
 
-// hasGroupDNSRules проверяет, что в конфиге есть полный набор системных DNS-правил группы.
-func hasGroupDNSRules(config map[string]any, group Group) bool {
+// hasLegacyGroupDNSRules проверяет, остались ли в конфиге правила evaluate/respond группы от версии 0.4.0.
+func hasLegacyGroupDNSRules(config map[string]any, groupName string) bool {
 	dns, _ := config["dns"].(map[string]any)
 	rules, _ := dns["rules"].([]any)
 
-	var hasEvaluate, hasRespond bool
-
-	for _, item := range rules {
+	return slices.ContainsFunc(rules, func(item any) bool {
 		rule, ok := item.(map[string]any)
 		if !ok {
-			continue
+			return false
 		}
 
-		groupName, isHead, ok := parseSystemDNSRule(rule)
-		if !ok || isHead || groupName != group.Name {
-			continue
-		}
+		name, isHead, ok := parseSystemDNSRule(rule)
 
-		action, _ := extractFiledFromMapAny(rule, "action")
-		server, _ := extractFiledFromMapAny(rule, "server")
-
-		if action == "evaluate" && server == group.DNSServer {
-			hasEvaluate = true
-		}
-
-		if action == "respond" && slices.Equal(extractRuleSetTags(rule), []string{getIPRuleSetTagForGroup(group.Name)}) {
-			hasRespond = true
-		}
-	}
-
-	return hasEvaluate && hasRespond
+		return ok && !isHead && name == groupName
+	})
 }

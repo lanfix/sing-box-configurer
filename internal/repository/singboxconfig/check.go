@@ -166,12 +166,12 @@ func (p *Provider) CheckGroupsSync(configPath string, groups []Group) ([]GroupSy
 		hasRule := existingRules[ruleSetTag+","+ipRuleSetTag]
 		actualOutbound, hasSelector := existingSelectors[selectorTag]
 
-		// Без DNS-сервера у группы не должно быть системных DNS-правил.
+		// Без DNS-сервера у группы не должно быть системных DNS-правил, правил evaluate/respond быть не должно.
 		actualDNSServer := actualDNSServers[group.Name]
-		dnsSynced := actualDNSServer == group.DNSServer
+		dnsSynced := actualDNSServer == group.DNSServer && !hasLegacyGroupDNSRules(config, group.Name)
 
 		if group.DNSServer != "" {
-			dnsSynced = dnsSynced && hasHTTPSFilter && hasGroupDNSRules(config, group)
+			dnsSynced = dnsSynced && hasHTTPSFilter
 		}
 
 		// Нормализуем actualOutbound так же, как и при создании selector.

@@ -439,7 +439,7 @@ function displayGroupSyncWarnings(statuses) {
         if (!status.dns_synced) {
             const actual = status.actual_dns_server || 'dns.final';
             const expected = status.dns_server || 'dns.final';
-            issues.push(actual === expected ? `неполные DNS-правила (${expected})` : `DNS: ${actual} → ${expected}`);
+            issues.push(actual === expected ? `устаревшие DNS-правила (${expected})` : `DNS: ${actual} → ${expected}`);
         }
 
         return `
