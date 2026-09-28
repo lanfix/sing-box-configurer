@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
-	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 )
 
 var (
@@ -73,14 +72,6 @@ func (m *Manager) List() []Record {
 	defer m.mu.RUnlock()
 
 	return slices.Clone(m.records)
-}
-
-// ConfigRecords возвращает записи в формате для синхронизации в конфиг sing-box.
-func (m *Manager) ConfigRecords() []singboxconfig.DNSRecord {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	return ToConfigRecords(m.records)
 }
 
 // Add добавляет запись.
@@ -159,20 +150,6 @@ func (m *Manager) Delete(id string) error {
 	m.records = slices.Delete(m.records, index, index+1)
 
 	return m.save()
-}
-
-// ToConfigRecords преобразует записи в формат для синхронизации в конфиг sing-box (порядок сохраняется).
-func ToConfigRecords(records []Record) []singboxconfig.DNSRecord {
-	result := make([]singboxconfig.DNSRecord, 0, len(records))
-
-	for _, record := range records {
-		result = append(result, singboxconfig.DNSRecord{
-			Domain:    record.Domain,
-			Addresses: slices.Clone(record.Addresses),
-		})
-	}
-
-	return result
 }
 
 // hasDomain проверяет, есть ли запись с доменом domain, кроме записи с ID exceptID (без блокировки).

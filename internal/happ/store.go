@@ -20,16 +20,9 @@ type Profile struct {
 	Info       *ProfileInfo `json:"info,omitempty"`
 	Servers    []Server     `json:"servers"`
 	Warnings   []string     `json:"warnings,omitempty"`
-	SyncedTags []string     `json:"synced_tags"`
-	SyncedHash string       `json:"synced_hash"`
 	LastUpdate time.Time    `json:"last_update"`
 	LastError  string       `json:"last_error,omitempty"`
 	CreatedAt  time.Time    `json:"created_at"`
-}
-
-// ServersHash возвращает хеш текущего списка серверов профиля.
-func (p *Profile) ServersHash() string {
-	return hashServers(p.Servers)
 }
 
 // storeData описывает данные Happ в app.json.

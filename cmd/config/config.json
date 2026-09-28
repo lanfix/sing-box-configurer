@@ -6,5 +6,7 @@
   "source_lists_proxy_url": "",
   "sing_box_config_path": "/etc/sing-box/config.json",
   "clash_api_base_url": "http://127.0.0.1:9090",
-  "clash_api_secret": ""
+  "clash_api_secret": "",
+  "rule_set_base_url": "",
+  "backup_dir": ""
 }

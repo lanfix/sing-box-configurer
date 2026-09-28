@@ -335,3 +335,113 @@ func TestMigrateHostsToDNSRecords(t *testing.T) {
 		t.Errorf("rules = %v", rules)
 	}
 }
+
+// TestMigrateConfigToAppData проверяет перенос настроек конфига sing-box в app.json (миграция 5).
+func TestMigrateConfigToAppData(t *testing.T) {
+	appData, path := newAppData(t, `{
+		"schema_version": 4,
+		"rules": [
+			{"id": "1", "value": "a.ru", "group": "default", "bypass": true},
+			{"id": "2", "value": "b.com", "group": "default", "bypass": false}
+		],
+		"url_sources": [{"id": "s", "group": "claude", "bypass": true}],
+		"groups": [{"name": "default"}, {"name": "block"}],
+		"happ": {"profiles": [{"synced_tags": ["sub-1"]}]}
+	}`)
+
+	var config map[string]any
+
+	err := json.Unmarshal([]byte(`{
+		"log": {"level": "info"},
+		"dns": {
+			"servers": [
+				{"type": "udp", "tag": "yandex", "server": "77.88.8.1"},
+				{"type": "hosts", "tag": "configurer-hosts", "predefined": {"a.lab": ["10.0.0.1"]}}
+			],
+			"rules": [
+				{"domain": ["a.lab"], "server": "configurer-hosts"},
+				{"action": "predefined", "query_type": ["HTTPS"], "rcode": "NOERROR"},
+				{"rule_set": "configurer-default", "server": "yandex"},
+				{"domain": ["claude.ai"], "server": "yandex"}
+			],
+			"final": "yandex",
+			"independent_cache": true
+		},
+		"inbounds": [
+			{"type": "tun", "tag": "tun-in"},
+			{"type": "mixed", "tag": "mixed-proxy", "listen": "0.0.0.0", "listen_port": 1080, "users": [{"username": "u", "password": "p"}]}
+		],
+		"outbounds": [
+			{"type": "vless", "tag": "manual"},
+			{"type": "vless", "tag": "sub-1"},
+			{"type": "urltest", "tag": "auto", "outbounds": ["manual"]},
+			{"type": "direct", "tag": "direct"},
+			{"type": "selector", "tag": "select-default", "outbounds": ["manual"]}
+		],
+		"endpoints": [{"type": "wireguard", "tag": "wg"}],
+		"route": {"default_domain_resolver": {"server": "yandex"}},
+		"experimental": {"clash_api": {"secret": "old-secret", "access_control_allow_origin": ["http://yacd"]}}
+	}`), &config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	singBox := &fakeSingBox{
+		config: config,
+		writes: 0,
+	}
+
+	if _, err = run(appData, singBox, registry); err != nil {
+		t.Fatal(err)
+	}
+
+	if singBox.writes != 0 {
+		t.Error("sing-box config must not be changed")
+	}
+
+	fields := readFields(t, path)
+
+	check := func(key, want string) {
+		t.Helper()
+
+		raw, _ := json.Marshal(fields[key])
+
+		if string(raw) != want {
+			t.Errorf("%s:\n got %s\nwant %s", key, raw, want)
+		}
+	}
+
+	check("rules", `[{"group":"bypass","id":"1","value":"a.ru"},{"group":"default","id":"2","value":"b.com"}]`)
+	check("url_sources", `[{"group":"bypass","id":"s"}]`)
+	check("groups", `[{"name":"default"}]`)
+	check("inbounds", `{"mixed":[{"listen":"0.0.0.0","listen_port":1080,"tag":"mixed-proxy","users":[{"password":"p","username":"u"}]}]}`)
+	check("settings", `{"clash_api":{"allow_origins":["http://yacd"],"secret":"old-secret"},"log_level":"info"}`)
+
+	dns := fields["dns"].(map[string]any)
+
+	raw, _ := json.Marshal(dns["servers"])
+	if string(raw) != `[{"server":"77.88.8.1","tag":"yandex","type":"udp"}]` {
+		t.Errorf("dns servers = %s", raw)
+	}
+
+	raw, _ = json.Marshal(dns["rules"])
+	if string(raw) != `[{"domain":["claude.ai"],"server":"yandex"}]` {
+		t.Errorf("dns rules = %s", raw)
+	}
+
+	raw, _ = json.Marshal(dns["settings"])
+	if string(raw) != `{"default_domain_resolver":"yandex","extra":{"independent_cache":true},"final":"yandex"}` {
+		t.Errorf("dns settings = %s", raw)
+	}
+
+	outbounds := fields["outbounds"].([]any)
+	tags := make([]string, 0, len(outbounds))
+
+	for _, item := range outbounds {
+		tags = append(tags, item.(map[string]any)["config"].(map[string]any)["tag"].(string))
+	}
+
+	if raw, _ = json.Marshal(tags); string(raw) != `["manual","wg"]` {
+		t.Errorf("outbounds = %s", raw)
+	}
+}

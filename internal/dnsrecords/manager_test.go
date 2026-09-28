@@ -91,7 +91,7 @@ func TestEditAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	records := manager.ConfigRecords()
+	records := manager.List()
 
 	if len(records) != 1 || records[0].Domain != "c.lab" || records[0].Addresses[0] != "10.0.0.3" {
 		t.Errorf("records = %+v", records)

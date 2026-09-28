@@ -28,7 +28,7 @@ const (
 	// При изменении API контроллера версию нужно поднять: updater обновит контроллер первым.
 	// Новые версии контроллера должны оставаться совместимыми со старыми версиями конфигуратора:
 	// при откате конфигуратора контроллер не откатывается.
-	ControllerVersion = "v0.0.2"
+	ControllerVersion = "v0.0.3"
 
 	// MinUpgradeFrom — минимальная версия, с которой можно обновиться на эту. Пустая — без ограничений.
 	MinUpgradeFrom = ""
@@ -285,11 +285,20 @@ func (u *Updater) backup(ctx context.Context, configurer *ComponentState) error 
 		}
 
 		stat, err := os.Stat(u.paths.local(rel))
-		if err != nil || !stat.Mode().IsRegular() {
+		if err != nil {
 			continue
 		}
 
-		files = append(files, rel)
+		// Смонтированный каталог (например, data с app.json) бэкапится файлами.
+		if stat.IsDir() {
+			files = appendUnique(files, dirFiles(u.paths, rel)...)
+
+			continue
+		}
+
+		if stat.Mode().IsRegular() {
+			files = appendUnique(files, rel)
+		}
 	}
 
 	backups, err := backupFiles(u.paths, u.journal.Dir(), files)

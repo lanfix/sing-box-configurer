@@ -7,13 +7,13 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
-	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 )
 
 // Rule represents a routing rule for VPN
@@ -22,8 +22,7 @@ type Rule struct {
 	Type        string    `json:"type"` // "domain", "domain_suffix", "ip", "cidr"
 	Value       string    `json:"value"`
 	Description string    `json:"description"`
-	Group       string    `json:"group"`  // группа, к которой привязано правило
-	Bypass      bool      `json:"bypass"` // правило исключает трафик из туннелирования sing-box
+	Group       string    `json:"group"` // группа, к которой привязано правило
 	Applied     bool      `json:"applied"`
 	Deleted     bool      `json:"deleted"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -35,7 +34,6 @@ type URLSource struct {
 	URL         string    `json:"url"`
 	Description string    `json:"description"`
 	Group       string    `json:"group"`    // группа, к которой привязан источник
-	Bypass      bool      `json:"bypass"`   // правила источника исключают трафик из туннелирования sing-box
 	Interval    int       `json:"interval"` // in minutes
 	LastUpdate  time.Time `json:"last_update"`
 	LastStatus  string    `json:"last_status"` // "success", "error"
@@ -51,29 +49,11 @@ type Group struct {
 	Name            string    `json:"name"`
 	Description     string    `json:"description"`
 	DefaultOutbound string    `json:"default_outbound,omitempty"`
-	DNSServer       string    `json:"dns_server,omitempty"` // тег DNS-сервера для доменов и IP группы
+	DNSServer       string    `json:"dns_server,omitempty"` // тег DNS-сервера для доменов группы
 	CreatedAt       time.Time `json:"created_at"`
-}
 
-// ConfigGroup возвращает группу в формате для синхронизации в конфиг sing-box.
-func (g Group) ConfigGroup() singboxconfig.Group {
-	return singboxconfig.Group{
-		Name:            g.Name,
-		Description:     g.Description,
-		DefaultOutbound: g.DefaultOutbound,
-		DNSServer:       g.DNSServer,
-	}
-}
-
-// ConfigGroups возвращает группы в формате для синхронизации в конфиг sing-box (порядок сохраняется).
-func ConfigGroups(groups []Group) []singboxconfig.Group {
-	configGroups := make([]singboxconfig.Group, 0, len(groups))
-
-	for _, group := range groups {
-		configGroups = append(configGroups, group.ConfigGroup())
-	}
-
-	return configGroups
+	// System — системная группа: не хранится в app.json, не редактируется и не удаляется.
+	System bool `json:"system,omitempty"`
 }
 
 // RulesData stores the rules and URL sources
@@ -83,9 +63,49 @@ type RulesData struct {
 	Groups     []Group     `json:"groups"`
 }
 
-// ReservedGroupName — имя группы, которое нельзя занять: rule-set исключений из туннелирования
-// использует тег, который совпал бы с тегом группы с таким именем.
-const ReservedGroupName = "bypass"
+const (
+	// BlockGroupName — системная группа: соединения по ее правилам отклоняются.
+	BlockGroupName = "block"
+
+	// BypassGroupName — системная группа: трафик по ее правилам идет мимо туннеля sing-box.
+	BypassGroupName = "bypass"
+
+	// DirectGroupName — группа прямого подключения, которая создается при первой инициализации.
+	DirectGroupName = "direct"
+
+	// legacyDefaultGroupName — группа, в которую попадали правила до появления групп.
+	legacyDefaultGroupName = "default"
+)
+
+// groupNameRe — допустимое имя группы: оно входит в теги rule-set-ов и selector-а.
+var groupNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// SystemGroups возвращает системные группы.
+func SystemGroups() []Group {
+	return []Group{
+		{
+			Name:            BlockGroupName,
+			Description:     "Блокировка: соединения отклоняются",
+			DefaultOutbound: "",
+			DNSServer:       "",
+			CreatedAt:       time.Time{},
+			System:          true,
+		},
+		{
+			Name:            BypassGroupName,
+			Description:     "Мимо туннеля: sing-box не перехватывает трафик",
+			DefaultOutbound: "",
+			DNSServer:       "",
+			CreatedAt:       time.Time{},
+			System:          true,
+		},
+	}
+}
+
+// IsSystemGroup проверяет, что имя принадлежит системной группе.
+func IsSystemGroup(name string) bool {
+	return name == BlockGroupName || name == BypassGroupName
+}
 
 // RuleVersion пятая версия формата правил.
 // https://sing-box.sagernet.org/configuration/rule-set/source-format/#version
@@ -136,7 +156,6 @@ type Manager struct {
 	urlRulesMu       sync.RWMutex
 	cancelFuncs      map[string]context.CancelFunc // URL ID -> cancel function
 	cancelFuncsMu    sync.Mutex
-	migrated         bool // флаг, что была выполнена миграция
 }
 
 func NewManager(appData *appdata.File, sourceListsProxyUrl string) (*Manager, error) {
@@ -158,19 +177,26 @@ func NewManager(appData *appdata.File, sourceListsProxyUrl string) (*Manager, er
 		sourceListsProxy: sourceListsProxy,
 		urlRules:         map[string]RuleSet{},
 		cancelFuncs:      map[string]context.CancelFunc{},
-		migrated:         false,
 		data: RulesData{
 			Rules:      []Rule{},
 			URLSources: []URLSource{},
-			Groups: []Group{
-				{
-					Name:        "default",
-					Description: "Группа по умолчанию",
-					CreatedAt:   time.Now(),
-				},
-			},
+			Groups:     initialGroups(),
 		},
 	}, nil
+}
+
+// initialGroups возвращает группы новой инсталляции.
+func initialGroups() []Group {
+	return []Group{
+		{
+			Name:            DirectGroupName,
+			Description:     "Прямое подключение",
+			DefaultOutbound: "direct",
+			DNSServer:       "",
+			CreatedAt:       time.Now(),
+			System:          false,
+		},
+	}
 }
 
 func (rm *Manager) Load() error {
@@ -187,63 +213,58 @@ func (rm *Manager) Load() error {
 		return err
 	}
 
-	migrationOccurred := false
+	changed := false
+
+	if newData.Rules == nil {
+		newData.Rules = []Rule{}
+		changed = true
+	}
 
 	if newData.URLSources == nil {
 		newData.URLSources = []URLSource{}
-		migrationOccurred = true
-
-		log.Println("Migrated rules data: added URLSources field")
+		changed = true
 	}
 
+	// Данных о группах нет: это новая инсталляция либо данные, созданные до появления групп.
 	if newData.Groups == nil {
-		newData.Groups = []Group{
-			{
-				Name:        "default",
-				Description: "Группа по умолчанию",
-				CreatedAt:   time.Now(),
-			},
+		newData.Groups = initialGroups()
+		changed = true
+
+		if len(newData.Rules) > 0 || len(newData.URLSources) > 0 {
+			newData.Groups = append(newData.Groups, Group{
+				Name:            legacyDefaultGroupName,
+				Description:     "Группа по умолчанию",
+				DefaultOutbound: "",
+				DNSServer:       "",
+				CreatedAt:       time.Now(),
+				System:          false,
+			})
 		}
-
-		migrationOccurred = true
-
-		log.Println("Migrated rules data: added Groups field with default group")
 	}
 
 	for i := range newData.Rules {
 		if newData.Rules[i].Group == "" {
-			newData.Rules[i].Group = "default"
-			migrationOccurred = true
+			newData.Rules[i].Group = legacyDefaultGroupName
+			changed = true
 		}
 	}
 
 	for i := range newData.URLSources {
 		if newData.URLSources[i].Group == "" {
-			newData.URLSources[i].Group = "default"
-			migrationOccurred = true
+			newData.URLSources[i].Group = legacyDefaultGroupName
+			changed = true
 		}
 	}
 
 	rm.data = newData
 
-	if migrationOccurred {
-		rm.migrated = true
-
-		// Сохраняем изменения после миграции.
+	if changed {
 		if err := rm.save(); err != nil {
-			log.Printf("Warning: failed to save migrated data: %v", err)
+			log.Printf("Warning: failed to save normalized rules data: %v", err)
 		}
 	}
 
 	return nil
-}
-
-// WasMigrated возвращает true, если при загрузке была выполнена миграция.
-func (rm *Manager) WasMigrated() bool {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
-	return rm.migrated
 }
 
 // save сохраняет правила, URL-источники и группы в app.json, не затрагивая данные других менеджеров.
@@ -297,7 +318,7 @@ type BulkAddFailure struct {
 
 // AddRuleBulk добавляет несколько правил одновременно.
 func (rm *Manager) AddRuleBulk(
-	ruleType, values, description, group string, bypass bool,
+	ruleType, values, description, group string,
 ) (*BulkAddResult, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -330,7 +351,6 @@ func (rm *Manager) AddRuleBulk(
 			Value:       line,
 			Description: description,
 			Group:       group,
-			Bypass:      bypass,
 			Applied:     false,
 			CreatedAt:   time.Now(),
 		}
@@ -360,7 +380,7 @@ func (rm *Manager) AddRuleBulk(
 }
 
 // EditRule обновляет параметры правила.
-func (rm *Manager) EditRule(id string, description string, group string, bypass bool) error {
+func (rm *Manager) EditRule(id string, description string, group string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -376,7 +396,6 @@ func (rm *Manager) EditRule(id string, description string, group string, bypass 
 		if rm.data.Rules[i].ID == id {
 			rm.data.Rules[i].Description = description
 			rm.data.Rules[i].Group = group
-			rm.data.Rules[i].Bypass = bypass
 			found = true
 
 			break
@@ -430,38 +449,22 @@ func (rm *Manager) ApplyRules() error {
 	return rm.save()
 }
 
-// GetRuleSet возвращает полный набор правил группы default.
-//
-// Deprecated: используйте GetRuleSetByGroup для получения правил конкретной группы.
-func (rm *Manager) GetRuleSet() (SingBoxRuleSet, error) {
-	return rm.GetRuleSetByGroup("default", RuleSetKindAll)
-}
-
 // GetRuleSetByGroup возвращает набор правил вида kind для указанной группы.
-// Правила и источники, исключенные из туннелирования, в него не попадают.
 func (rm *Manager) GetRuleSetByGroup(groupName string, kind RuleSetKind) (SingBoxRuleSet, error) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	return rm.getRuleSetLocked(kind, func(group string, bypass bool) bool {
-		return !bypass && group == groupName
-	})
+	return rm.getRuleSetLocked(kind, groupName)
 }
 
-// GetBypassRuleSet возвращает набор правил, исключенных из туннелирования, из всех групп.
+// GetBypassRuleSet возвращает набор правил системной группы bypass (мимо туннеля).
 func (rm *Manager) GetBypassRuleSet() (SingBoxRuleSet, error) {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
-	return rm.getRuleSetLocked(RuleSetKindAll, func(_ string, bypass bool) bool {
-		return bypass
-	})
+	return rm.GetRuleSetByGroup(BypassGroupName, RuleSetKindAll)
 }
 
-// getRuleSetLocked собирает набор вида kind из примененных правил и источников, для которых match
-// возвращает true (без блокировки). Если какой-то из источников еще не загружен после старта,
-// возвращает ErrRuleSetNotReady.
-func (rm *Manager) getRuleSetLocked(kind RuleSetKind, match func(group string, bypass bool) bool) (SingBoxRuleSet, error) {
+// getRuleSetLocked собирает набор вида kind из примененных правил и источников группы groupName
+// (без блокировки). Если какой-то из источников еще не загружен после старта, возвращает ErrRuleSetNotReady.
+func (rm *Manager) getRuleSetLocked(kind RuleSetKind, groupName string) (SingBoxRuleSet, error) {
 	rules := make([]map[string]any, 0, 1)
 
 	var (
@@ -476,7 +479,7 @@ func (rm *Manager) getRuleSetLocked(kind RuleSetKind, match func(group string, b
 
 	// Правила, помеченные на удаление, но примененные, остаются в наборе до применения изменений.
 	for _, rule := range rm.data.Rules {
-		if !rule.Applied || !match(rule.Group, rule.Bypass) {
+		if !rule.Applied || rule.Group != groupName {
 			continue
 		}
 
@@ -507,7 +510,7 @@ func (rm *Manager) getRuleSetLocked(kind RuleSetKind, match func(group string, b
 	rm.urlRulesMu.RLock()
 
 	for _, source := range rm.data.URLSources {
-		if !source.Applied || !match(source.Group, source.Bypass) {
+		if !source.Applied || source.Group != groupName {
 			continue
 		}
 
@@ -614,7 +617,7 @@ func (rm *Manager) GetPendingCount() int {
 	return count
 }
 
-// GetGroups возвращает список всех групп.
+// GetGroups возвращает пользовательские группы (без системных) в порядке их создания.
 func (rm *Manager) GetGroups() []Group {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
@@ -623,12 +626,39 @@ func (rm *Manager) GetGroups() []Group {
 	return slices.Clone(rm.data.Groups)
 }
 
+// GetAllGroups возвращает системные группы, а за ними пользовательские.
+func (rm *Manager) GetAllGroups() []Group {
+	return append(SystemGroups(), rm.GetGroups()...)
+}
+
+// GroupsByDNSServer возвращает имена пользовательских групп, у которых DNS-сервер равен dnsServer.
+func (rm *Manager) GroupsByDNSServer(dnsServer string) []string {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	names := make([]string, 0)
+
+	for _, group := range rm.data.Groups {
+		if group.DNSServer == dnsServer {
+			names = append(names, group.Name)
+		}
+	}
+
+	return names
+}
+
 // AddGroup добавляет новую группу.
 func (rm *Manager) AddGroup(group Group) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	if group.Name == ReservedGroupName {
+	group.Name = strings.TrimSpace(group.Name)
+
+	if !groupNameRe.MatchString(group.Name) {
+		return fmt.Errorf("некорректное имя группы %q: допустимы латиница, цифры, дефис и подчеркивание", group.Name)
+	}
+
+	if IsSystemGroup(group.Name) {
 		return fmt.Errorf("имя группы %s зарезервировано", group.Name)
 	}
 
@@ -639,6 +669,7 @@ func (rm *Manager) AddGroup(group Group) error {
 		}
 	}
 
+	group.System = false
 	group.CreatedAt = time.Now()
 	rm.data.Groups = append(rm.data.Groups, group)
 
@@ -649,6 +680,10 @@ func (rm *Manager) AddGroup(group Group) error {
 func (rm *Manager) EditGroup(name, description, defaultOutbound, dnsServer string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
+
+	if IsSystemGroup(name) {
+		return fmt.Errorf("системную группу %s нельзя изменить", name)
+	}
 
 	// Находим группу.
 	found := false
@@ -676,11 +711,11 @@ func (rm *Manager) DeleteGroup(name string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	if name == "default" {
-		return fmt.Errorf("нельзя удалить группу default")
+	if IsSystemGroup(name) {
+		return fmt.Errorf("системную группу %s нельзя удалить", name)
 	}
 
-	// Проверяем, что в группе нет правил и источников.
+	// Удалить можно только пустую группу.
 	for _, rule := range rm.data.Rules {
 		if rule.Group == name && !rule.Deleted {
 			return fmt.Errorf("в группе %s есть правила, удалите их сначала", name)
@@ -707,8 +742,12 @@ func (rm *Manager) DeleteGroup(name string) error {
 	return rm.save()
 }
 
-// groupExists проверяет, существует ли группа с заданным именем.
+// groupExists проверяет, существует ли группа (пользовательская или системная) с заданным именем.
 func (rm *Manager) groupExists(name string) bool {
+	if IsSystemGroup(name) {
+		return true
+	}
+
 	for _, g := range rm.data.Groups {
 		if g.Name == name {
 			return true

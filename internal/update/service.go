@@ -45,11 +45,6 @@ const (
 	defaultRepository = "lanfix/sing-box-configurer"
 )
 
-// PendingChecker сообщает о несохраненных изменениях конфига, которые потеряются при пересоздании контейнера.
-type PendingChecker interface {
-	HasPending() bool
-}
-
 // CheckResult — результат проверки обновлений.
 type CheckResult struct {
 	CurrentVersion string    `json:"current_version"`
@@ -87,7 +82,6 @@ type Status struct {
 type Service struct {
 	controller *dockercontroller.Provider
 	registry   *Registry
-	pending    PendingChecker
 	listenPort string
 
 	mu        sync.Mutex
@@ -95,7 +89,7 @@ type Service struct {
 }
 
 // NewService создает сервис обновлений. listenAddr — адрес HTTP-сервера конфигуратора (нужен порт для health-check).
-func NewService(controller *dockercontroller.Provider, registry *Registry, pending PendingChecker, listenAddr string) *Service {
+func NewService(controller *dockercontroller.Provider, registry *Registry, listenAddr string) *Service {
 	_, port, err := net.SplitHostPort(listenAddr)
 	if err != nil || port == "" {
 		port = "8080"
@@ -104,7 +98,6 @@ func NewService(controller *dockercontroller.Provider, registry *Registry, pendi
 	return &Service{
 		controller: controller,
 		registry:   registry,
-		pending:    pending,
 		listenPort: port,
 		mu:         sync.Mutex{},
 		lastCheck:  nil,
@@ -185,10 +178,6 @@ func (s *Service) Start(ctx context.Context, target string) (*Status, error) {
 
 	if !semver.IsValid(target) || semver.Compare(target, version.Version) <= 0 {
 		return nil, fmt.Errorf("version %q is not newer than current %s", target, version.Version)
-	}
-
-	if s.pending.HasPending() {
-		return nil, fmt.Errorf("there are unapplied config changes: apply or discard them before updating")
 	}
 
 	self, err := s.self(ctx)

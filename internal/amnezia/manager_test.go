@@ -20,24 +20,16 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
 )
 
-// fakeWriter запоминает записанные в конфиг теги.
-type fakeWriter struct {
-	tags  map[string]map[string]any
-	calls int
-}
+// outboundsByTag возвращает outbound-ы профилей для рендера, сгруппированные по тегу, и предупреждения.
+func outboundsByTag(manager *Manager) (map[string]map[string]any, []string) {
+	outbounds, warnings := manager.Outbounds()
+	result := make(map[string]map[string]any, len(outbounds))
 
-func (f *fakeWriter) ReplaceOutbounds(removeTags []string, add []map[string]any) error {
-	f.calls++
-
-	for _, tag := range removeTags {
-		delete(f.tags, tag)
+	for _, outbound := range outbounds {
+		result[outbound["tag"].(string)] = outbound
 	}
 
-	for _, item := range add {
-		f.tags[item["tag"].(string)] = item
-	}
-
-	return nil
+	return result, warnings
 }
 
 // fakeVersion возвращает заданную версию sing-box.
@@ -236,44 +228,36 @@ func premiumKey(t *testing.T) string {
 	})
 }
 
-// TestManagerAWGSupport проверяет, что AWG-конфиг не пишется в конфиг официального sing-box.
+// TestManagerAWGSupport проверяет, что AWG-сервер не попадает в конфиг официального sing-box.
 func TestManagerAWGSupport(t *testing.T) {
 	appData := appdata.NewFile(filepath.Join(t.TempDir(), "app.json"))
-	writer := &fakeWriter{
-		tags:  map[string]map[string]any{},
-		calls: 0,
-	}
 
-	manager, err := NewManager(appData, writer, fakeVersion("sing-box 1.14.0"), nil)
+	manager, err := NewManager(appData, fakeVersion("sing-box 1.14.0"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	profile, synced, err := manager.Add(context.Background(), makeKey(t, awgExport(t)), "")
+	profile, err := manager.Add(context.Background(), makeKey(t, awgExport(t)), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if synced || writer.calls != 0 || profile.Name != "Сервер 1" {
-		t.Errorf("AWG must not be written without support: synced=%v calls=%d name=%q", synced, writer.calls, profile.Name)
+	if profile.Name != "Сервер 1" {
+		t.Errorf("name = %q", profile.Name)
 	}
 
-	if _, err = manager.Sync(profile.ID); err == nil {
-		t.Error("sync must fail without AWG support")
+	if outbounds, warnings := outboundsByTag(manager); len(outbounds) != 0 || len(warnings) != 1 {
+		t.Errorf("AWG must be skipped without support: outbounds=%v warnings=%v", outbounds, warnings)
 	}
 
-	// Профиль сохранился и после перезагрузки менеджера доступен для записи на форке sing-box-lx.
-	manager, err = NewManager(appData, writer, fakeVersion("sing-box 1.14.1-lx.8"), nil)
+	// Профиль сохранился и после перезагрузки менеджера попадает в конфиг форка sing-box-lx.
+	manager, err = NewManager(appData, fakeVersion("sing-box 1.14.1-lx.8"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err = manager.Sync(profile.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	if writer.tags["[Сервер 1] AmneziaWG"] == nil {
-		t.Errorf("endpoint must be written: %v", writer.tags)
+	if outbounds, _ := outboundsByTag(manager); outbounds["[Сервер 1] AmneziaWG"] == nil {
+		t.Errorf("endpoint must be rendered: %v", outbounds)
 	}
 
 	if _, err = manager.Refresh(context.Background(), profile.ID); err == nil {
@@ -284,8 +268,8 @@ func TestManagerAWGSupport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(writer.tags) != 0 || len(manager.List()) != 0 {
-		t.Errorf("delete must remove endpoint and profile: %v", writer.tags)
+	if outbounds, _ := outboundsByTag(manager); len(outbounds) != 0 || len(manager.List()) != 0 {
+		t.Errorf("delete must remove endpoint and profile: %v", outbounds)
 	}
 }
 
@@ -293,25 +277,21 @@ func TestManagerAWGSupport(t *testing.T) {
 func TestManagerPremium(t *testing.T) {
 	gateway, client := newFakeGateway(t)
 	appData := appdata.NewFile(filepath.Join(t.TempDir(), "app.json"))
-	writer := &fakeWriter{
-		tags:  map[string]map[string]any{},
-		calls: 0,
-	}
 
-	manager, err := NewManager(appData, writer, fakeVersion("sing-box 1.14.1-lx.8"), client)
+	manager, err := NewManager(appData, fakeVersion("sing-box 1.14.1-lx.8"), client)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	ctx := context.Background()
 
-	profile, synced, err := manager.Add(ctx, premiumKey(t), "")
+	profile, err := manager.Add(ctx, premiumKey(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !synced || profile.Name != "Amnezia Premium" || profile.Premium == nil {
-		t.Fatalf("unexpected profile: synced=%v %+v", synced, profile)
+	if profile.Name != "Amnezia Premium" || profile.Premium == nil {
+		t.Fatalf("unexpected profile: %+v", profile)
 	}
 
 	first := gateway.requests["v1/config"][0]
@@ -326,7 +306,9 @@ func TestManagerPremium(t *testing.T) {
 		t.Error("gateway must receive public key of the stored private key")
 	}
 
-	endpoint := writer.tags["[Amnezia Premium] AmneziaWG"]
+	outbounds, _ := outboundsByTag(manager)
+
+	endpoint := outbounds["[Amnezia Premium] AmneziaWG"]
 	if endpoint == nil || endpoint["private_key"] != profile.Premium.WireGuardPrivateKey || endpoint["jc"] != 4 {
 		t.Fatalf("private key placeholder must be replaced: %+v", endpoint)
 	}
@@ -362,11 +344,6 @@ func TestManagerPremium(t *testing.T) {
 		t.Errorf("country must be requested and applied: %+v", updated)
 	}
 
-	// Сервер сменился — серверы в конфиге устарели до нажатия «В конфиг».
-	if !manager.List()[0].OutOfSync() {
-		t.Error("profile must be out of sync after country change")
-	}
-
 	// Ошибка шлюза сохраняется в профиле, прежние серверы остаются.
 	gateway.failWith = http.StatusPaymentRequired
 
@@ -390,8 +367,8 @@ func TestManagerPremium(t *testing.T) {
 		t.Errorf("delete must revoke the device: %+v", revokes)
 	}
 
-	if len(writer.tags) != 0 {
-		t.Errorf("delete must remove endpoint: %v", writer.tags)
+	if outbounds, _ = outboundsByTag(manager); len(outbounds) != 0 {
+		t.Errorf("delete must remove endpoint: %v", outbounds)
 	}
 }
 

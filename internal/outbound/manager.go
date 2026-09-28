@@ -1,584 +1,245 @@
 package outbound
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
+	"github.com/lanfix/sing-box-configurer/internal/jsonmap"
+	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
 )
 
-// Manager управляет VPN outbounds в sing-box конфиге.
+// Теги встроенных outbound-ов, которые создает рендер конфига.
+const (
+	AutoTag   = "auto"
+	DirectTag = "direct"
+	BlockTag  = "block"
+
+	// SelectorTagPrefix — префикс тегов selector-ов групп (select-<группа>).
+	SelectorTagPrefix = "select-"
+)
+
+// ErrNotFound — outbound-а с таким ID нет.
+var ErrNotFound = errors.New("outbound not found")
+
+// Item — outbound (или endpoint), добавленный вручную. Config — объект sing-box как есть.
+type Item struct {
+	ID        string         `json:"id"`
+	Config    map[string]any `json:"config"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+// Tag возвращает тег outbound-а.
+func (i *Item) Tag() string {
+	return jsonmap.String(i.Config, "tag")
+}
+
+// appDataSection описывает раздел app.json, которым владеет менеджер.
+type appDataSection struct {
+	Outbounds *[]Item `json:"outbounds"`
+}
+
+// IsReservedTag проверяет, что тег занят встроенным outbound-ом или selector-ом группы.
+func IsReservedTag(tag string) bool {
+	return tag == AutoTag || tag == DirectTag || tag == BlockTag || strings.HasPrefix(tag, SelectorTagPrefix)
+}
+
+// IsEndpoint проверяет, что объект — endpoint sing-box (WireGuard), а не outbound.
+func IsEndpoint(config map[string]any) bool {
+	return jsonmap.String(config, "type") == "wireguard"
+}
+
+// Manager хранит outbound-ы, добавленные вручную, в разделе "outbounds" файла app.json.
 type Manager struct {
-	configManager *singboxconfig.Provider
-	mu            sync.RWMutex
+	appData *appdata.File
+	mu      sync.RWMutex
+	items   []Item
 }
 
-// NewManager создает новый менеджер outbounds.
-func NewManager(configManager *singboxconfig.Provider) *Manager {
-	return &Manager{
-		configManager: configManager,
+// NewManager загружает outbound-ы из app.json.
+func NewManager(appData *appdata.File) (*Manager, error) {
+	m := &Manager{
+		appData: appData,
+		mu:      sync.RWMutex{},
+		items:   []Item{},
 	}
+
+	var section appDataSection
+
+	if err := appData.Read(&section); err != nil && !errors.Is(err, appdata.ErrNotExist) {
+		return nil, fmt.Errorf("cannot read outbounds: %w", err)
+	}
+
+	if section.Outbounds != nil {
+		m.items = *section.Outbounds
+	}
+
+	return m, nil
 }
 
-// GetOutbounds возвращает список всех VPN outbounds из конфига (включая endpoints).
-func (m *Manager) GetOutbounds() ([]Outbound, error) {
+// List возвращает копию списка outbound-ов.
+func (m *Manager) List() []Item {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	config, err := m.configManager.GetTempOrActualConfigParsed()
-	if err != nil {
-		return nil, fmt.Errorf("cannot get config: %w", err)
+	result := make([]Item, len(m.items))
+
+	for i, item := range m.items {
+		result[i] = item
+		result[i].Config = jsonmap.Clone(item.Config)
 	}
 
-	var result []Outbound
-
-	outboundsRaw, ok := config["outbounds"]
-	if ok {
-		outboundsList, ok := outboundsRaw.([]interface{})
-		if ok {
-			for _, item := range outboundsList {
-				outboundMap, ok := item.(map[string]interface{})
-				if !ok {
-					continue
-				}
-
-				outboundType, _ := outboundMap["type"].(string)
-				tag, _ := outboundMap["tag"].(string)
-
-				if outboundType == "selector" || outboundType == "direct" || outboundType == "block" {
-					continue
-				}
-
-				server, _ := outboundMap["server"].(string)
-				port := 0
-
-				if serverPort, ok := outboundMap["server_port"].(float64); ok {
-					port = int(serverPort)
-				}
-
-				result = append(result, Outbound{
-					Tag:        tag,
-					Type:       outboundType,
-					Server:     server,
-					Port:       port,
-					Config:     outboundMap,
-					IsEndpoint: false,
-				})
-			}
-		}
-	}
-
-	endpointsRaw, ok := config["endpoints"]
-	if ok {
-		endpointsList, ok := endpointsRaw.([]interface{})
-		if ok {
-			for _, item := range endpointsList {
-				endpointMap, ok := item.(map[string]interface{})
-				if !ok {
-					continue
-				}
-
-				endpointType, _ := endpointMap["type"].(string)
-				tag, _ := endpointMap["tag"].(string)
-
-				server := ""
-				port := 0
-
-				if endpointType == "wireguard" {
-					peersRaw, ok := endpointMap["peers"].([]interface{})
-					if ok && len(peersRaw) > 0 {
-						if peer, ok := peersRaw[0].(map[string]interface{}); ok {
-							server, _ = peer["address"].(string)
-
-							if peerPort, ok := peer["port"].(float64); ok {
-								port = int(peerPort)
-							}
-						}
-					}
-				}
-
-				result = append(result, Outbound{
-					Tag:        tag,
-					Type:       endpointType,
-					Server:     server,
-					Port:       port,
-					Config:     endpointMap,
-					IsEndpoint: true,
-				})
-			}
-		}
-	}
-
-	return result, nil
+	return result
 }
 
-// AddOutboundFromShare добавляет новый outbound в конфиг из share-ссылки.
-func (m *Manager) AddOutboundFromShare(shareUrl string) (*Outbound, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	share, err := ParseShareUrl(shareUrl)
+// AddFromShare добавляет outbound из share-ссылки. Если тег уже занят, к нему добавляется суффикс.
+func (m *Manager) AddFromShare(shareURL string) (*Item, error) {
+	share, err := ParseShareUrl(shareURL)
 	if err != nil {
 		return nil, fmt.Errorf("cannot parse share url: %w", err)
 	}
 
-	config, err := m.configManager.GetTempOrActualConfigParsed()
+	config, err := jsonmap.Normalize(share.GetOutbound().Config)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read config: %w", err)
+		return nil, fmt.Errorf("cannot convert outbound: %w", err)
 	}
 
-	outbound := share.GetOutbound()
-
-	if outbound.IsEndpoint {
-		return m.addEndpoint(config, outbound)
-	}
-
-	return m.addOutboundToConfig(config, outbound)
-}
-
-// addEndpoint добавляет endpoint (например, WireGuard) в секцию endpoints.
-func (m *Manager) addEndpoint(config map[string]interface{}, outbound *Outbound) (*Outbound, error) {
-	endpointsRaw, ok := config["endpoints"]
-	if !ok {
-		config["endpoints"] = []interface{}{}
-		endpointsRaw = config["endpoints"]
-	}
-
-	endpointsList, ok := endpointsRaw.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid endpoints format")
-	}
-
-	for _, item := range endpointsList {
-		endpointMap, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		existingTag, _ := endpointMap["tag"].(string)
-		if existingTag == outbound.Tag {
-			outbound.Tag = fmt.Sprintf("%s-%s", outbound.Tag, uuid.New().String()[:8])
-			outbound.Config["tag"] = outbound.Tag
-
-			break
-		}
-	}
-
-	endpointsList = append(endpointsList, outbound.Config)
-	config["endpoints"] = endpointsList
-
-	selectorIndex := -1
-	outboundsRaw, ok := config["outbounds"]
-	if ok {
-		outboundsList, ok := outboundsRaw.([]interface{})
-		if ok {
-			for i, item := range outboundsList {
-				outboundMap, ok := item.(map[string]interface{})
-				if !ok {
-					continue
-				}
-
-				outboundType, _ := outboundMap["type"].(string)
-				tag, _ := outboundMap["tag"].(string)
-
-				if outboundType == "selector" && (tag == "select" || tag == "select-default") {
-					if selectorIndex == -1 {
-						selectorIndex = i
-					}
-
-					selectorsOutbounds, ok := outboundMap["outbounds"].([]interface{})
-					if ok {
-						found := false
-
-						for _, selOutbound := range selectorsOutbounds {
-							if selOutbound == outbound.Tag {
-								found = true
-
-								break
-							}
-						}
-
-						if !found {
-							selectorsOutbounds = append(selectorsOutbounds, outbound.Tag)
-							outboundMap["outbounds"] = selectorsOutbounds
-						}
-					}
-				}
-			}
-
-			config["outbounds"] = outboundsList
-		}
-	}
-
-	newData, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("cannot marshal config: %w", err)
-	}
-
-	if err := m.configManager.SaveTempConfig(newData); err != nil {
-		return nil, fmt.Errorf("cannot save temp config: %w", err)
-	}
-
-	return outbound, nil
-}
-
-// addOutboundToConfig добавляет обычный outbound в секцию outbounds.
-func (m *Manager) addOutboundToConfig(config map[string]interface{}, outbound *Outbound) (*Outbound, error) {
-	outboundsRaw, ok := config["outbounds"]
-	if !ok {
-		config["outbounds"] = []interface{}{}
-		outboundsRaw = config["outbounds"]
-	}
-
-	outboundsList, ok := outboundsRaw.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid outbounds format")
-	}
-
-	for _, item := range outboundsList {
-		outboundMap, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		existingTag, _ := outboundMap["tag"].(string)
-		if existingTag == outbound.Tag {
-			outbound.Tag = fmt.Sprintf("%s-%s", outbound.Tag, uuid.New().String()[:8])
-			outbound.Config["tag"] = outbound.Tag
-
-			break
-		}
-	}
-
-	selectorIndex := -1
-	insertPosition := len(outboundsList)
-
-	for i, item := range outboundsList {
-		outboundMap, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		outboundType, _ := outboundMap["type"].(string)
-		tag, _ := outboundMap["tag"].(string)
-
-		if outboundType == "selector" && (tag == "select" || tag == "select-default") {
-			if selectorIndex == -1 {
-				selectorIndex = i
-			}
-
-			selectorsOutbounds, ok := outboundMap["outbounds"].([]interface{})
-			if ok {
-				found := false
-
-				for _, selOutbound := range selectorsOutbounds {
-					if selOutbound == outbound.Tag {
-						found = true
-
-						break
-					}
-				}
-
-				if !found {
-					selectorsOutbounds = append(selectorsOutbounds, outbound.Tag)
-					outboundMap["outbounds"] = selectorsOutbounds
-				}
-			}
-		}
-
-		if outboundType == "direct" || outboundType == "block" {
-			if insertPosition == len(outboundsList) {
-				insertPosition = i
-			}
-		}
-	}
-
-	newOutboundsList := make([]interface{}, 0, len(outboundsList)+1)
-	newOutboundsList = append(newOutboundsList, outboundsList[:insertPosition]...)
-	newOutboundsList = append(newOutboundsList, outbound.Config)
-	newOutboundsList = append(newOutboundsList, outboundsList[insertPosition:]...)
-
-	config["outbounds"] = newOutboundsList
-
-	newData, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("cannot marshal config: %w", err)
-	}
-
-	if err := m.configManager.SaveTempConfig(newData); err != nil {
-		return nil, fmt.Errorf("cannot save temp config: %w", err)
-	}
-
-	return outbound, nil
-}
-
-// DeleteOutbound удаляет outbound из конфига по тегу (из outbounds или endpoints).
-func (m *Manager) DeleteOutbound(tag string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	configMap := config.(map[string]any)
+	configMap["tag"] = m.uniqueTagLocked(jsonmap.String(configMap, "tag"))
+
+	return m.addLocked(configMap)
+}
+
+// Add добавляет outbound, заданный объектом sing-box.
+func (m *Manager) Add(config map[string]any) (*Item, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.addLocked(config)
+}
+
+// Update заменяет объект outbound-а с указанным ID.
+func (m *Manager) Update(id string, config map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	index := m.indexLocked(id)
+	if index < 0 {
+		return ErrNotFound
+	}
+
+	if err := m.validateLocked(config, id); err != nil {
+		return err
+	}
+
+	m.items[index].Config = jsonmap.Clone(config)
+
+	return m.save()
+}
+
+// Delete удаляет outbound с указанным ID.
+func (m *Manager) Delete(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	index := m.indexLocked(id)
+	if index < 0 {
+		return ErrNotFound
+	}
+
+	m.items = slices.Delete(m.items, index, index+1)
+
+	return m.save()
+}
+
+// addLocked проверяет и добавляет outbound (без блокировки).
+func (m *Manager) addLocked(config map[string]any) (*Item, error) {
+	if err := m.validateLocked(config, ""); err != nil {
+		return nil, err
+	}
+
+	item := Item{
+		ID:        uuid.NewString(),
+		Config:    jsonmap.Clone(config),
+		CreatedAt: time.Now(),
+	}
+
+	m.items = append(m.items, item)
+
+	if err := m.save(); err != nil {
+		return nil, err
+	}
+
+	return &item, nil
+}
+
+// validateLocked проверяет объект outbound-а. exceptID — ID редактируемого outbound-а (без блокировки).
+func (m *Manager) validateLocked(config map[string]any, exceptID string) error {
+	tag := strings.TrimSpace(jsonmap.String(config, "tag"))
+
 	if tag == "" {
-		return fmt.Errorf("tag cannot be empty")
+		return fmt.Errorf("у outbound-а должен быть тег (поле tag)")
 	}
 
-	config, err := m.configManager.GetTempOrActualConfigParsed()
-	if err != nil {
-		return fmt.Errorf("cannot read config: %w", err)
+	if jsonmap.String(config, "type") == "" {
+		return fmt.Errorf("у outbound-а должен быть тип (поле type)")
 	}
 
-	found := false
+	if IsReservedTag(tag) {
+		return fmt.Errorf("тег %s зарезервирован (auto, direct, block и select-*)", tag)
+	}
 
-	outboundsRaw, ok := config["outbounds"]
-	if ok {
-		outboundsList, ok := outboundsRaw.([]interface{})
-		if ok {
-			newOutboundsList := make([]interface{}, 0, len(outboundsList))
-
-			for _, item := range outboundsList {
-				outboundMap, ok := item.(map[string]interface{})
-				if !ok {
-					newOutboundsList = append(newOutboundsList, item)
-
-					continue
-				}
-
-				outboundTag, _ := outboundMap["tag"].(string)
-				outboundType, _ := outboundMap["type"].(string)
-
-				if outboundTag == tag {
-					found = true
-
-					continue
-				}
-
-				if outboundType == "selector" {
-					selectorsOutbounds, ok := outboundMap["outbounds"].([]interface{})
-					if ok {
-						newSelectorsOutbounds := make([]interface{}, 0, len(selectorsOutbounds))
-
-						for _, selOutbound := range selectorsOutbounds {
-							if selOutbound != tag {
-								newSelectorsOutbounds = append(newSelectorsOutbounds, selOutbound)
-							}
-						}
-
-						outboundMap["outbounds"] = newSelectorsOutbounds
-					}
-				}
-
-				newOutboundsList = append(newOutboundsList, outboundMap)
-			}
-
-			config["outbounds"] = newOutboundsList
+	for _, item := range m.items {
+		if item.ID != exceptID && item.Tag() == tag {
+			return fmt.Errorf("outbound с тегом %s уже существует", tag)
 		}
-	}
-
-	endpointsRaw, ok := config["endpoints"]
-	if ok {
-		endpointsList, ok := endpointsRaw.([]interface{})
-		if ok {
-			newEndpointsList := make([]interface{}, 0, len(endpointsList))
-
-			for _, item := range endpointsList {
-				endpointMap, ok := item.(map[string]interface{})
-				if !ok {
-					newEndpointsList = append(newEndpointsList, item)
-
-					continue
-				}
-
-				endpointTag, _ := endpointMap["tag"].(string)
-
-				if endpointTag == tag {
-					found = true
-
-					outboundsRaw2, ok2 := config["outbounds"]
-					if ok2 {
-						outboundsList2, ok3 := outboundsRaw2.([]interface{})
-						if ok3 {
-							for _, item2 := range outboundsList2 {
-								outboundMap2, ok4 := item2.(map[string]interface{})
-								if !ok4 {
-									continue
-								}
-
-								outboundType2, _ := outboundMap2["type"].(string)
-
-								if outboundType2 == "selector" {
-									selectorsOutbounds2, ok5 := outboundMap2["outbounds"].([]interface{})
-									if ok5 {
-										newSelectorsOutbounds2 := make([]interface{}, 0, len(selectorsOutbounds2))
-
-										for _, selOutbound2 := range selectorsOutbounds2 {
-											if selOutbound2 != tag {
-												newSelectorsOutbounds2 = append(newSelectorsOutbounds2, selOutbound2)
-											}
-										}
-
-										outboundMap2["outbounds"] = newSelectorsOutbounds2
-									}
-								}
-							}
-						}
-					}
-
-					continue
-				}
-
-				newEndpointsList = append(newEndpointsList, endpointMap)
-			}
-
-			config["endpoints"] = newEndpointsList
-		}
-	}
-
-	if !found {
-		return fmt.Errorf("outbound not found")
-	}
-
-	newData, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("cannot marshal config: %w", err)
-	}
-
-	if err := m.configManager.SaveTempConfig(newData); err != nil {
-		return fmt.Errorf("cannot save temp config: %w", err)
 	}
 
 	return nil
 }
 
-// ReplaceOutbounds заменяет во временном конфиге outbounds и endpoints с тегами removeTags на элементы из add.
-// Элементы типа wireguard записываются в секцию endpoints, остальные — в outbounds.
-// Новые теги добавляются во все системные selector-ы (select-*), удаленные теги убираются из всех групп.
-func (m *Manager) ReplaceOutbounds(removeTags []string, add []map[string]any) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	config, err := m.configManager.GetTempOrActualConfigParsed()
-	if err != nil {
-		return fmt.Errorf("cannot read config: %w", err)
+// uniqueTagLocked возвращает свободный тег на основе tag (без блокировки).
+func (m *Manager) uniqueTagLocked(tag string) string {
+	taken := func(candidate string) bool {
+		return IsReservedTag(candidate) || slices.ContainsFunc(m.items, func(item Item) bool {
+			return item.Tag() == candidate
+		})
 	}
 
-	outboundsList, _ := config["outbounds"].([]any)
-
-	addTags := make([]any, 0, len(add))
-
-	for _, item := range add {
-		addTags = append(addTags, item["tag"])
+	if !taken(tag) {
+		return tag
 	}
 
-	removeSet := make(map[any]bool, len(removeTags))
-
-	for _, tag := range removeTags {
-		removeSet[tag] = true
-	}
-
-	// Теги, которые исчезают из конфига насовсем.
-	goneSet := make(map[any]bool, len(removeTags))
-
-	for tag := range removeSet {
-		if !slices.Contains(addTags, tag) {
-			goneSet[tag] = true
+	for i := 2; ; i++ {
+		if candidate := fmt.Sprintf("%s-%d", tag, i); !taken(candidate) {
+			return candidate
 		}
 	}
+}
 
-	kept := make([]any, 0, len(outboundsList)+len(add))
-	insertPosition := -1
+// indexLocked возвращает индекс outbound-а с ID id или -1 (без блокировки).
+func (m *Manager) indexLocked(id string) int {
+	return slices.IndexFunc(m.items, func(item Item) bool {
+		return item.ID == id
+	})
+}
 
-	for _, item := range outboundsList {
-		outboundMap, ok := item.(map[string]any)
-		if !ok {
-			kept = append(kept, item)
-
-			continue
-		}
-
-		if removeSet[outboundMap["tag"]] {
-			continue
-		}
-
-		outboundType, _ := outboundMap["type"].(string)
-		outboundTag, _ := outboundMap["tag"].(string)
-
-		if members, ok := outboundMap["outbounds"].([]any); ok {
-			members = slices.DeleteFunc(members, func(tag any) bool {
-				return removeSet[tag]
-			})
-
-			if outboundType == "selector" && strings.HasPrefix(outboundTag, "select") {
-				for _, tag := range addTags {
-					if !slices.Contains(members, tag) {
-						members = append(members, tag)
-					}
-				}
-			}
-
-			outboundMap["outbounds"] = members
-
-			if goneSet[outboundMap["default"]] {
-				delete(outboundMap, "default")
-			}
-		}
-
-		if insertPosition == -1 && (outboundType == "direct" || outboundType == "block") {
-			insertPosition = len(kept)
-		}
-
-		kept = append(kept, outboundMap)
+// save сохраняет outbound-ы в app.json (без блокировки).
+func (m *Manager) save() error {
+	section := appDataSection{
+		Outbounds: &m.items,
 	}
 
-	if insertPosition == -1 {
-		insertPosition = len(kept)
-	}
-
-	newOutbounds := make([]any, 0, len(add))
-	newEndpoints := make([]any, 0)
-
-	for _, item := range add {
-		// WireGuard в sing-box — endpoint, а не outbound: он хранится в отдельной секции.
-		if itemType, _ := item["type"].(string); itemType == "wireguard" {
-			newEndpoints = append(newEndpoints, item)
-
-			continue
-		}
-
-		newOutbounds = append(newOutbounds, item)
-	}
-
-	config["outbounds"] = slices.Insert(kept, insertPosition, newOutbounds...)
-
-	endpointsList, _ := config["endpoints"].([]any)
-	keptEndpoints := make([]any, 0, len(endpointsList)+len(newEndpoints))
-
-	for _, item := range endpointsList {
-		if endpointMap, ok := item.(map[string]any); ok && removeSet[endpointMap["tag"]] {
-			continue
-		}
-
-		keptEndpoints = append(keptEndpoints, item)
-	}
-
-	keptEndpoints = append(keptEndpoints, newEndpoints...)
-
-	if len(keptEndpoints) > 0 {
-		config["endpoints"] = keptEndpoints
-	} else {
-		delete(config, "endpoints")
-	}
-
-	newData, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("cannot marshal config: %w", err)
-	}
-
-	if err = m.configManager.SaveTempConfig(newData); err != nil {
-		return fmt.Errorf("cannot save temp config: %w", err)
+	if err := m.appData.Merge(section); err != nil {
+		return fmt.Errorf("cannot save outbounds: %w", err)
 	}
 
 	return nil

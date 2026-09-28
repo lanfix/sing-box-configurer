@@ -1,3 +1,14 @@
+FROM docker.io/library/node:24-alpine AS view
+
+WORKDIR /opt/view
+
+COPY view/package.json view/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY view/ ./
+RUN npm run build
+
+
 FROM docker.io/library/golang:1.26.4-alpine AS builder
 
 ARG VERSION=dev
@@ -10,6 +21,7 @@ COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
 COPY . .
+COPY --from=view /opt/view/dist /opt/view/dist
 
 RUN for app in sing-box-configurer:cmd updater:cmd/updater; do \
         CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \

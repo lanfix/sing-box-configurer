@@ -14,14 +14,16 @@ import (
 
 type ClashAPI struct {
 	baseUrl string
-	secret  string
-	client  *http.Client
+	// secret возвращает текущий секрет Clash API: он меняется при применении нового конфига sing-box.
+	secret func() string
+	client *http.Client
 	// streamClient — для потоковых эндпоинтов (/traffic), у которых не должно
 	// быть общего дедлайна на весь ответ.
 	streamClient *http.Client
 }
 
-func NewClashAPI(baseUrl, secret string) *ClashAPI {
+// NewClashAPI создает клиент Clash API по адресу baseUrl. secret вызывается перед каждым запросом.
+func NewClashAPI(baseUrl string, secret func() string) *ClashAPI {
 	if strings.HasSuffix(baseUrl, "/") {
 		baseUrl = baseUrl[:len(baseUrl)-1]
 	}
@@ -56,8 +58,8 @@ func (api *ClashAPI) doRequest(method, path string, body io.Reader) (*http.Respo
 
 	req.Header.Set("Content-Type", "application/json")
 
-	if api.secret != "" {
-		req.Header.Set("Authorization", "Bearer "+api.secret)
+	if secret := api.secret(); secret != "" {
+		req.Header.Set("Authorization", "Bearer "+secret)
 	}
 
 	return api.do(req)
@@ -349,8 +351,8 @@ func (api *ClashAPI) StreamTraffic(ctx context.Context, onSample func(TrafficSam
 		return fmt.Errorf("cannot create request: %w", err)
 	}
 
-	if api.secret != "" {
-		req.Header.Set("Authorization", "Bearer "+api.secret)
+	if secret := api.secret(); secret != "" {
+		req.Header.Set("Authorization", "Bearer "+secret)
 	}
 
 	resp, err := api.streamClient.Do(req)

@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
-	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
+	"github.com/lanfix/sing-box-configurer/internal/migrations/legacy"
 )
 
 // registry — список всех миграций. Миграции никогда не удаляются и не меняются после релиза,
@@ -37,7 +37,7 @@ var registry = []Migration{
 				return err
 			}
 
-			if err = singboxconfig.EnsureBypass(config); err != nil {
+			if err = legacy.EnsureBypass(config); err != nil {
 				return fmt.Errorf("cannot add bypass to sing-box config: %w", err)
 			}
 
@@ -56,6 +56,25 @@ var registry = []Migration{
 		Name:    "move hosts dns servers to dns records",
 		Up:      migrateHostsToDNSRecords,
 	},
+	{
+		Version: 5,
+		Name:    "move sing-box config settings to app data",
+		Up:      migrateConfigToAppData,
+	},
+}
+
+// toLegacyRecords преобразует DNS-записи в формат легаси-синхронизации конфига (порядок сохраняется).
+func toLegacyRecords(records []dnsrecords.Record) []legacy.DNSRecord {
+	result := make([]legacy.DNSRecord, 0, len(records))
+
+	for _, record := range records {
+		result = append(result, legacy.DNSRecord{
+			Domain:    record.Domain,
+			Addresses: slices.Clone(record.Addresses),
+		})
+	}
+
+	return result
 }
 
 // migrateHostsToDNSRecords переносит записи пользовательских hosts-серверов (predefined) в DNS-записи
@@ -66,7 +85,7 @@ func migrateHostsToDNSRecords(state *State) error {
 		return err
 	}
 
-	imported, err := singboxconfig.ImportHostsServers(config)
+	imported, err := legacy.ImportHostsServers(config)
 	if err != nil {
 		return fmt.Errorf("cannot import hosts servers: %w", err)
 	}
@@ -106,7 +125,7 @@ func migrateHostsToDNSRecords(state *State) error {
 
 	state.AppData["dns_records"] = raw
 
-	if err = singboxconfig.SyncDNSRecords(config, dnsrecords.ToConfigRecords(records)); err != nil {
+	if err = legacy.SyncDNSRecords(config, toLegacyRecords(records)); err != nil {
 		return fmt.Errorf("cannot sync dns records: %w", err)
 	}
 
@@ -135,7 +154,7 @@ func migrateGroupDNSServers(state *State) error {
 		return err
 	}
 
-	servers := singboxconfig.GetGroupDNSServers(config)
+	servers := legacy.GetGroupDNSServers(config)
 	changed := false
 
 	for _, group := range groups {

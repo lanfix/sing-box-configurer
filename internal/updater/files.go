@@ -2,13 +2,70 @@ package updater
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
+
+const (
+	// maxBackupFileSize — файлы крупнее в смонтированных каталогах не бэкапятся (это не данные приложения).
+	maxBackupFileSize = 16 << 20
+)
+
+// skipBackupDirs — каталоги внутри смонтированных каталогов, которые не бэкапятся.
+var skipBackupDirs = []string{".updates", "backups"}
+
+// dirFiles возвращает пути (относительно папки деплоя) обычных файлов смонтированного каталога rel.
+func dirFiles(paths deployPaths, rel string) []string {
+	files := make([]string, 0)
+	root := paths.local(rel)
+
+	_ = filepath.WalkDir(root, func(current string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		if entry.IsDir() {
+			if current != root && slices.Contains(skipBackupDirs, entry.Name()) {
+				return filepath.SkipDir
+			}
+
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() > maxBackupFileSize {
+			return nil
+		}
+
+		inner, err := filepath.Rel(root, current)
+		if err != nil {
+			return nil
+		}
+
+		files = append(files, path.Join(rel, filepath.ToSlash(inner)))
+
+		return nil
+	})
+
+	return files
+}
+
+// appendUnique добавляет в список значения, которых в нем еще нет.
+func appendUnique(list []string, values ...string) []string {
+	for _, value := range values {
+		if !slices.Contains(list, value) {
+			list = append(list, value)
+		}
+	}
+
+	return list
+}
 
 // deployPaths сопоставляет пути папки деплоя на хосте и внутри контейнера updater.
 type deployPaths struct {

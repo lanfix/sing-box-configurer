@@ -1,331 +1,223 @@
+// Package singboxconfig читает и записывает рабочий конфиг sing-box и хранит его резервные копии.
 package singboxconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/lanfix/sing-box-configurer/internal/fsutil"
 )
 
+const (
+	// backupPrefix — префикс имен файлов резервных копий конфига.
+	backupPrefix = "sing-box-"
+
+	// keepBackups — сколько последних резервных копий хранить.
+	keepBackups = 10
+)
+
+// Provider работает с рабочим конфигом sing-box — тем, который sing-box читает при запуске.
+// Файл меняется только атомарно при применении проверенного конфига.
 type Provider struct {
-	actualConfigPath string
-	tempConfigPath   string
+	path      string
+	backupDir string
+
+	// Кэш секрета Clash API из рабочего конфига, сбрасывается при изменении файла.
+	mu            sync.Mutex
+	secretModTime time.Time
+	secret        string
 }
 
-// Group представляет информацию о группе для синхронизации.
-type Group struct {
-	Name            string
-	Description     string
-	DefaultOutbound string
-
-	// DNSServer — тег DNS-сервера для доменов и IP группы. Пустое значение — DNS-правила группы не нужны.
-	DNSServer string
-}
-
-func NewProvider(actualConfigPath string) *Provider {
-	tempDir := os.TempDir()
-	tempConfigPath := filepath.Join(tempDir, "sing-box-config-temp.json")
-
+// NewProvider создает провайдер для конфига по пути path. Резервные копии хранятся в backupDir.
+func NewProvider(path, backupDir string) *Provider {
 	return &Provider{
-		actualConfigPath: actualConfigPath,
-		tempConfigPath:   tempConfigPath,
+		path:          path,
+		backupDir:     backupDir,
+		mu:            sync.Mutex{},
+		secretModTime: time.Time{},
+		secret:        "",
 	}
 }
 
-// GetActualConfig читает и возвращает текущий конфиг sing-box (как есть).
+// Path возвращает путь к рабочему конфигу.
+func (p *Provider) Path() string {
+	return p.path
+}
+
+// GetActualConfig возвращает содержимое рабочего конфига как есть. Если файла нет, ошибка оборачивает os.ErrNotExist.
 func (p *Provider) GetActualConfig() ([]byte, error) {
-	configData, err := os.ReadFile(p.actualConfigPath)
+	data, err := os.ReadFile(p.path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, err
-		}
-
-		return nil, fmt.Errorf("cannot read config: %w", err)
+		return nil, fmt.Errorf("cannot read sing-box config: %w", err)
 	}
 
-	return configData, nil
+	return data, nil
 }
 
-// HasPending возвращает true, если есть несохраненный конфиг (временный конфиг).
-func (p *Provider) HasPending() bool {
-	if _, err := os.Stat(p.tempConfigPath); err == nil {
-		return true
-	}
-
-	return false
-}
-
-// GetTempConfig возвращает временный конфиг, если он существует.
-func (p *Provider) GetTempConfig() ([]byte, error) {
-	configData, err := os.ReadFile(p.tempConfigPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, err
-		}
-
-		return nil, fmt.Errorf("cannot read temp config: %w", err)
-	}
-
-	return configData, nil
-}
-
-// GetTempOrActualConfig возвращает временный конфиг, либо основной, если временного нет.
-func (p *Provider) GetTempOrActualConfig() ([]byte, error) {
-	configData, err := p.GetTempConfig()
-	if err != nil && os.IsNotExist(err) {
-		return p.GetActualConfig()
-	}
-
-	return configData, err
-}
-
-// GetTempOrActualConfigParsed возвращает временный конфиг, либо основной, если временного нет,
-// распарсенным в map. Комментарии удаляются перед парсингом.
-func (p *Provider) GetTempOrActualConfigParsed() (map[string]any, error) {
-	configData, err := p.GetTempOrActualConfig()
-	if err != nil {
-		return nil, fmt.Errorf("cannot get config: %w", err)
-	}
-
-	var config map[string]any
-
-	if err := json.Unmarshal(removeComments(configData), &config); err != nil {
-		return nil, fmt.Errorf("cannot parse config json: %w", err)
-	}
-
-	return config, nil
-}
-
-// GetActualConfigParsed возвращает основной конфиг, распарсенный в map. Комментарии удаляются.
+// GetActualConfigParsed возвращает рабочий конфиг, разобранный в map. Комментарии удаляются.
 func (p *Provider) GetActualConfigParsed() (map[string]any, error) {
-	configData, err := p.GetActualConfig()
+	data, err := p.GetActualConfig()
 	if err != nil {
-		return nil, fmt.Errorf("cannot get config: %w", err)
+		return nil, err
 	}
 
-	var config map[string]any
-
-	if err = json.Unmarshal(removeComments(configData), &config); err != nil {
-		return nil, fmt.Errorf("cannot parse config json: %w", err)
-	}
-
-	return config, nil
+	return Parse(data)
 }
 
-// WriteActualConfig записывает основной конфиг. Файл пишется in-place, чтобы не ломать bind mount.
+// WriteActualConfig атомарно записывает конфиг, заданный в виде map.
 func (p *Provider) WriteActualConfig(config map[string]any) error {
-	configData, err := json.MarshalIndent(config, "", "  ")
+	data, err := Marshal(config)
 	if err != nil {
-		return fmt.Errorf("cannot marshal config: %w", err)
+		return err
 	}
 
-	if err = os.WriteFile(p.actualConfigPath, append(configData, '\n'), 0644); err != nil {
-		return fmt.Errorf("cannot write actual config: %w", err)
+	return p.Write(data)
+}
+
+// Write атомарно записывает рабочий конфиг.
+func (p *Provider) Write(data []byte) error {
+	if err := fsutil.WriteFileAtomic(p.path, data, 0644); err != nil {
+		return fmt.Errorf("cannot write sing-box config: %w", err)
 	}
 
 	return nil
 }
 
-// SaveTempConfig сохраняет конфиг во временный файл без применения.
-func (p *Provider) SaveTempConfig(configData []byte) error {
-	// Валидируем JSON (с комментариями).
-	if err := validateJSONWithComments(configData); err != nil {
-		return fmt.Errorf("cannot parse json: %w", err)
+// Backup сохраняет копию рабочего конфига и возвращает путь к ней. Хранятся последние keepBackups копий.
+// Если рабочего конфига еще нет, возвращает пустой путь.
+func (p *Provider) Backup() (string, error) {
+	data, err := os.ReadFile(p.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
 	}
 
-	if err := os.WriteFile(p.tempConfigPath, configData, 0644); err != nil {
-		return fmt.Errorf("cannot write temp config: %w", err)
-	}
-
-	return nil
-}
-
-// ApplyTempConfigToActual применяет временный конфиг к основному файлу конфигурации.
-func (p *Provider) ApplyTempConfigToActual() error {
-	content, err := p.GetTempConfig()
 	if err != nil {
-		return fmt.Errorf("cannot get temp config: %w", err)
+		return "", fmt.Errorf("cannot read sing-box config: %w", err)
 	}
 
-	// Валидируем JSON (с комментариями).
-	if err := validateJSONWithComments(content); err != nil {
-		return fmt.Errorf("cannot validate temp config json: %w", err)
+	if err = os.MkdirAll(p.backupDir, 0755); err != nil {
+		return "", fmt.Errorf("cannot create backup dir: %w", err)
 	}
 
-	// TODO: Сохранять историю изменений.
+	backupPath := filepath.Join(p.backupDir, backupPrefix+time.Now().UTC().Format("20060102-150405.000")+".json")
 
-	if err = os.WriteFile(p.actualConfigPath, content, 0644); err != nil {
-		return fmt.Errorf("cannot write actual config: %w", err)
+	if err = fsutil.WriteFileAtomic(backupPath, data, 0600); err != nil {
+		return "", fmt.Errorf("cannot write backup: %w", err)
 	}
 
-	_ = p.RemoveTempConfig()
+	p.pruneBackups()
 
-	return nil
+	return backupPath, nil
 }
 
-// RemoveTempConfig удаляет временный конфиг.
-func (p *Provider) RemoveTempConfig() error {
-	if err := os.Remove(p.tempConfigPath); err != nil {
-		return fmt.Errorf("cannot remove temp config: %w", err)
-	}
-
-	return nil
-}
-
-// GetTempPath возвращает путь к временному конфигу.
-func (p *Provider) GetTempPath() string {
-	return p.tempConfigPath
-}
-
-// GetActualPath возвращает путь к основному конфигу.
-func (p *Provider) GetActualPath() string {
-	return p.actualConfigPath
-}
-
-// SyncGroupsToConfig синхронизирует все группы в конфиг sing-box по пути configPath.
-// Функция идемпотентна: повторный вызов не создает дубликатов rule-set-ов, правил и selector-ов.
-func (p *Provider) SyncGroupsToConfig(configPath string, groups []Group) error {
-	configData, err := os.ReadFile(configPath)
+// Restore записывает в рабочий конфиг содержимое резервной копии backupPath.
+func (p *Provider) Restore(backupPath string) error {
+	data, err := os.ReadFile(backupPath)
 	if err != nil {
-		return fmt.Errorf("cannot read config: %w", err)
+		return fmt.Errorf("cannot read backup: %w", err)
 	}
 
-	var config map[string]any
-
-	if err = json.Unmarshal(removeComments(configData), &config); err != nil {
-		return fmt.Errorf("cannot parse config: %w", err)
-	}
-
-	if err = syncGroups(config, groups, groups); err != nil {
-		return fmt.Errorf("cannot sync groups: %w", err)
-	}
-
-	if route, ok := config["route"].(map[string]any); ok {
-		ensureServiceRules(route)
-	}
-
-	// Исключения синхронизируются последними: их правило должно стоять перед служебными.
-	if err = EnsureBypass(config); err != nil {
-		return fmt.Errorf("cannot sync bypass: %w", err)
-	}
-
-	configData, err = json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("cannot marshal config: %w", err)
-	}
-
-	if err = os.WriteFile(configPath, configData, 0644); err != nil {
-		return fmt.Errorf("cannot write config: %w", err)
-	}
-
-	return nil
+	return p.Write(data)
 }
 
-// ensureServiceRules добавляет в начало route.rules отсутствующие служебные правила
-// (sniff, hijack-dns, resolve, ip_is_private -> direct).
-func ensureServiceRules(route map[string]any) {
-	rules, _ := route["rules"].([]any)
-
-	var (
-		foundSniff     bool
-		foundHijackDNS bool
-		foundResolve   bool
-		foundPrivate   bool
-	)
-
-	for _, rule := range rules {
-		ruleMap, ok := rule.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		switch action, _ := ruleMap["action"].(string); action {
-		case "sniff":
-			foundSniff = true
-
-		case "hijack-dns":
-			foundHijackDNS = true
-
-		case "resolve":
-			foundResolve = true
-		}
-
-		if _, ok := ruleMap["ip_is_private"]; ok {
-			foundPrivate = true
-		}
+// ClashSecret возвращает секрет Clash API из рабочего конфига (experimental.clash_api.secret).
+// Результат кэшируется до изменения файла.
+func (p *Provider) ClashSecret() string {
+	info, err := os.Stat(p.path)
+	if err != nil {
+		return ""
 	}
 
-	serviceRules := make([]any, 0, 4)
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	if !foundSniff {
-		serviceRules = append(serviceRules, map[string]any{
-			"action": "sniff",
-		})
+	if info.ModTime().Equal(p.secretModTime) {
+		return p.secret
 	}
 
-	if !foundHijackDNS {
-		serviceRules = append(serviceRules, map[string]any{
-			"action":   "hijack-dns",
-			"protocol": "dns",
-		})
+	p.secretModTime = info.ModTime()
+	p.secret = ""
+
+	config, err := p.GetActualConfigParsed()
+	if err != nil {
+		return ""
 	}
 
-	if !foundResolve {
-		serviceRules = append(serviceRules, map[string]any{
-			"action":   "resolve",
-			"strategy": "ipv4_only",
-		})
-	}
+	experimental, _ := config["experimental"].(map[string]any)
+	clashAPI, _ := experimental["clash_api"].(map[string]any)
+	p.secret, _ = clashAPI["secret"].(string)
 
-	if !foundPrivate {
-		serviceRules = append(serviceRules, map[string]any{
-			"ip_is_private": true,
-			"outbound":      "direct",
-		})
-	}
+	return p.secret
+}
 
-	if len(serviceRules) == 0 {
+// pruneBackups удаляет старые резервные копии сверх keepBackups.
+func (p *Provider) pruneBackups() {
+	entries, err := os.ReadDir(p.backupDir)
+	if err != nil {
 		return
 	}
 
-	route["rules"] = append(serviceRules, rules...)
-}
+	names := make([]string, 0, len(entries))
 
-// validateJSONWithComments валидирует JSON с поддержкой комментариев.
-func validateJSONWithComments(configData []byte) error {
-	cleanedConfigData := removeComments(configData)
-
-	var tmp interface{}
-
-	if err := json.Unmarshal(cleanedConfigData, &tmp); err != nil {
-		return fmt.Errorf("cannot unmarshal json: %w", err)
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), backupPrefix) {
+			names = append(names, entry.Name())
+		}
 	}
 
-	return nil
+	// Имена содержат время, поэтому сортировка по имени — сортировка по времени.
+	slices.Sort(names)
+
+	for len(names) > keepBackups {
+		_ = os.Remove(filepath.Join(p.backupDir, names[0]))
+		names = names[1:]
+	}
 }
 
-// removeComments удаляет все типы комментариев из JSON.
+// Parse разбирает конфиг sing-box. Комментарии (// и /* */) удаляются перед разбором.
+func Parse(data []byte) (map[string]any, error) {
+	var config map[string]any
+
+	if err := json.Unmarshal(removeComments(data), &config); err != nil {
+		return nil, fmt.Errorf("cannot parse sing-box config: %w", err)
+	}
+
+	return config, nil
+}
+
+// Marshal сериализует конфиг в тот вид, в котором он записывается на диск: с отступами, ключи
+// объектов отсортированы, в конце перевод строки. Одинаковые конфиги дают одинаковые байты.
+func Marshal(config map[string]any) ([]byte, error) {
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("cannot marshal sing-box config: %w", err)
+	}
+
+	return append(data, '\n'), nil
+}
+
+// multilineCommentRe — многострочные комментарии /* */.
+var multilineCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// removeComments удаляет из JSON комментарии /* */, // и #, не трогая содержимое строк.
 func removeComments(data []byte) []byte {
-	text := string(data)
-
-	// Удаляем многострочные комментарии /* */.
-	multilineCommentRe := regexp.MustCompile(`(?s)/\*.*?\*/`)
-	text = multilineCommentRe.ReplaceAllString(text, "")
-
-	// Удаляем однострочные комментарии // и #.
+	text := multilineCommentRe.ReplaceAllString(string(data), "")
 	lines := strings.Split(text, "\n")
-	var cleanedLines []string
 
-	for _, line := range lines {
-		// Проверяем, не внутри ли комментарий строки.
+	for i, line := range lines {
 		inString := false
 		escaped := false
-		commentStart := -1
 
-		for i := 0; i < len(line); i++ {
-			char := line[i]
+		for j := 0; j < len(line); j++ {
+			char := line[j]
 
 			if escaped {
 				escaped = false
@@ -345,27 +237,17 @@ func removeComments(data []byte) []byte {
 				continue
 			}
 
-			if !inString {
-				if i < len(line)-1 && line[i:i+2] == "//" {
-					commentStart = i
+			if inString {
+				continue
+			}
 
-					break
-				}
+			if char == '#' || (char == '/' && j+1 < len(line) && line[j+1] == '/') {
+				lines[i] = line[:j]
 
-				if char == '#' {
-					commentStart = i
-
-					break
-				}
+				break
 			}
 		}
-
-		if commentStart >= 0 {
-			line = line[:commentStart]
-		}
-
-		cleanedLines = append(cleanedLines, line)
 	}
 
-	return []byte(strings.Join(cleanedLines, "\n"))
+	return []byte(strings.Join(lines, "\n"))
 }

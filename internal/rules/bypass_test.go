@@ -59,31 +59,27 @@ func TestGetRuleSetSplitsBypass(t *testing.T) {
 				Type:    "domain_suffix",
 				Value:   "proxied.com",
 				Group:   "default",
-				Bypass:  false,
 				Applied: true,
 			},
 			{
 				ID:      "2",
 				Type:    "domain_suffix",
 				Value:   "direct.ru",
-				Group:   "default",
-				Bypass:  true,
+				Group:   BypassGroupName,
 				Applied: true,
 			},
 			{
 				ID:      "3",
 				Type:    "cidr",
 				Value:   "10.10.0.0/16",
-				Group:   "claude",
-				Bypass:  true,
+				Group:   BypassGroupName,
 				Applied: true,
 			},
 			{
 				ID:      "4",
 				Type:    "domain",
 				Value:   "pending.ru",
-				Group:   "default",
-				Bypass:  true,
+				Group:   BypassGroupName,
 				Applied: false,
 			},
 		},
@@ -91,13 +87,11 @@ func TestGetRuleSetSplitsBypass(t *testing.T) {
 			{
 				ID:      "src-proxy",
 				Group:   "default",
-				Bypass:  false,
 				Applied: true,
 			},
 			{
 				ID:      "src-bypass",
-				Group:   "claude",
-				Bypass:  true,
+				Group:   BypassGroupName,
 				Applied: true,
 			},
 		},
@@ -123,11 +117,6 @@ func TestGetRuleSetSplitsBypass(t *testing.T) {
 
 	if got, want := ruleSetValues(t, group, "ip_cidr"), []string{"1.1.1.0/24"}; !slices.Equal(got, want) {
 		t.Errorf("default ip_cidr = %v, want %v", got, want)
-	}
-
-	// В группе claude только исключения, поэтому ее набор пустой.
-	if claude := mustRuleSet(t)(manager.GetRuleSetByGroup("claude", RuleSetKindAll)); len(claude.Rules) != 0 {
-		t.Errorf("claude rules = %v, want empty", claude.Rules)
 	}
 
 	bypass := mustRuleSet(t)(manager.GetBypassRuleSet())
@@ -156,16 +145,30 @@ func TestEmptyRuleSetHasNoNullRules(t *testing.T) {
 	}
 }
 
-func TestAddGroupRejectsReservedName(t *testing.T) {
+func TestSystemGroups(t *testing.T) {
 	manager := newTestManager([]Rule{}, []URLSource{}, map[string]RuleSet{})
 
-	group := Group{
-		Name:            ReservedGroupName,
-		Description:     "",
-		DefaultOutbound: "",
+	for _, name := range []string{BlockGroupName, BypassGroupName} {
+		group := Group{
+			Name:            name,
+			Description:     "",
+			DefaultOutbound: "",
+		}
+
+		if err := manager.AddGroup(group); err == nil {
+			t.Errorf("%s: expected error for system group name", name)
+		}
+
+		if err := manager.DeleteGroup(name); err == nil {
+			t.Errorf("%s: system group must not be deleted", name)
+		}
+
+		if !manager.groupExists(name) {
+			t.Errorf("%s: system group must exist", name)
+		}
 	}
 
-	if err := manager.AddGroup(group); err == nil {
-		t.Fatal("expected error for reserved group name")
+	if err := manager.AddGroup(Group{Name: "bad name"}); err == nil {
+		t.Error("expected error for invalid group name")
 	}
 }

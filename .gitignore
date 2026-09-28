@@ -1,3 +1,8 @@
 .idea
 
 cmd/config/config.*.json
+
+# Сборка веб-интерфейса: в репозитории остается только заглушка dist/.gitkeep.
+view/node_modules/
+view/dist/*
+!view/dist/.gitkeep

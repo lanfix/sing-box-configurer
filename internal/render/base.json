@@ -1,0 +1,86 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "reverse_mapping": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": [
+        "198.18.0.1/30"
+      ],
+      "auto_redirect": true,
+      "auto_route": true,
+      "interface_name": "tun0",
+      "mtu": 1420,
+      "route_exclude_address_set": [
+        "configurer-bypass"
+      ],
+      "stack": "system",
+      "udp_filtering": "endpoint_independent",
+      "udp_mapping": "endpoint_independent",
+      "udp_nat_max": 16384,
+      "udp_timeout": "5m"
+    },
+    {
+      "type": "direct",
+      "tag": "dns-in",
+      "listen": "0.0.0.0",
+      "listen_port": 53
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "direct",
+    "rules": [
+      {
+        "action": "bypass",
+        "rule_set": "configurer-bypass"
+      },
+      {
+        "action": "sniff",
+        "timeout": "500ms"
+      },
+      {
+        "action": "hijack-dns",
+        "port": 53,
+        "protocol": "dns"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      }
+    ]
+  },
+  "http_clients": [
+    {
+      "tag": "default_http_client",
+      "detour": "direct"
+    }
+  ],
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "path": "/var/lib/sing-box/cache.db",
+      "store_dns": true
+    },
+    "clash_api": {
+      "external_controller": "0.0.0.0:9090",
+      "access_control_allow_private_network": true
+    }
+  }
+}

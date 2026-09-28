@@ -49,7 +49,7 @@ func (rm *Manager) AddURLSource(source URLSource) error {
 }
 
 // EditURLSource обновляет параметры URL источника.
-func (rm *Manager) EditURLSource(id string, description string, group string, bypass bool) error {
+func (rm *Manager) EditURLSource(id string, description string, group string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -65,7 +65,6 @@ func (rm *Manager) EditURLSource(id string, description string, group string, by
 		if rm.data.URLSources[i].ID == id {
 			rm.data.URLSources[i].Description = description
 			rm.data.URLSources[i].Group = group
-			rm.data.URLSources[i].Bypass = bypass
 			found = true
 
 			break

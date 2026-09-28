@@ -1,15 +1,13 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
 )
 
-// dnsRecordRequest — тело запросов добавления и редактирования DNS-записи.
+// dnsRecordRequest — тело запросов добавления, редактирования и удаления DNS-записи.
 type dnsRecordRequest struct {
 	ID          string   `json:"id"`
 	Domain      string   `json:"domain"`
@@ -18,13 +16,7 @@ type dnsRecordRequest struct {
 }
 
 // GetDNSRecords возвращает список DNS-записей.
-func (h *Handler) GetDNSRecords(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-
-		return
-	}
-
+func (h *Handler) GetDNSRecords(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"records": h.dnsRecordsManager.List(),
 	})
@@ -32,23 +24,15 @@ func (h *Handler) GetDNSRecords(w http.ResponseWriter, r *http.Request) {
 
 // AddDNSRecord добавляет DNS-запись.
 func (h *Handler) AddDNSRecord(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-
-		return
-	}
-
 	var req dnsRecordRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
 	record, err := h.dnsRecordsManager.Add(req.Domain, req.Addresses, req.Description)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 
 		return
 	}
@@ -61,116 +45,44 @@ func (h *Handler) AddDNSRecord(w http.ResponseWriter, r *http.Request) {
 
 // EditDNSRecord редактирует DNS-запись.
 func (h *Handler) EditDNSRecord(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-
-		return
-	}
-
 	var req dnsRecordRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
 	err := h.dnsRecordsManager.Edit(req.ID, req.Domain, req.Addresses, req.Description)
-	if errors.Is(err, dnsrecords.ErrNotFound) {
-		http.Error(w, err.Error(), http.StatusNotFound)
 
-		return
+	switch {
+	case errors.Is(err, dnsrecords.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, err.Error())
+
+	case err != nil:
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+
+	default:
+		writeSuccess(w, "DNS-запись обновлена")
 	}
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"success": true,
-	})
 }
 
 // DeleteDNSRecord удаляет DNS-запись.
 func (h *Handler) DeleteDNSRecord(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-
-		return
-	}
-
 	var req dnsRecordRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
 	err := h.dnsRecordsManager.Delete(req.ID)
-	if errors.Is(err, dnsrecords.ErrNotFound) {
-		http.Error(w, err.Error(), http.StatusNotFound)
 
-		return
+	switch {
+	case errors.Is(err, dnsrecords.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, err.Error())
+
+	case err != nil:
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+
+	default:
+		writeSuccess(w, "DNS-запись удалена")
 	}
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"success": true,
-	})
-}
-
-// SyncDNSRecords синхронизирует DNS-записи во временный конфиг sing-box.
-func (h *Handler) SyncDNSRecords(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-
-		return
-	}
-
-	if err := h.singBoxConfigProvider.SyncDNSRecordsToTemp(h.dnsRecordsManager.ConfigRecords()); err != nil {
-		log.Printf("Error syncing dns records to config: %v", err)
-		http.Error(w, "Failed to sync dns records: "+err.Error(), http.StatusInternalServerError)
-
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"success": true,
-		"message": "DNS records synced to temporary config successfully",
-	})
-}
-
-// CheckDNSRecordsSync проверяет, соответствуют ли DNS-записи актуальному или временному конфигу.
-func (h *Handler) CheckDNSRecordsSync(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-
-		return
-	}
-
-	targetPath := h.singBoxConfigProvider.GetActualPath()
-
-	if h.singBoxConfigProvider.HasPending() {
-		targetPath = h.singBoxConfigProvider.GetTempPath()
-	}
-
-	synced, err := h.singBoxConfigProvider.CheckDNSRecordsSyncAt(targetPath, h.dnsRecordsManager.ConfigRecords())
-	if err != nil {
-		log.Printf("Error checking dns records sync: %v", err)
-		http.Error(w, "Failed to check dns records sync: "+err.Error(), http.StatusInternalServerError)
-
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"synced": synced,
-	})
 }

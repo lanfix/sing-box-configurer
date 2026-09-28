@@ -38,7 +38,7 @@ func (p *ShareVLessProvider) Parse(shareData string) (Share, error) {
 		return nil, fmt.Errorf("invalid port, range is not allowed for %s protocol", VLessProtocolName)
 	}
 
-	// TODO: Такое имя уже может быть в конфиге.
+	// Уникальность тега обеспечивает менеджер outbound-ов при добавлении.
 	profileName := coalesce(shareCommonData.profileName, fmt.Sprintf("%s-%s", VLessProtocolName, shareCommonData.host))
 
 	config := map[string]any{

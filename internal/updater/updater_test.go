@@ -203,3 +203,40 @@ func TestComposeFiles(t *testing.T) {
 		t.Error("no label must give no files")
 	}
 }
+
+// TestDirFiles проверяет, что смонтированный каталог бэкапится файлами без служебных подкаталогов.
+func TestDirFiles(t *testing.T) {
+	local := t.TempDir()
+	paths := deployPaths{
+		hostDir:  "/opt/vpn",
+		localDir: local,
+	}
+
+	files := map[string]string{
+		"data/app.json":                    "{}",
+		"data/backups/sing-box-1.json":     "{}",
+		"sing-box/config.json":             "{}",
+		"sing-box/.updates/x/journal.json": "{}",
+	}
+
+	for rel, content := range files {
+		path := filepath.Join(local, filepath.FromSlash(rel))
+
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := appendUnique(dirFiles(paths, "data"), dirFiles(paths, "sing-box")...)
+	got = appendUnique(got, "data/app.json")
+
+	want := []string{"data/app.json", "sing-box/config.json"}
+
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("dirFiles = %v, want %v", got, want)
+	}
+}

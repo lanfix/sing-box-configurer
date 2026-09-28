@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/lanfix/sing-box-configurer/internal/jsonmap"
 )
 
 const (
@@ -23,35 +25,22 @@ const (
 	fetchTimeout = 30 * time.Second
 )
 
-// OutboundWriter заменяет outbounds во временном конфиге sing-box.
-type OutboundWriter interface {
-	ReplaceOutbounds(removeTags []string, add []map[string]any) error
-}
-
-// ProfileView — профиль с вычисляемыми полями для UI.
-type ProfileView struct {
-	Profile
-
-	OutOfSync bool `json:"out_of_sync"`
-}
-
-// Manager управляет профилями Happ: загрузкой подписок и синхронизацией серверов в конфиг sing-box.
+// Manager управляет профилями Happ: загрузкой и обновлением подписок. Серверы профилей попадают
+// в конфиг sing-box при рендере.
 type Manager struct {
-	store     *Store
-	client    *Client
-	outbounds OutboundWriter
+	store  *Store
+	client *Client
 
 	// Сериализует операции над профилями, чтобы фоновое обновление не пересекалось с действиями из UI.
 	mu sync.Mutex
 }
 
 // NewManager создает менеджер профилей Happ.
-func NewManager(store *Store, client *Client, outbounds OutboundWriter) *Manager {
+func NewManager(store *Store, client *Client) *Manager {
 	return &Manager{
-		store:     store,
-		client:    client,
-		outbounds: outbounds,
-		mu:        sync.Mutex{},
+		store:  store,
+		client: client,
+		mu:     sync.Mutex{},
 	}
 }
 
@@ -60,22 +49,25 @@ func (m *Manager) InstallationID() string {
 	return m.store.InstallationID()
 }
 
-// List возвращает профили с признаком рассинхронизации серверов с конфигом.
-func (m *Manager) List() []ProfileView {
-	profiles := m.store.List()
-	result := make([]ProfileView, 0, len(profiles))
-
-	for i := range profiles {
-		result = append(result, ProfileView{
-			Profile:   profiles[i],
-			OutOfSync: len(profiles[i].Servers) > 0 && profiles[i].SyncedHash != profiles[i].ServersHash(),
-		})
-	}
-
-	return result
+// List возвращает профили.
+func (m *Manager) List() []Profile {
+	return m.store.List()
 }
 
-// Add загружает подписку, сохраняет профиль и добавляет его серверы во временный конфиг.
+// Outbounds возвращает outbound-ы серверов всех профилей для рендера конфига.
+func (m *Manager) Outbounds() []map[string]any {
+	outbounds := make([]map[string]any, 0)
+
+	for _, profile := range m.store.List() {
+		for _, server := range profile.Servers {
+			outbounds = append(outbounds, jsonmap.Clone(server.Outbound))
+		}
+	}
+
+	return outbounds
+}
+
+// Add загружает подписку и сохраняет профиль.
 func (m *Manager) Add(ctx context.Context, name, subscriptionURL string) (*Profile, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -119,21 +111,19 @@ func (m *Manager) Add(ctx context.Context, name, subscriptionURL string) (*Profi
 		Info:       &subscription.Info,
 		Servers:    parsed.Servers,
 		Warnings:   parsed.Warnings,
-		SyncedTags: []string{},
-		SyncedHash: "",
 		LastUpdate: time.Now(),
 		LastError:  "",
 		CreatedAt:  time.Now(),
 	}
 
-	if err = m.syncLocked(&profile); err != nil {
-		return nil, err
+	if err = m.store.Put(profile); err != nil {
+		return nil, fmt.Errorf("cannot save profile: %w", err)
 	}
 
 	return &profile, nil
 }
 
-// Refresh заново загружает подписку профиля. Конфиг sing-box не изменяется.
+// Refresh заново загружает подписку профиля.
 func (m *Manager) Refresh(ctx context.Context, id string) (*Profile, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -141,37 +131,13 @@ func (m *Manager) Refresh(ctx context.Context, id string) (*Profile, error) {
 	return m.refreshLocked(ctx, id)
 }
 
-// Sync записывает текущие серверы профиля во временный конфиг sing-box.
-func (m *Manager) Sync(id string) (*Profile, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	profile, ok := m.store.Get(id)
-	if !ok {
-		return nil, fmt.Errorf("profile not found")
-	}
-
-	if err := m.syncLocked(&profile); err != nil {
-		return nil, err
-	}
-
-	return &profile, nil
-}
-
-// Delete удаляет профиль и его серверы из временного конфига sing-box.
+// Delete удаляет профиль.
 func (m *Manager) Delete(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	profile, ok := m.store.Get(id)
-	if !ok {
+	if _, ok := m.store.Get(id); !ok {
 		return fmt.Errorf("profile not found")
-	}
-
-	if len(profile.SyncedTags) > 0 {
-		if err := m.outbounds.ReplaceOutbounds(profile.SyncedTags, nil); err != nil {
-			return fmt.Errorf("cannot remove outbounds: %w", err)
-		}
 	}
 
 	return m.store.Delete(id)
@@ -250,30 +216,6 @@ func (m *Manager) refreshLocked(ctx context.Context, id string) (*Profile, error
 	}
 
 	return &profile, nil
-}
-
-// syncLocked записывает серверы профиля в конфиг и сохраняет профиль.
-func (m *Manager) syncLocked(profile *Profile) error {
-	add := make([]map[string]any, 0, len(profile.Servers))
-	tags := make([]string, 0, len(profile.Servers))
-
-	for _, server := range profile.Servers {
-		add = append(add, server.Outbound)
-		tags = append(tags, server.Tag)
-	}
-
-	if err := m.outbounds.ReplaceOutbounds(profile.SyncedTags, add); err != nil {
-		return fmt.Errorf("cannot write outbounds: %w", err)
-	}
-
-	profile.SyncedTags = tags
-	profile.SyncedHash = profile.ServersHash()
-
-	if err := m.store.Put(*profile); err != nil {
-		return fmt.Errorf("cannot save profile: %w", err)
-	}
-
-	return nil
 }
 
 // fetch загружает подписку с таймаутом.

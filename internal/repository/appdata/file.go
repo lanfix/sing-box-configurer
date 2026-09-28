@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"sync"
+
+	"github.com/lanfix/sing-box-configurer/internal/fsutil"
 )
 
 // ErrNotExist возвращается, если файл данных приложения ещё не создан.
@@ -118,8 +120,8 @@ func (f *File) writeLocked(fields map[string]json.RawMessage) error {
 		return fmt.Errorf("cannot marshal app data: %w", err)
 	}
 
-	// Пишем in-place, а не через rename, чтобы не ломать bind mount файла в docker.
-	if err = os.WriteFile(f.path, append(result, '\n'), 0644); err != nil {
+	// При монтировании файла отдельным bind mount-ом запись выполняется на месте, иначе — атомарно.
+	if err = fsutil.WriteFileAtomic(f.path, append(result, '\n'), 0644); err != nil {
 		return fmt.Errorf("cannot write app data: %w", err)
 	}
 

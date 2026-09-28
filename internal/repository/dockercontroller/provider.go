@@ -324,6 +324,31 @@ func (p *Provider) SelfUpdate(ctx context.Context, image string) (*Container, er
 	return &result, nil
 }
 
+// ExecResult — результат выполнения команды в контейнере.
+type ExecResult struct {
+	ExitCode int    `json:"exit_code"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+}
+
+// Exec выполняет команду cmd в контейнере nameOrID и передает stdin на ее стандартный ввод.
+// Контроллер разрешает exec только в контейнерах с лейблом managed=true.
+func (p *Provider) Exec(ctx context.Context, nameOrID string, cmd []string, stdin []byte) (*ExecResult, error) {
+	body := map[string]any{
+		"cmd":     cmd,
+		"stdin":   string(stdin),
+		"timeout": 120,
+	}
+
+	var result ExecResult
+
+	if err := p.call(ctx, p.runClient, http.MethodPost, "/api/containers/"+url.PathEscape(nameOrID)+"/exec", body, &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 // call выполняет запрос к API управления контейнерами.
 func (p *Provider) call(ctx context.Context, client *http.Client, method, path string, body, result any) error {
 	var reader io.Reader

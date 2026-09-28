@@ -2,9 +2,7 @@ package happ
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -637,14 +635,6 @@ func outboundIdentity(config map[string]any) string {
 	raw, _ := json.Marshal(withoutTag)
 
 	return string(raw)
-}
-
-// hashServers возвращает хеш списка серверов.
-func hashServers(servers []Server) string {
-	raw, _ := json.Marshal(servers)
-	sum := sha256.Sum256(raw)
-
-	return hex.EncodeToString(sum[:])
 }
 
 // coalesce возвращает первое непустое значение.

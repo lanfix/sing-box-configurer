@@ -2,9 +2,6 @@ package amnezia
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -14,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/lanfix/sing-box-configurer/internal/jsonmap"
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
 )
 
@@ -23,6 +21,9 @@ const (
 
 	// Как часто фоновый процесс проверяет, пора ли обновлять.
 	backgroundCheckInterval = 30 * time.Minute
+
+	// Как долго кэшировать результат проверки поддержки AmneziaWG: рендер конфига вызывает ее часто.
+	supportCacheTTL = time.Minute
 )
 
 // Profile — импортированная конфигурация Amnezia.
@@ -34,8 +35,6 @@ type Profile struct {
 	Items       []Item        `json:"items"`
 	Warnings    []string      `json:"warnings,omitempty"`
 	Premium     *PremiumState `json:"premium,omitempty"`
-	SyncedTags  []string      `json:"synced_tags"`
-	SyncedHash  string        `json:"synced_hash"`
 	LastUpdate  time.Time     `json:"last_update"`
 	LastError   string        `json:"last_error,omitempty"`
 	CreatedAt   time.Time     `json:"created_at"`
@@ -50,24 +49,6 @@ func (p *Profile) RequiresAWG() bool {
 	}
 
 	return false
-}
-
-// ItemsHash возвращает хеш текущих серверов профиля.
-func (p *Profile) ItemsHash() string {
-	raw, _ := json.Marshal(p.Items)
-	sum := sha256.Sum256(raw)
-
-	return hex.EncodeToString(sum[:])
-}
-
-// OutOfSync возвращает true, если серверы профиля в конфиге устарели.
-func (p *Profile) OutOfSync() bool {
-	return len(p.SyncedTags) > 0 && p.SyncedHash != p.ItemsHash()
-}
-
-// OutboundWriter заменяет outbounds/endpoints во временном конфиге sing-box.
-type OutboundWriter interface {
-	ReplaceOutbounds(removeTags []string, add []map[string]any) error
 }
 
 // VersionSource возвращает версию запущенного sing-box (например, через Clash API).
@@ -89,20 +70,24 @@ type appDataSection struct {
 	} `json:"amnezia"`
 }
 
-// Manager импортирует конфигурации Amnezia и записывает их во временный конфиг sing-box.
+// Manager импортирует конфигурации Amnezia. Их серверы попадают в конфиг sing-box при рендере.
 type Manager struct {
-	appData   *appdata.File
-	outbounds OutboundWriter
-	versions  VersionSource
-	gateway   *GatewayClient
+	appData  *appdata.File
+	versions VersionSource
+	gateway  *GatewayClient
 
 	// Сериализует операции над профилями, включая запросы к шлюзу и фоновое обновление.
 	mu       sync.Mutex
 	profiles []Profile
+
+	// Кэш проверки поддержки AmneziaWG.
+	supportMu        sync.Mutex
+	support          Support
+	supportCheckedAt time.Time
 }
 
 // NewManager загружает профили из app.json.
-func NewManager(appData *appdata.File, outbounds OutboundWriter, versions VersionSource, gateway *GatewayClient) (*Manager, error) {
+func NewManager(appData *appdata.File, versions VersionSource, gateway *GatewayClient) (*Manager, error) {
 	var section appDataSection
 
 	if err := appData.Read(&section); err != nil && !errors.Is(err, appdata.ErrNotExist) {
@@ -115,32 +100,41 @@ func NewManager(appData *appdata.File, outbounds OutboundWriter, versions Versio
 	}
 
 	return &Manager{
-		appData:   appData,
-		outbounds: outbounds,
-		versions:  versions,
-		gateway:   gateway,
-		mu:        sync.Mutex{},
-		profiles:  profiles,
+		appData:          appData,
+		versions:         versions,
+		gateway:          gateway,
+		mu:               sync.Mutex{},
+		profiles:         profiles,
+		supportMu:        sync.Mutex{},
+		support:          Support{},
+		supportCheckedAt: time.Time{},
 	}, nil
 }
 
 // AWGSupport проверяет, поддерживает ли запущенный sing-box AmneziaWG.
 // Поддержка есть в форке sing-box-lx (версии вида "1.14.1-lx.8"); официальный sing-box ее не имеет.
 func (m *Manager) AWGSupport() Support {
-	version, err := m.versions.GetVersion()
-	if err != nil {
-		return Support{
-			Supported: false,
-			Version:   "",
-			Error:     "не удалось узнать версию sing-box: " + err.Error(),
-		}
+	m.supportMu.Lock()
+	defer m.supportMu.Unlock()
+
+	if !m.supportCheckedAt.IsZero() && time.Since(m.supportCheckedAt) < supportCacheTTL {
+		return m.support
 	}
 
-	return Support{
-		Supported: strings.Contains(version, "-lx"),
+	version, err := m.versions.GetVersion()
+
+	m.supportCheckedAt = time.Now()
+	m.support = Support{
+		Supported: err == nil && strings.Contains(version, "-lx"),
 		Version:   version,
 		Error:     "",
 	}
+
+	if err != nil {
+		m.support.Error = "не удалось узнать версию sing-box: " + err.Error()
+	}
+
+	return m.support
 }
 
 // List возвращает профили.
@@ -154,16 +148,43 @@ func (m *Manager) List() []Profile {
 	return result
 }
 
+// Outbounds возвращает outbound-ы и endpoint-ы всех профилей для рендера конфига. Серверы AmneziaWG
+// пропускаются, если запущенный sing-box точно их не поддерживает: иначе он не запустится с неизвестными
+// полями. Для пропущенных серверов возвращаются предупреждения.
+func (m *Manager) Outbounds() ([]map[string]any, []string) {
+	profiles := m.List()
+	support := m.AWGSupport()
+
+	// Версию узнать не удалось — поддержку не отрицаем, конфиг все равно проверит sing-box check.
+	skipAWG := support.Error == "" && !support.Supported
+
+	outbounds := make([]map[string]any, 0)
+	warnings := make([]string, 0)
+
+	for _, profile := range profiles {
+		for _, item := range profile.Items {
+			if item.RequiresAWG && skipAWG {
+				warnings = append(warnings, fmt.Sprintf("Amnezia: сервер %s пропущен — %s не поддерживает AmneziaWG", item.Tag, support.Version))
+
+				continue
+			}
+
+			outbounds = append(outbounds, jsonmap.Clone(item.Config))
+		}
+	}
+
+	return outbounds, warnings
+}
+
 // Add импортирует ключ vpn:// — конфигурацию своего сервера или подписку Amnezia Premium (формат
-// определяется автоматически). Если sing-box не поддерживает AmneziaWG, профиль сохраняется, но в конфиг
-// не записывается: иначе sing-box не запустится с неизвестными полями.
-func (m *Manager) Add(ctx context.Context, key, name string) (*Profile, bool, error) {
+// определяется автоматически).
+func (m *Manager) Add(ctx context.Context, key, name string) (*Profile, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	premium, data, err := decodePremiumKey(key)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	name = strings.TrimSpace(name)
@@ -173,7 +194,7 @@ func (m *Manager) Add(ctx context.Context, key, name string) (*Profile, bool, er
 
 	for _, existing := range m.profiles {
 		if existing.Name == name {
-			return nil, false, fmt.Errorf("профиль с именем %q уже есть", name)
+			return nil, fmt.Errorf("профиль с именем %q уже есть", name)
 		}
 	}
 
@@ -186,7 +207,7 @@ func (m *Manager) Add(ctx context.Context, key, name string) (*Profile, bool, er
 	}
 
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	profile := Profile{
@@ -197,33 +218,21 @@ func (m *Manager) Add(ctx context.Context, key, name string) (*Profile, bool, er
 		Items:       parsed.Items,
 		Warnings:    parsed.Warnings,
 		Premium:     premium,
-		SyncedTags:  []string{},
-		SyncedHash:  "",
 		LastUpdate:  time.Now(),
 		LastError:   "",
 		CreatedAt:   time.Now(),
 	}
 
-	synced := false
-
-	if !profile.RequiresAWG() || m.AWGSupport().Supported {
-		if err = m.writeLocked(&profile); err != nil {
-			return nil, false, err
-		}
-
-		synced = true
-	}
-
 	m.profiles = append(m.profiles, profile)
 
 	if err = m.saveLocked(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
-	return &profile, synced, nil
+	return &profile, nil
 }
 
-// Refresh заново запрашивает конфигурацию подписки у шлюза. Конфиг sing-box не изменяется.
+// Refresh заново запрашивает конфигурацию подписки у шлюза.
 func (m *Manager) Refresh(ctx context.Context, id string) (*Profile, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -264,36 +273,8 @@ func (m *Manager) SetCountry(ctx context.Context, id, country string) (*Profile,
 	return profile, nil
 }
 
-// Sync записывает серверы профиля во временный конфиг sing-box.
-func (m *Manager) Sync(id string) (*Profile, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	index := m.indexLocked(id)
-	if index < 0 {
-		return nil, fmt.Errorf("профиль не найден")
-	}
-
-	profile := &m.profiles[index]
-
-	if profile.RequiresAWG() {
-		if support := m.AWGSupport(); !support.Supported {
-			return nil, fmt.Errorf("sing-box %s не поддерживает AmneziaWG: нужен форк sing-box-lx", coalesce(support.Version, "неизвестной версии"))
-		}
-	}
-
-	if err := m.writeLocked(profile); err != nil {
-		return nil, err
-	}
-
-	result := *profile
-
-	return &result, m.saveLocked()
-}
-
-// Delete удаляет профиль и его серверы из временного конфига sing-box. Для подписки Amnezia Premium
-// освобождается место устройства; если шлюз недоступен, профиль все равно удаляется, а ошибка
-// возвращается как предупреждение.
+// Delete удаляет профиль. Для подписки Amnezia Premium освобождается место устройства; если шлюз
+// недоступен, профиль все равно удаляется, а ошибка возвращается как предупреждение.
 func (m *Manager) Delete(ctx context.Context, id string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -304,13 +285,6 @@ func (m *Manager) Delete(ctx context.Context, id string) (string, error) {
 	}
 
 	profile := m.profiles[index]
-
-	if len(profile.SyncedTags) > 0 {
-		if err := m.outbounds.ReplaceOutbounds(profile.SyncedTags, nil); err != nil {
-			return "", fmt.Errorf("cannot remove outbounds: %w", err)
-		}
-	}
-
 	warning := ""
 
 	if profile.Premium != nil {
@@ -393,26 +367,6 @@ func (m *Manager) refreshLocked(ctx context.Context, id string) (*Profile, error
 	result := *profile
 
 	return &result, nil
-}
-
-// writeLocked заменяет ранее записанные серверы профиля на актуальные.
-func (m *Manager) writeLocked(profile *Profile) error {
-	add := make([]map[string]any, 0, len(profile.Items))
-	tags := make([]string, 0, len(profile.Items))
-
-	for _, item := range profile.Items {
-		add = append(add, item.Config)
-		tags = append(tags, item.Tag)
-	}
-
-	if err := m.outbounds.ReplaceOutbounds(profile.SyncedTags, add); err != nil {
-		return fmt.Errorf("cannot write outbounds: %w", err)
-	}
-
-	profile.SyncedTags = tags
-	profile.SyncedHash = profile.ItemsHash()
-
-	return nil
 }
 
 // indexLocked возвращает индекс профиля или -1.

@@ -1,21 +1,23 @@
 services:
   sing-box-configurer:
-    image: docker.io/lanfix/sing-box-configurer:v0.0.10
+    image: docker.io/lanfix/sing-box-configurer:v0.6.0
     container_name: sing-box-configurer
     restart: always
     ports:
       - 8080:8080
     volumes:
       - ./sing-box-configurer.json:/app/config.json:ro
-      - ./app.json:/app/app.json:rw
-      - ./sing-box.json:/etc/sing-box/config.json:rw
+      # app.json (точка правды) и резервные копии конфига sing-box (data/backups).
+      - ./data:/app/data:rw
+      # Рабочий конфиг sing-box: конфигуратор атомарно заменяет его при применении.
+      - ./sing-box:/etc/sing-box:rw
     depends_on:
       - docker-controller
 
   # Порт docker-controller не публикуется: он доступен только конфигуратору и updater
   # по внутренней сети compose (http://docker-controller:8081).
   docker-controller:
-    image: docker.io/lanfix/docker-controller:v0.0.2
+    image: docker.io/lanfix/docker-controller:v0.0.3
     container_name: docker-controller
     restart: always
     volumes:
@@ -27,14 +29,15 @@ services:
     container_name: sing-box
     restart: always
     network_mode: host
-    command: -D /var/lib/sing-box -C /etc/sing-box/ run
+    command: -D /var/lib/sing-box -c /etc/sing-box/config.json run
     labels:
       - app=sing-box
       - managed=true
     depends_on:
       - sing-box-configurer
     volumes:
-      - ./sing-box.json:/etc/sing-box/config.json
+      - ./sing-box:/etc/sing-box:ro
+      - sing-box:/var/lib/sing-box:rw
     cap_add:
       - NET_ADMIN
     devices:
@@ -48,3 +51,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CRON_DAILY_RESTART=0 6 * * * docker restart sing-box
+
+volumes:
+  sing-box:

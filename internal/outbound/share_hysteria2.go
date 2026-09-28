@@ -38,7 +38,7 @@ func (p *ShareHysteria2Provider) Parse(shareData string) (Share, error) {
 		return nil, fmt.Errorf("only port or port range can be specified")
 	}
 
-	// TODO: Такое имя уже может быть в конфиге.
+	// Уникальность тега обеспечивает менеджер outbound-ов при добавлении.
 	profileName := coalesce(shareCommonData.profileName, fmt.Sprintf("%s-%s", Hysteria2ProtocolName, shareCommonData.host))
 
 	config := map[string]interface{}{

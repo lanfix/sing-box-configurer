@@ -1,0 +1,203 @@
+{
+  "dns": {
+    "cache_capacity": 8192,
+    "final": "yandex",
+    "optimistic": true,
+    "reverse_mapping": true,
+    "rules": [],
+    "servers": [
+      {
+        "tag": "local",
+        "type": "local"
+      },
+      {
+        "server": "77.88.8.8",
+        "tag": "yandex",
+        "type": "udp"
+      },
+      {
+        "server": "1.1.1.1",
+        "tag": "cloudflare",
+        "tls": {
+          "server_name": "cloudflare-dns.com"
+        },
+        "type": "https"
+      }
+    ],
+    "strategy": "ipv4_only",
+    "timeout": "5s"
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "path": "/var/lib/sing-box/cache.db",
+      "store_dns": true
+    },
+    "clash_api": {
+      "access_control_allow_origin": [
+        "*"
+      ],
+      "access_control_allow_private_network": true,
+      "external_controller": "0.0.0.0:9090"
+    }
+  },
+  "http_clients": [
+    {
+      "detour": "direct",
+      "tag": "default_http_client"
+    }
+  ],
+  "inbounds": [
+    {
+      "address": [
+        "198.18.0.1/30"
+      ],
+      "auto_redirect": true,
+      "auto_route": true,
+      "interface_name": "tun0",
+      "mtu": 1420,
+      "route_exclude_address_set": [
+        "configurer-bypass"
+      ],
+      "stack": "system",
+      "tag": "tun-in",
+      "type": "tun",
+      "udp_filtering": "endpoint_independent",
+      "udp_mapping": "endpoint_independent",
+      "udp_nat_max": 16384,
+      "udp_timeout": "5m"
+    },
+    {
+      "listen": "0.0.0.0",
+      "listen_port": 53,
+      "tag": "dns-in",
+      "type": "direct"
+    }
+  ],
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "interrupt_exist_connections": false,
+      "interval": "3m",
+      "outbounds": [
+        "direct"
+      ],
+      "tag": "auto",
+      "tolerance": 100,
+      "type": "urltest",
+      "url": "https://www.gstatic.com/generate_204"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    },
+    {
+      "tag": "block",
+      "type": "block"
+    },
+    {
+      "default": "direct",
+      "interrupt_exist_connections": true,
+      "outbounds": [
+        "auto",
+        "direct",
+        "block"
+      ],
+      "tag": "select-direct",
+      "type": "selector"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "yandex",
+    "final": "direct",
+    "rule_set": [
+      {
+        "format": "source",
+        "http_client": {
+          "tag": "default_http_client"
+        },
+        "tag": "configurer-bypass",
+        "type": "remote",
+        "update_interval": "30s",
+        "url": "http://127.0.0.1:18081/api/ruleset/bypass"
+      },
+      {
+        "format": "source",
+        "http_client": {
+          "tag": "default_http_client"
+        },
+        "tag": "configurer-block",
+        "type": "remote",
+        "update_interval": "30s",
+        "url": "http://127.0.0.1:18081/api/ruleset/domain?group=block"
+      },
+      {
+        "format": "source",
+        "http_client": {
+          "tag": "default_http_client"
+        },
+        "tag": "configurer-block@ip",
+        "type": "remote",
+        "update_interval": "30s",
+        "url": "http://127.0.0.1:18081/api/ruleset/ip?group=block"
+      },
+      {
+        "format": "source",
+        "http_client": {
+          "tag": "default_http_client"
+        },
+        "tag": "configurer-direct",
+        "type": "remote",
+        "update_interval": "30s",
+        "url": "http://127.0.0.1:18081/api/ruleset/domain?group=direct"
+      },
+      {
+        "format": "source",
+        "http_client": {
+          "tag": "default_http_client"
+        },
+        "tag": "configurer-direct@ip",
+        "type": "remote",
+        "update_interval": "30s",
+        "url": "http://127.0.0.1:18081/api/ruleset/ip?group=direct"
+      }
+    ],
+    "rules": [
+      {
+        "action": "bypass",
+        "rule_set": "configurer-bypass"
+      },
+      {
+        "action": "sniff",
+        "timeout": "500ms"
+      },
+      {
+        "action": "hijack-dns",
+        "port": 53,
+        "protocol": "dns"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "action": "reject",
+        "rule_set": [
+          "configurer-block",
+          "configurer-block@ip"
+        ]
+      },
+      {
+        "outbound": "select-direct",
+        "rule_set": [
+          "configurer-direct",
+          "configurer-direct@ip"
+        ]
+      }
+    ]
+  }
+}
