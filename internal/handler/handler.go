@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -279,7 +281,7 @@ func (h *Handler) GetRuleSet(w http.ResponseWriter, r *http.Request) {
 	// Deprecated: используйте /api/ruleset/group вместо этого.
 	ruleSet, err := h.rulesManager.GetRuleSet()
 
-	writeRuleSet(w, ruleSet, err)
+	writeRuleSet(w, r, ruleSet, err)
 }
 
 // GetRuleSetByGroup возвращает ruleset для конкретной группы.
@@ -297,7 +299,7 @@ func (h *Handler) GetRuleSetByGroup(w http.ResponseWriter, r *http.Request) {
 
 	ruleSet, err := h.rulesManager.GetRuleSetByGroup(groupName, rules.RuleSetKindAll)
 
-	writeRuleSet(w, ruleSet, err)
+	writeRuleSet(w, r, ruleSet, err)
 }
 
 // GetRuleSetByGroupKind возвращает обработчик, отдающий ruleset группы только с доменами или только с IP/CIDR.
@@ -318,7 +320,7 @@ func (h *Handler) GetRuleSetByGroupKind(kind rules.RuleSetKind) http.HandlerFunc
 
 		ruleSet, err := h.rulesManager.GetRuleSetByGroup(groupName, kind)
 
-		writeRuleSet(w, ruleSet, err)
+		writeRuleSet(w, r, ruleSet, err)
 	}
 }
 
@@ -332,12 +334,15 @@ func (h *Handler) GetBypassRuleSet(w http.ResponseWriter, r *http.Request) {
 
 	ruleSet, err := h.rulesManager.GetBypassRuleSet()
 
-	writeRuleSet(w, ruleSet, err)
+	writeRuleSet(w, r, ruleSet, err)
 }
 
 // writeRuleSet отправляет ruleset для sing-box. Пока набор не готов, отвечает 503: sing-box оставит
 // прежний (закэшированный) набор, а при первом запуске без кэша не стартует до готовности набора.
-func writeRuleSet(w http.ResponseWriter, ruleSet rules.SingBoxRuleSet, err error) {
+//
+// Ответ помечается ETag. Если набор не изменился, отвечает 304: sing-box не перезагружает набор, а для
+// route_exclude_address_set не перезаписывает nftables-набор (иначе он пересоздается каждые update_interval).
+func writeRuleSet(w http.ResponseWriter, r *http.Request, ruleSet rules.SingBoxRuleSet, err error) {
 	if errors.Is(err, rules.ErrRuleSetNotReady) {
 		log.Printf("Rule-set requested before it is ready: %v", err)
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -351,7 +356,28 @@ func writeRuleSet(w http.ResponseWriter, ruleSet rules.SingBoxRuleSet, err error
 		return
 	}
 
-	writeJSON(w, http.StatusOK, ruleSet)
+	body, err := json.Marshal(ruleSet)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+
+	w.Header().Set("ETag", etag)
+
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	_, _ = w.Write(body)
 }
 
 // GetGroups возвращает список всех групп.
