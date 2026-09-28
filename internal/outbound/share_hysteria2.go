@@ -57,7 +57,9 @@ func (p *ShareHysteria2Provider) Parse(shareData string) (Share, error) {
 
 	if shareCommonData.portRange != nil {
 		port = int(shareCommonData.portRange.Min)
-		portRange := fmt.Sprintf("%d-%d", shareCommonData.portRange.Min, shareCommonData.portRange.Max)
+
+		// sing-box задает диапазон портов через двоеточие ("20000:29999"), а не через дефис, как в ссылке.
+		portRange := fmt.Sprintf("%d:%d", shareCommonData.portRange.Min, shareCommonData.portRange.Max)
 		config["server_ports"] = []any{portRange}
 	}
 

@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 
 import AppSidebar from './components/AppSidebar.vue'
 import { startConfigStatusPolling } from './stores/configStatus'
+import { startSubscriptionAlertsPolling } from './stores/subscriptionAlerts'
 import { toast } from './stores/toast'
 import { initUpdates } from './stores/updates'
 
@@ -11,6 +12,7 @@ const route = useRoute()
 
 onMounted(() => {
   startConfigStatusPolling()
+  startSubscriptionAlertsPolling()
   void initUpdates()
 })
 </script>

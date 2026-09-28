@@ -150,6 +150,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/amnezia/profiles/country", h.SetAmneziaCountry)
 	mux.HandleFunc("POST /api/amnezia/profiles/delete", h.DeleteAmneziaProfile)
 
+	mux.HandleFunc("GET /api/subscriptions/alerts", h.GetSubscriptionAlerts)
+
 	mux.HandleFunc("GET /api/happ/profiles", h.GetHappProfiles)
 	mux.HandleFunc("POST /api/happ/profiles/add", h.AddHappProfile)
 	mux.HandleFunc("POST /api/happ/profiles/refresh", h.RefreshHappProfile)

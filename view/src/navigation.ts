@@ -2,7 +2,8 @@
 
 import { icons } from './icons'
 
-export type NavBadge = 'config' | 'update'
+// NavBadge — источник точки у пункта меню.
+export type NavBadge = 'config' | 'update' | 'happ' | 'amnezia' | 'subscriptions'
 
 export interface NavLink {
   route: string
@@ -15,6 +16,7 @@ export interface NavGroup {
   id: string
   title: string
   icon: string
+  badge?: NavBadge
   children: NavLink[]
 }
 
@@ -53,9 +55,10 @@ export const navigation: NavEntry[] = [
     id: 'subscriptions',
     title: 'Подписки',
     icon: icons.subscriptions,
+    badge: 'subscriptions',
     children: [
-      { route: 'happ', title: 'Happ' },
-      { route: 'amnezia', title: 'Amnezia' },
+      { route: 'happ', title: 'Happ', badge: 'happ' },
+      { route: 'amnezia', title: 'Amnezia', badge: 'amnezia' },
     ],
   },
   { route: 'config', title: 'Конфиг', icon: icons.config, badge: 'config' },

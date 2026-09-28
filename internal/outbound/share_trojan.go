@@ -72,39 +72,13 @@ func (p *ShareTrojanProvider) Parse(shareData string) (Share, error) {
 		config["tls"] = tlsConfig
 	}
 
-	switch coalesce(shareCommonData.params.Get("type"), "tcp") {
-	case "tcp":
-		// TCP не требует дополнительной конфигурации.
+	transport, err := shareTransport(shareCommonData.params)
+	if err != nil {
+		return nil, err
+	}
 
-	case "ws":
-		wsConfig := map[string]any{}
-
-		if path := shareCommonData.params.Get("path"); path != "" {
-			wsConfig["path"] = path
-		}
-
-		if host := shareCommonData.params.Get("host"); host != "" {
-			wsConfig["headers"] = map[string]any{
-				"Host": host,
-			}
-		}
-
-		config["transport"] = map[string]any{
-			"type": "ws",
-			"ws":   wsConfig,
-		}
-
-	case "grpc":
-		grpcConfig := map[string]any{}
-
-		if serviceName := shareCommonData.params.Get("serviceName"); serviceName != "" {
-			grpcConfig["service_name"] = serviceName
-		}
-
-		config["transport"] = map[string]any{
-			"type": "grpc",
-			"grpc": grpcConfig,
-		}
+	if transport != nil {
+		config["transport"] = transport
 	}
 
 	return &ShareTrojan{

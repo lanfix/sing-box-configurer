@@ -1714,3 +1714,8 @@ a.nav-item {
     margin-top: 6px;
     line-height: 1.4;
 }
+
+/* Точка-предупреждение в меню (например, подписка скоро закончится) */
+.badge-pending.is-warn {
+    background: #d29922;
+}

@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 import { icons } from '../icons'
 import { isNavGroup, navigation, type NavBadge, type NavGroup } from '../navigation'
 import { configChanged } from '../stores/configStatus'
+import { alertLevel, alertsOf } from '../stores/subscriptionAlerts'
 import { updateAvailable, updates } from '../stores/updates'
 import SvgIcon from './SvgIcon.vue'
 
@@ -51,17 +52,26 @@ function toggleGroup(group: NavGroup): void {
   saveOpenGroups()
 }
 
-// badgeVisible проверяет, нужно ли показать бейдж у пункта меню.
-function badgeVisible(badge?: NavBadge): boolean {
-  if (badge === 'config') {
-    return configChanged.value
-  }
+// badge возвращает уровень точки у пункта меню ('' — точки нет) и подсказку к ней.
+function badge(source?: NavBadge): { level: '' | 'warn' | 'bad'; title: string } {
+  switch (source) {
+    case 'config':
+      return { level: configChanged.value ? 'bad' : '', title: 'Итоговый конфиг отличается от рабочего' }
 
-  if (badge === 'update') {
-    return updateAvailable.value
-  }
+    case 'update':
+      return { level: updateAvailable.value ? 'bad' : '', title: 'Доступно обновление' }
 
-  return false
+    case 'happ':
+    case 'amnezia':
+    case 'subscriptions': {
+      const alerts = alertsOf(source === 'subscriptions' ? undefined : source)
+
+      return { level: alertLevel(alerts), title: alerts.map((alert) => alert.message).join('\n') }
+    }
+
+    default:
+      return { level: '', title: '' }
+  }
 }
 
 // Группа с открытой страницей всегда раскрыта.
@@ -100,6 +110,12 @@ onMounted(openActiveGroup)
           <div class="nav-item nav-group-toggle" @click="toggleGroup(entry)">
             <div class="nav-icon"><SvgIcon :path="entry.icon" /></div>
             <span>{{ entry.title }}</span>
+            <span
+              v-if="badge(entry.badge).level"
+              class="badge-pending"
+              :class="{ 'is-warn': badge(entry.badge).level === 'warn' }"
+              :title="badge(entry.badge).title"
+            ></span>
             <SvgIcon class="nav-chevron" :path="icons.chevron" />
           </div>
 
@@ -112,6 +128,12 @@ onMounted(openActiveGroup)
               active-class="active"
             >
               <span>{{ child.title }}</span>
+              <span
+                v-if="badge(child.badge).level"
+                class="badge-pending"
+                :class="{ 'is-warn': badge(child.badge).level === 'warn' }"
+                :title="badge(child.badge).title"
+              ></span>
             </RouterLink>
           </div>
         </div>
@@ -120,9 +142,10 @@ onMounted(openActiveGroup)
           <div class="nav-icon"><SvgIcon :path="entry.icon ?? ''" /></div>
           <span>{{ entry.title }}</span>
           <span
-            v-if="badgeVisible(entry.badge)"
+            v-if="badge(entry.badge).level"
             class="badge-pending"
-            :title="entry.badge === 'config' ? 'Итоговый конфиг отличается от рабочего' : 'Доступно обновление'"
+            :class="{ 'is-warn': badge(entry.badge).level === 'warn' }"
+            :title="badge(entry.badge).title"
           ></span>
         </RouterLink>
       </template>

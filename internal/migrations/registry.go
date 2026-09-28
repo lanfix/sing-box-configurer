@@ -61,6 +61,11 @@ var registry = []Migration{
 		Name:    "move sing-box config settings to app data",
 		Up:      migrateConfigToAppData,
 	},
+	{
+		Version: 6,
+		Name:    "fix share link outbounds (nested transports, port ranges)",
+		Up:      migrateFixShareOutbounds,
+	},
 }
 
 // toLegacyRecords преобразует DNS-записи в формат легаси-синхронизации конфига (порядок сохраняется).

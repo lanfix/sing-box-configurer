@@ -4,6 +4,7 @@ import { reactive, ref } from 'vue'
 import { get, post } from '../../api/client'
 import type { AmneziaPremium, AmneziaProfile, AWGSupport } from '../../api/types'
 import { usePolling } from '../../composables/usePolling'
+import { refreshSubscriptionAlerts } from '../../stores/subscriptionAlerts'
 import { showError, showMessage } from '../../stores/toast'
 import { dayLevel, daysLeft, formatAgo, formatDate, pluralDays } from '../../utils/format'
 
@@ -32,6 +33,8 @@ async function load(): Promise<void> {
 
     support.value = data.awg_support
     profiles.value = data.profiles ?? []
+
+    void refreshSubscriptionAlerts()
   } catch (error) {
     showError(error, 'Ошибка загрузки конфигураций')
   } finally {

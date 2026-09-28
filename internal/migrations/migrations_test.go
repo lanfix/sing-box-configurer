@@ -445,3 +445,28 @@ func TestMigrateConfigToAppData(t *testing.T) {
 		t.Errorf("outbounds = %s", raw)
 	}
 }
+
+// TestMigrateFixShareOutbounds проверяет исправление транспорта и диапазонов портов outbound-ов (миграция 6).
+func TestMigrateFixShareOutbounds(t *testing.T) {
+	appData, path := newAppData(t, `{
+		"schema_version": 5,
+		"outbounds": [
+			{"id": "1", "config": {"type": "trojan", "tag": "ws", "transport": {"type": "ws", "ws": {"path": "/cdn", "headers": {"Host": "h"}}}}},
+			{"id": "2", "config": {"type": "vless", "tag": "x", "transport": {"type": "httpupgrade", "xhttp": {"path": "/x", "host": "h", "mode": "auto"}}}},
+			{"id": "3", "config": {"type": "hysteria2", "tag": "hop", "server_ports": ["20000-29999", "443"]}}
+		]
+	}`)
+
+	if _, err := run(appData, &fakeSingBox{}, registry); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(readFields(t, path)["outbounds"])
+	want := `[{"config":{"tag":"ws","transport":{"headers":{"Host":"h"},"path":"/cdn","type":"ws"},"type":"trojan"},"id":"1"},` +
+		`{"config":{"tag":"x","transport":{"host":"h","path":"/x","type":"httpupgrade"},"type":"vless"},"id":"2"},` +
+		`{"config":{"server_ports":["20000:29999","443"],"tag":"hop","type":"hysteria2"},"id":"3"}]`
+
+	if string(raw) != want {
+		t.Errorf("outbounds:\n got %s\nwant %s", raw, want)
+	}
+}
