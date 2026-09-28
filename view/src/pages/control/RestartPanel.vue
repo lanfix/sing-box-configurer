@@ -96,8 +96,8 @@ onMounted(load)
   <div class="add-form-card">
     <div class="form-header" style="margin-bottom: 4px;">Плановая перезагрузка sing-box</div>
     <p class="card-hint" style="margin: 0 0 16px;">
-      Конфигуратор перезапускает sing-box по расписанию через docker-controller. Контейнер cron-scheduler
-      больше не нужен. Расписание действует сразу после сохранения.
+      Конфигуратор перезапускает sing-box по расписанию через docker-controller.
+      Расписание действует сразу после сохранения.
     </p>
 
     <form @submit.prevent="save">

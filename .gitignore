@@ -6,3 +6,8 @@ cmd/config/config.*.json
 view/node_modules/
 view/dist/*
 !view/dist/.gitkeep
+
+deploy/*.*.yaml
+deploy/*.*.json
+deploy/data
+deploy/sing-box

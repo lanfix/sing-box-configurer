@@ -38,18 +38,8 @@ body {
 .logo {
     width: 32px;
     height: 32px;
-    background: linear-gradient(135deg, #58a6ff 0%, #1f6feb 100%);
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: block;
     flex-shrink: 0;
-}
-
-.logo svg {
-    width: 20px;
-    height: 20px;
-    fill: white;
 }
 
 .logo-text {

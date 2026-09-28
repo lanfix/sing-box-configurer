@@ -91,9 +91,7 @@ onMounted(openActiveGroup)
 <template>
   <aside class="sidebar">
     <div class="sidebar-header">
-      <div class="logo">
-        <SvgIcon :path="icons.logo" />
-      </div>
+      <img class="logo" src="/favicon.svg" alt="">
       <div class="logo-text">
         <span class="title">Sing-Box</span>
         <span class="subtitle">Configurer {{ updates.check?.current_version ?? '' }}</span>
