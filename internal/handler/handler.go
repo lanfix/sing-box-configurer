@@ -14,6 +14,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
+	"github.com/lanfix/sing-box-configurer/internal/scheduler"
 	"github.com/lanfix/sing-box-configurer/internal/settings"
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
 	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
@@ -31,6 +32,7 @@ type Deps struct {
 	Outbounds      *outbound.Manager
 	Inbounds       *inbounds.Manager
 	Settings       *settings.Manager
+	RestartTask    *scheduler.RestartTask
 	Happ           *happ.Manager
 	Amnezia        *amnezia.Manager
 	SingBox        *singbox.Service
@@ -47,6 +49,7 @@ type Handler struct {
 	outboundManager   *outbound.Manager
 	inboundsManager   *inbounds.Manager
 	settingsManager   *settings.Manager
+	restartTask       *scheduler.RestartTask
 	happManager       *happ.Manager
 	amneziaManager    *amnezia.Manager
 	singBox           *singbox.Service
@@ -64,6 +67,7 @@ func NewHandler(deps Deps) *Handler {
 		outboundManager:   deps.Outbounds,
 		inboundsManager:   deps.Inbounds,
 		settingsManager:   deps.Settings,
+		restartTask:       deps.RestartTask,
 		happManager:       deps.Happ,
 		amneziaManager:    deps.Amnezia,
 		singBox:           deps.SingBox,
@@ -128,6 +132,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/settings", h.GetSettings)
 	mux.HandleFunc("POST /api/settings", h.UpdateSettings)
 	mux.HandleFunc("POST /api/settings/regenerate-secret", h.RegenerateClashSecret)
+	mux.HandleFunc("GET /api/settings/restart", h.GetRestartStatus)
+	mux.HandleFunc("POST /api/settings/restart", h.UpdateRestart)
 
 	mux.HandleFunc("GET /api/config", h.GetConfig)
 	mux.HandleFunc("GET /api/config/status", h.GetConfigStatus)

@@ -62,8 +62,15 @@ inbound-ами и подписками.
   3 дней, истекла или 90% трафика.
 - **Конфиг** — итоговый конфиг, diff с рабочим и применение. Бейдж в меню горит, если итоговый конфиг
   отличается от рабочего.
-- **Управление** — обновления, общие настройки (уровень логов, токен Clash API, CORS), прокси-группы
-  Clash API и перезапуск sing-box.
+- **Управление** — обновления, общие настройки (уровень логов, токен Clash API, CORS), плановая
+  перезагрузка sing-box, прокси-группы Clash API и перезапуск sing-box.
+
+### Плановая перезагрузка
+
+Конфигуратор сам перезапускает sing-box по расписанию через docker-controller (раньше для этого был
+отдельный контейнер cron-scheduler). Расписание задается в формате cron (минута, час, день месяца, месяц,
+день недели; поддерживаются `*`, списки, диапазоны, шаги и `@daily`/`@hourly`/`@weekly`) и часовом поясе
+IANA. По умолчанию — ежедневно в 06:00 UTC. Перезагрузка не выполняется одновременно с применением конфига.
 
 ### Мимо туннеля (группа bypass)
 
@@ -235,6 +242,7 @@ sing-box во время обновления не перезапускаетс�
 | GET/POST | `/api/outbounds`, `.../add` (share-ссылка), `.../add-json`, `.../edit`, `.../delete` | Outbound-ы |
 | GET/POST | `/api/inbounds`, `/api/inbounds/mixed/add`, `.../edit`, `.../delete` | Mixed-прокси |
 | GET/POST | `/api/settings`, `/api/settings/regenerate-secret` | Уровень логов, токен и CORS Clash API |
+| GET/POST | `/api/settings/restart` | Плановая перезагрузка: `{"enabled", "schedule", "timezone"}`, в ответе GET — также `next_run`, `last_run`, `last_error` |
 | GET | `/api/config` | `{"rendered", "actual", "changed", "warnings", "actual_error"}` |
 | GET | `/api/config/status` | `{"changed": true}` — итоговый конфиг отличается от рабочего |
 | POST | `/api/config/apply` | Проверить, применить и перезапустить sing-box (409 — нет изменений, 422 — check не прошел) |

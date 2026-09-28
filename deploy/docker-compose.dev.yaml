@@ -1,12 +1,12 @@
 services:
   sing-box-configurer:
-    image: docker.io/lanfix/sing-box-configurer:v0.6.2
+    image: docker.io/lanfix/sing-box-configurer:v0.6.0
     container_name: sing-box-configurer
     restart: always
     ports:
       - 8080:8080
     volumes:
-      - ./sing-box-configurer.json:/app/config.json:ro
+      - ./sing-box-configurer.dev.json:/app/config.json:ro
       # app.json (точка правды) и резервные копии конфига sing-box (data/backups).
       - ./data:/app/data:rw
       # Рабочий конфиг sing-box: конфигуратор атомарно заменяет его при применении.
@@ -21,8 +21,8 @@ services:
     container_name: docker-controller
     restart: always
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./docker-controller.json:/app/config.json:ro
+      - //var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker-controller.dev.json:/app/config.json:ro
 
   sing-box:
     image: docker.io/lanfix/sing-box-lx:v1.14.1-lx.8
@@ -42,6 +42,15 @@ services:
       - NET_ADMIN
     devices:
       - /dev/net/tun
+
+  cron-scheduler:
+    image: whefter/cron:latest
+    container_name: cron-scheduler
+    restart: always
+    volumes:
+      - //var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - CRON_DAILY_RESTART=0 6 * * * docker restart sing-box
 
 volumes:
   sing-box:

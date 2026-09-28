@@ -2,7 +2,31 @@ package handler
 
 import (
 	"net/http"
+
+	"github.com/lanfix/sing-box-configurer/internal/settings"
 )
+
+// GetRestartStatus возвращает настройки плановой перезагрузки sing-box, следующий и последний запуск.
+func (h *Handler) GetRestartStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, h.restartTask.Status())
+}
+
+// UpdateRestart сохраняет расписание плановой перезагрузки sing-box.
+func (h *Handler) UpdateRestart(w http.ResponseWriter, r *http.Request) {
+	var restart settings.Restart
+
+	if !decodeJSON(w, r, &restart) {
+		return
+	}
+
+	if err := h.settingsManager.UpdateRestart(restart); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeSuccess(w, "Расписание перезагрузки сохранено")
+}
 
 // GetSettings возвращает общие настройки sing-box.
 func (h *Handler) GetSettings(w http.ResponseWriter, _ *http.Request) {

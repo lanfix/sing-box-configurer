@@ -7,6 +7,9 @@ import (
 	"log"
 	"net/http"
 
+	// Базы часовых поясов встроены в бинарник: в образе debian-slim их нет, а расписание задается в поясе.
+	_ "time/tzdata"
+
 	"github.com/lanfix/sing-box-configurer/cmd/config"
 	"github.com/lanfix/sing-box-configurer/internal/amnezia"
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
@@ -22,6 +25,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
+	"github.com/lanfix/sing-box-configurer/internal/scheduler"
 	"github.com/lanfix/sing-box-configurer/internal/settings"
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
 	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
@@ -162,6 +166,12 @@ func main() {
 
 	singBoxService := singbox.NewService(renderInput, singBoxConfigProvider, dockerControllerProvider, clashAPI)
 
+	// Плановая перезагрузка sing-box (раньше ее выполнял отдельный контейнер cron-scheduler).
+	restartTask := scheduler.NewRestartTask(func() settings.Restart {
+		return settingsManager.Get().Restart
+	}, singBoxService.Restart)
+	restartTask.Start(context.Background())
+
 	updateService := update.NewService(dockerControllerProvider, update.NewRegistry(), cfg.ListenAddr)
 
 	h := handler.NewHandler(handler.Deps{
@@ -171,6 +181,7 @@ func main() {
 		Outbounds:      outboundManager,
 		Inbounds:       inboundsManager,
 		Settings:       settingsManager,
+		RestartTask:    restartTask,
 		Happ:           happManager,
 		Amnezia:        amneziaManager,
 		SingBox:        singBoxService,

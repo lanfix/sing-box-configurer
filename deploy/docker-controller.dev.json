@@ -1,0 +1,8 @@
+{
+  "listen_addr": ":8081",
+  "api_key": "",
+  "log_level": "info",
+  "allowed_images": [
+    "docker.io/lanfix/"
+  ]
+}

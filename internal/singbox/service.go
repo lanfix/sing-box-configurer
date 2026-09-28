@@ -211,8 +211,11 @@ func (s *Service) Apply(ctx context.Context) (*ApplyResult, error) {
 	return nil, fmt.Errorf("sing-box не запустился с новым конфигом, прежний конфиг восстановлен: %w\n%s", startErr, logs)
 }
 
-// Restart перезапускает sing-box без изменения конфига.
+// Restart перезапускает sing-box без изменения конфига. Не выполняется одновременно с применением конфига.
 func (s *Service) Restart() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return s.controller.RestartContainersByLabels(containerLabels)
 }
 

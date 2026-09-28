@@ -284,9 +284,22 @@ func importInbounds(config map[string]any, state *State, _ []string) error {
 	return setAppData(state, "inbounds", data)
 }
 
+// v5Settings — формат раздела settings на момент миграции 5 (без плановой перезагрузки, ее добавляет
+// менеджер настроек при загрузке).
+type v5Settings struct {
+	LogLevel string            `json:"log_level"`
+	ClashAPI settings.ClashAPI `json:"clash_api"`
+}
+
 // importSettings переносит уровень логов и CORS Clash API. Секрет берется из конфига, если он задан.
 func importSettings(config map[string]any, state *State, _ []string) error {
-	data := settings.Default()
+	data := v5Settings{
+		LogLevel: "warn",
+		ClashAPI: settings.ClashAPI{
+			Secret:       "",
+			AllowOrigins: []string{"*"},
+		},
+	}
 
 	logSection, _ := config["log"].(map[string]any)
 

@@ -1,4 +1,5 @@
-// Package settings хранит в app.json общие настройки sing-box: уровень логов и доступ к Clash API.
+// Package settings хранит в app.json общие настройки sing-box: уровень логов, доступ к Clash API
+// и плановую перезагрузку.
 package settings
 
 import (
@@ -9,7 +10,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/lanfix/sing-box-configurer/internal/cron"
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
 )
 
@@ -25,15 +28,37 @@ type ClashAPI struct {
 	AllowOrigins []string `json:"allow_origins"`
 }
 
+// Restart — плановая перезагрузка sing-box по расписанию.
+type Restart struct {
+	Enabled bool `json:"enabled"`
+
+	// Schedule — расписание в формате crontab: минута час день месяц день_недели.
+	Schedule string `json:"schedule"`
+
+	// Timezone — часовой пояс расписания (например, UTC или Europe/Moscow).
+	Timezone string `json:"timezone"`
+}
+
 // Settings — общие настройки sing-box.
 type Settings struct {
 	LogLevel string   `json:"log_level"`
 	ClashAPI ClashAPI `json:"clash_api"`
+	Restart  Restart  `json:"restart"`
 }
 
 // appDataSection описывает раздел app.json, которым владеет менеджер.
 type appDataSection struct {
 	Settings *Settings `json:"settings"`
+}
+
+// DefaultRestart возвращает расписание перезагрузки по умолчанию: ежедневно в 06:00 UTC,
+// как делал отдельный контейнер cron-scheduler.
+func DefaultRestart() Restart {
+	return Restart{
+		Enabled:  true,
+		Schedule: "0 6 * * *",
+		Timezone: "UTC",
+	}
 }
 
 // Default возвращает настройки новой инсталляции (без секрета — он генерируется при загрузке).
@@ -44,7 +69,21 @@ func Default() Settings {
 			Secret:       "",
 			AllowOrigins: []string{"*"},
 		},
+		Restart: DefaultRestart(),
 	}
+}
+
+// Validate проверяет расписание и часовой пояс перезагрузки.
+func (r *Restart) Validate() error {
+	if _, err := cron.Parse(r.Schedule); err != nil {
+		return fmt.Errorf("расписание перезагрузки: %w", err)
+	}
+
+	if _, err := time.LoadLocation(r.Timezone); err != nil {
+		return fmt.Errorf("неизвестный часовой пояс %q", r.Timezone)
+	}
+
+	return nil
 }
 
 // Manager хранит настройки в разделе "settings" файла app.json.
@@ -95,6 +134,12 @@ func NewManager(appData *appdata.File) (*Manager, error) {
 		changed = true
 	}
 
+	// Настроек перезагрузки еще нет: переносим поведение контейнера cron-scheduler (06:00 UTC).
+	if m.data.Restart.Schedule == "" {
+		m.data.Restart = DefaultRestart()
+		changed = true
+	}
+
 	if changed {
 		if err := m.save(); err != nil {
 			return nil, err
@@ -138,6 +183,27 @@ func (m *Manager) Update(logLevel string, allowOrigins []string) error {
 
 	m.data.LogLevel = logLevel
 	m.data.ClashAPI.AllowOrigins = origins
+
+	return m.save()
+}
+
+// UpdateRestart меняет расписание плановой перезагрузки sing-box. Применяется сразу, без применения конфига.
+func (m *Manager) UpdateRestart(restart Restart) error {
+	restart.Schedule = strings.Join(strings.Fields(restart.Schedule), " ")
+	restart.Timezone = strings.TrimSpace(restart.Timezone)
+
+	if restart.Timezone == "" {
+		restart.Timezone = "UTC"
+	}
+
+	if err := restart.Validate(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.data.Restart = restart
 
 	return m.save()
 }

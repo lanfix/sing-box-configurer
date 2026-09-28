@@ -6,6 +6,7 @@ import SvgIcon from '../components/SvgIcon.vue'
 import { icons } from '../icons'
 import { showError, showMessage } from '../stores/toast'
 import ClashPanel from './control/ClashPanel.vue'
+import RestartPanel from './control/RestartPanel.vue'
 import SettingsPanel from './control/SettingsPanel.vue'
 import UpdatePanel from './control/UpdatePanel.vue'
 
@@ -41,5 +42,6 @@ async function restart(): Promise<void> {
 
   <UpdatePanel />
   <SettingsPanel />
+  <RestartPanel />
   <ClashPanel />
 </template>
