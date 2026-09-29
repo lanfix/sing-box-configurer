@@ -1,184 +1,208 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { get, post } from '../../api/client'
-import type { DNSData, Group, OutboundView } from '../../api/types'
+import type { DNSData, DNSServer, Group, OutboundView } from '../../api/types'
 import ModalDialog from '../../components/ModalDialog.vue'
+import OutboundSelect from '../../components/OutboundSelect.vue'
+import SvgIcon from '../../components/SvgIcon.vue'
+import FormField from '../../components/ui/FormField.vue'
+import HelpHint from '../../components/ui/HelpHint.vue'
+import IconButton from '../../components/ui/IconButton.vue'
 import { useGroups } from '../../composables/useGroups'
+import { icons } from '../../icons'
+import { confirmAction } from '../../stores/confirm'
 import { showError, showMessage } from '../../stores/toast'
 import { formatDateTime } from '../../utils/format'
 
 const { groups, loadGroups } = useGroups()
 
-const outboundTags = ref<string[]>([])
-const dnsServers = ref<string[]>([])
+const outbounds = ref<OutboundView[]>([])
+const dnsServers = ref<DNSServer[]>([])
 
-const form = reactive({
-  name: '',
-  description: '',
-  default_outbound: 'auto',
-  dns_server: '',
-})
-
-const editing = ref<Group | null>(null)
-const editForm = reactive({
-  description: '',
-  default_outbound: '',
-  dns_server: '',
-})
+// Форма группы: editing — имя редактируемой группы, пустое при добавлении.
+const editor = ref<{
+  editing: string
+  name: string
+  description: string
+  default_outbound: string
+  dns_server: string
+  error: string
+  saving: boolean
+} | null>(null)
 
 // userGroups и systemGroups — пользовательские и системные группы.
 const systemGroups = computed(() => groups.value.filter((group) => group.system))
 const userGroups = computed(() => groups.value.filter((group) => !group.system))
+const outboundTags = computed(() => outbounds.value.map((outbound) => outbound.tag))
+
+// nameProblem — имя новой группы содержит недопустимые символы.
+const nameProblem = computed(() => {
+  const name = editor.value?.name ?? ''
+
+  if (!name || /^[a-zA-Z0-9_-]+$/.test(name)) {
+    return ''
+  }
+
+  return 'Только латинские буквы, цифры, дефис и подчеркивание'
+})
+
+// systemTitles — пояснения к системным группам.
+const systemTitles: Record<string, string> = {
+  block: 'Соединения с этими адресами отклоняются.',
+  bypass: 'Трафик идет мимо sing-box напрямую: IP исключаются из туннеля, домены — по ответам DNS.',
+}
 
 // load загружает группы, outbound-ы и DNS-серверы для выпадающих списков.
 async function load(): Promise<void> {
   try {
-    const [outbounds, dns] = await Promise.all([
+    const [outboundsData, dns] = await Promise.all([
       get<{ outbounds: OutboundView[] }>('/api/outbounds'),
       get<DNSData>('/api/dns'),
       loadGroups(),
     ])
 
-    outboundTags.value = outbounds.outbounds.map((outbound) => outbound.tag)
-    dnsServers.value = dns.servers.map((server) => server.tag)
+    outbounds.value = outboundsData.outbounds ?? []
+    dnsServers.value = dns.servers
   } catch (error) {
     showError(error, 'Ошибка загрузки групп')
   }
 }
 
-// add добавляет группу.
-async function add(): Promise<void> {
-  try {
-    await post('/api/groups/add', form)
-    showMessage(`Группа ${form.name} добавлена`)
-    form.name = ''
-    form.description = ''
-    await load()
-  } catch (error) {
-    showError(error)
+// openEditor открывает форму новой или существующей группы.
+function openEditor(group?: Group): void {
+  // urltest auto можно удалить: тогда новая группа по умолчанию идет напрямую.
+  const defaultOutbound = outboundTags.value.includes('auto') ? 'auto' : 'direct'
+
+  editor.value = {
+    editing: group?.name ?? '',
+    name: group?.name ?? '',
+    description: group?.description ?? '',
+    default_outbound: group ? group.default_outbound || 'direct' : defaultOutbound,
+    dns_server: group?.dns_server ?? '',
+    error: '',
+    saving: false,
   }
 }
 
-// openEdit открывает редактирование группы.
-function openEdit(group: Group): void {
-  editing.value = group
-  editForm.description = group.description
-  editForm.default_outbound = group.default_outbound || 'direct'
-  editForm.dns_server = group.dns_server ?? ''
-}
+// save добавляет или сохраняет группу. Ошибка показывается прямо в форме.
+async function save(): Promise<void> {
+  const current = editor.value
 
-// saveEdit сохраняет группу.
-async function saveEdit(): Promise<void> {
-  if (!editing.value) {
+  if (!current) {
     return
   }
 
+  current.saving = true
+  current.error = ''
+
+  const body = {
+    name: current.name.trim(),
+    description: current.description.trim(),
+    default_outbound: current.default_outbound,
+    dns_server: current.dns_server,
+  }
+
   try {
-    await post('/api/groups/edit', { name: editing.value.name, ...editForm })
-    showMessage('Группа обновлена')
-    editing.value = null
+    await post(current.editing ? '/api/groups/edit' : '/api/groups/add', body)
+    showMessage(current.editing ? `Группа ${body.name} сохранена` : `Группа ${body.name} добавлена`)
+    editor.value = null
     await load()
   } catch (error) {
-    showError(error)
+    current.error = error instanceof Error ? error.message : String(error)
+  } finally {
+    current.saving = false
   }
 }
 
 // remove удаляет пустую группу.
 async function remove(group: Group): Promise<void> {
-  if (!confirm(`Удалить группу ${group.name}?`)) {
+  const confirmed = await confirmAction({
+    title: `Удалить группу ${group.name}?`,
+    message: 'Удалить можно только пустую группу — без правил и источников URL.',
+    confirmText: 'Удалить',
+    danger: true,
+  })
+
+  if (!confirmed) {
     return
   }
 
   try {
     await post('/api/groups/delete', { name: group.name })
-    showMessage('Группа удалена')
+    showMessage(`Группа ${group.name} удалена`)
     await load()
   } catch (error) {
     showError(error)
   }
+}
+
+// dnsLabel возвращает подпись DNS-сервера группы.
+function dnsLabel(tag: string): string {
+  const server = dnsServers.value.find((item) => item.tag === tag)
+
+  return server?.description ? `${tag} — ${server.description}` : tag
 }
 
 onMounted(load)
 </script>
 
 <template>
-  <div class="add-form-card">
-    <div class="form-header">Добавить группу</div>
-    <form @submit.prevent="add">
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label" for="groupName">Имя группы</label>
-          <input
-            id="groupName"
-            v-model="form.name"
-            class="form-input"
-            type="text"
-            placeholder="work, personal..."
-            required
-            pattern="[a-zA-Z0-9_\-]+"
-            title="Только латинские буквы, цифры, дефис и подчеркивание"
-          >
-        </div>
-        <div class="form-group" style="flex: 2;">
-          <label class="form-label" for="groupDescription">Описание</label>
-          <input id="groupDescription" v-model="form.description" class="form-input" type="text" placeholder="Описание группы">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="groupOutbound">Outbound по умолчанию</label>
-          <select id="groupOutbound" v-model="form.default_outbound" class="form-select">
-            <option v-for="tag in outboundTags" :key="tag" :value="tag">{{ tag }}</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="groupDNS">DNS-сервер</label>
-          <select id="groupDNS" v-model="form.dns_server" class="form-select">
-            <option value="">— через dns.final</option>
-            <option v-for="tag in dnsServers" :key="tag" :value="tag">{{ tag }}</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Добавить</button>
-      </div>
-    </form>
-  </div>
+  <Teleport to="#topbar-actions" defer>
+    <button class="btn btn-primary" @click="openEditor()">
+      <SvgIcon class="btn-icon" :path="icons.plus" />
+      Добавить группу
+    </button>
+  </Teleport>
 
-  <h3 class="section-title">Группы</h3>
-  <p class="section-hint">
-    Каждая группа создает в конфиге sing-box два rule-set-а (домены и IP) и selector <code>select-&lt;группа&gt;</code>,
-    через который идет ее трафик. Если у группы задан DNS-сервер, домены группы резолвятся через него.
-    Системные группы: <strong>block</strong> — соединения отклоняются, <strong>bypass</strong> — трафик идет мимо туннеля
-    sing-box (IP исключаются в nftables, домены — по DNS-ответам sing-box). Удалить можно только пустую группу.
+  <p class="page-intro">
+    Группа объединяет домены и IP-адреса, трафик к которым идет одним путем: через выбранный outbound и, при
+    желании, со своим DNS-сервером. Адреса добавляются в группу на страницах
+    <RouterLink :to="{ name: 'rules' }">одиночных правил</RouterLink> и
+    <RouterLink :to="{ name: 'url-sources' }">источников URL</RouterLink>.
   </p>
+
+  <HelpHint>
+    <p>
+      Для каждой группы в конфиге sing-box создаются два rule-set-а (домены и IP) и selector
+      <code>select-&lt;группа&gt;</code>, через который идет ее трафик. Outbound по умолчанию — тот, что выбран в
+      selector-е после применения конфига; переключить его на лету можно на странице
+      <RouterLink :to="{ name: 'proxies' }">«Прокси»</RouterLink>.
+    </p>
+    <p>
+      Если у группы задан DNS-сервер, ее домены резолвятся через него — например, через DNS внутри VPN, чтобы получить
+      адреса, актуальные для VPN-сервера. Удалить можно только пустую группу.
+    </p>
+  </HelpHint>
 
   <div class="data-table">
     <table class="table">
       <thead>
         <tr>
-          <th>Имя</th>
-          <th>Описание</th>
-          <th>Outbound по умолчанию</th>
+          <th>Группа</th>
+          <th>Трафик идет через</th>
           <th>DNS-сервер</th>
           <th>Создана</th>
-          <th style="width: 150px; text-align: center;">Действия</th>
+          <th class="col-actions"></th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="group in systemGroups" :key="group.name">
           <td>
-            <strong>{{ group.name }}</strong>
-            <span class="badge badge-system" style="margin-left: 10px;">системная</span>
+            <span class="cell-main">{{ group.name }}</span>
+            <span class="inline-badges"><span class="badge badge-system">системная</span></span>
+            <div class="cell-sub">{{ systemTitles[group.name] ?? group.description }}</div>
           </td>
-          <td class="description-cell">{{ group.description }}</td>
+          <td class="muted">{{ group.name === 'block' ? 'отклоняется' : 'мимо туннеля' }}</td>
           <td class="muted">—</td>
           <td class="muted">—</td>
-          <td class="muted">—</td>
-          <td class="actions-cell muted">Не изменяется</td>
+          <td class="actions-cell"></td>
         </tr>
         <tr v-for="group in userGroups" :key="group.name">
-          <td><strong>{{ group.name }}</strong></td>
-          <td class="description-cell">{{ group.description }}</td>
+          <td>
+            <span class="cell-main">{{ group.name }}</span>
+            <div v-if="group.description" class="cell-sub">{{ group.description }}</div>
+          </td>
           <td>
             {{ group.default_outbound || 'direct' }}
             <span
@@ -190,46 +214,67 @@ onMounted(load)
           </td>
           <td>
             <span v-if="group.dns_server">{{ group.dns_server }}</span>
-            <span v-else class="muted">dns.final</span>
+            <span v-else class="muted">по умолчанию</span>
           </td>
           <td class="date-cell">{{ formatDateTime(group.created_at) }}</td>
           <td class="actions-cell">
-            <button class="btn btn-secondary" @click="openEdit(group)">Редактировать</button>
-            <button class="btn btn-danger" @click="remove(group)">Удалить</button>
+            <div class="row-actions">
+              <IconButton icon="edit" title="Изменить" @click="openEditor(group)" />
+              <IconButton icon="trash" title="Удалить" danger @click="remove(group)" />
+            </div>
           </td>
         </tr>
         <tr v-if="groups.length && userGroups.length === 0">
-          <td colspan="6" class="empty-state">Пользовательских групп нет.</td>
+          <td colspan="5" class="empty-state">Своих групп пока нет. Создайте первую кнопкой «Добавить группу».</td>
         </tr>
       </tbody>
     </table>
   </div>
 
-  <ModalDialog v-if="editing" :title="`Редактировать группу ${editing.name}`" @close="editing = null">
-    <form @submit.prevent="saveEdit">
-      <div class="form-group">
-        <label class="form-label" for="editGroupDescription">Описание</label>
-        <textarea id="editGroupDescription" v-model="editForm.description" class="form-textarea"></textarea>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="editGroupOutbound">Outbound по умолчанию</label>
-        <select id="editGroupOutbound" v-model="editForm.default_outbound" class="form-select">
-          <option v-if="!outboundTags.includes(editForm.default_outbound)" :value="editForm.default_outbound">
-            {{ editForm.default_outbound }} (не найден)
-          </option>
-          <option v-for="tag in outboundTags" :key="tag" :value="tag">{{ tag }}</option>
+  <ModalDialog v-if="editor" :title="editor.editing ? `Группа ${editor.editing}` : 'Новая группа'" @close="editor = null">
+    <form class="form-stack" @submit.prevent="save">
+      <FormField
+        v-if="!editor.editing"
+        label="Имя"
+        input-id="groupName"
+        :error="nameProblem"
+        hint="Латиница, цифры, дефис и подчеркивание. Имя не меняется после создания."
+      >
+        <input
+          id="groupName"
+          v-model="editor.name"
+          class="form-input"
+          type="text"
+          placeholder="work"
+          required
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </FormField>
+
+      <FormField label="Описание" input-id="groupDescription" optional>
+        <input id="groupDescription" v-model="editor.description" class="form-input" type="text" placeholder="Например, рабочие сервисы">
+      </FormField>
+
+      <FormField label="Трафик идет через" input-id="groupOutbound">
+        <OutboundSelect v-model="editor.default_outbound" :outbounds="outbounds" input-id="groupOutbound" />
+        <template #hint>Выбирается после применения конфига. На лету переключается на странице «Прокси».</template>
+      </FormField>
+
+      <FormField label="DNS-сервер для доменов группы" input-id="groupDNS">
+        <select id="groupDNS" v-model="editor.dns_server" class="form-select">
+          <option value="">Сервер по умолчанию (из настроек DNS)</option>
+          <option v-for="server in dnsServers" :key="server.tag" :value="server.tag">{{ dnsLabel(server.tag) }}</option>
         </select>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="editGroupDNS">DNS-сервер</label>
-        <select id="editGroupDNS" v-model="editForm.dns_server" class="form-select">
-          <option value="">— через dns.final</option>
-          <option v-for="tag in dnsServers" :key="tag" :value="tag">{{ tag }}</option>
-        </select>
-      </div>
+      </FormField>
+
+      <div v-if="editor.error" class="form-error">{{ editor.error }}</div>
+
       <div class="form-actions">
-        <button type="button" class="btn btn-secondary" @click="editing = null">Отмена</button>
-        <button type="submit" class="btn btn-primary">Сохранить</button>
+        <button type="button" class="btn btn-secondary" @click="editor = null">Отмена</button>
+        <button type="submit" class="btn btn-primary" :disabled="editor.saving || Boolean(nameProblem)">
+          {{ editor.saving ? 'Сохранение...' : (editor.editing ? 'Сохранить' : 'Добавить группу') }}
+        </button>
       </div>
     </form>
   </ModalDialog>

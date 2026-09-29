@@ -3,7 +3,11 @@ import { reactive, ref } from 'vue'
 
 import { get, post } from '../../api/client'
 import type { HappProfile } from '../../api/types'
+import SvgIcon from '../../components/SvgIcon.vue'
+import FormField from '../../components/ui/FormField.vue'
 import { usePolling } from '../../composables/usePolling'
+import { icons } from '../../icons'
+import { confirmAction } from '../../stores/confirm'
 import { refreshSubscriptionAlerts } from '../../stores/subscriptionAlerts'
 import { showError, showMessage } from '../../stores/toast'
 import { dayLevel, daysLeft, formatAgo, formatBytesRu, formatDate, pluralDays } from '../../utils/format'
@@ -65,7 +69,14 @@ async function add(): Promise<void> {
 
 // action выполняет обновление или удаление профиля.
 async function action(profile: HappProfile, name: 'refresh' | 'delete'): Promise<void> {
-  if (name === 'delete' && !confirm('Удалить подписку? Ее серверы пропадут из итогового конфига.\n\nМесто устройства в подписке освободите в боте провайдера.')) {
+  const confirmed = name !== 'delete' || await confirmAction({
+    title: `Удалить подписку ${profile.name}?`,
+    message: 'Ее серверы пропадут из итогового конфига. Место устройства в подписке освободите в боте провайдера.',
+    confirmText: 'Удалить',
+    danger: true,
+  })
+
+  if (!confirmed) {
     return
   }
 
@@ -139,34 +150,40 @@ function proxyCount(profile: HappProfile): number {
 </script>
 
 <template>
+  <p class="page-intro">
+    Конфигуратор запрашивает подписку как приложение Happ на iPhone и превращает ее серверы в outbound-ы sing-box.
+    Серверы сразу попадают в итоговый конфиг; чтобы они заработали, примените
+    <RouterLink :to="{ name: 'config' }">конфиг</RouterLink>.
+  </p>
+
   <div class="add-form-card">
-    <div class="form-header">Подписки Happ</div>
-    <p class="card-hint" style="margin-bottom: 16px;">
-      Сервис запрашивает подписку как приложение Happ на iPhone и превращает серверы в outbound-ы sing-box.
-      Серверы сразу попадают в итоговый конфиг; чтобы они заработали, примените конфиг на странице
-      <RouterLink :to="{ name: 'config' }">«Конфиг»</RouterLink>.
-    </p>
-    <div class="happ-hwid">
-      <span class="happ-hwid-label">HWID инсталляции</span>
-      <code>{{ installationID }}</code>
-      <button class="btn btn-secondary btn-sm" @click="copyHWID">Копировать</button>
-    </div>
-    <p class="card-hint" style="margin: 8px 0 20px;">
-      Под этим ID сервис занимает одно место устройства в подписке. ID создаётся один раз и хранится в <code>app.json</code>.
-    </p>
-    <form id="addHappProfileForm" @submit.prevent="add">
-      <div class="form-row">
-        <div class="form-group" style="flex: 2;">
-          <label class="form-label" for="happURL">Ссылка на подписку</label>
-          <input id="happURL" v-model="form.url" class="form-input" type="url" placeholder="https://sub.example.com/..." required>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="happName">Название</label>
-          <input id="happName" v-model="form.name" class="form-input" type="text" placeholder="Из подписки">
-        </div>
+    <div class="form-header">Добавить подписку</div>
+    <form class="form-stack" @submit.prevent="add">
+      <div class="form-grid happ-add-grid">
+        <FormField label="Ссылка на подписку" input-id="happURL" hint="Ссылка из бота или личного кабинета провайдера.">
+          <input id="happURL" v-model="form.url" class="form-input" type="url" placeholder="https://sub.example.com/..." required spellcheck="false">
+        </FormField>
+        <FormField label="Название" input-id="happName" optional hint="По умолчанию — из подписки.">
+          <input id="happName" v-model="form.name" class="form-input" type="text" placeholder="Мой VPN">
+        </FormField>
       </div>
-      <div class="form-actions">
-        <button type="submit" class="btn btn-primary" :disabled="adding">{{ adding ? 'Загружаю подписку...' : 'Добавить' }}</button>
+
+      <FormField label="HWID устройства" input-id="happHWID">
+        <div class="input-group">
+          <input id="happHWID" class="form-input is-mono" type="text" :value="installationID" readonly>
+          <button type="button" class="btn btn-secondary" @click="copyHWID">
+            <SvgIcon class="btn-icon" :path="icons.copy" />
+            Копировать
+          </button>
+        </div>
+        <template #hint>
+          Под этим ID конфигуратор занимает одно место устройства в подписке. Он создается один раз и хранится в
+          <code>app.json</code>.
+        </template>
+      </FormField>
+
+      <div class="form-actions" style="margin-top: 0;">
+        <button type="submit" class="btn btn-primary" :disabled="adding">{{ adding ? 'Загружаю подписку...' : 'Добавить подписку' }}</button>
       </div>
     </form>
   </div>

@@ -111,7 +111,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/dns/servers/edit", h.EditDNSServer)
 	mux.HandleFunc("POST /api/dns/servers/delete", h.DeleteDNSServer)
 	mux.HandleFunc("POST /api/dns/settings", h.UpdateDNSSettings)
-	mux.HandleFunc("POST /api/dns/rules", h.UpdateDNSRules)
+	mux.HandleFunc("POST /api/dns/advanced", h.UpdateDNSAdvanced)
 
 	mux.HandleFunc("GET /api/dns-records", h.GetDNSRecords)
 	mux.HandleFunc("POST /api/dns-records/add", h.AddDNSRecord)
@@ -123,6 +123,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/outbounds/add-json", h.AddOutboundJSON)
 	mux.HandleFunc("POST /api/outbounds/edit", h.EditOutbound)
 	mux.HandleFunc("POST /api/outbounds/delete", h.DeleteOutbound)
+
+	mux.HandleFunc("GET /api/urltests", h.GetURLTests)
+	mux.HandleFunc("POST /api/urltests/preview", h.PreviewURLTest)
+	mux.HandleFunc("POST /api/urltests/add", h.AddURLTest)
+	mux.HandleFunc("POST /api/urltests/edit", h.EditURLTest)
+	mux.HandleFunc("POST /api/urltests/delete", h.DeleteURLTest)
 
 	mux.HandleFunc("GET /api/inbounds", h.GetInbounds)
 	mux.HandleFunc("POST /api/inbounds/mixed/add", h.AddMixedInbound)

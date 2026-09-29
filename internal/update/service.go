@@ -52,6 +52,9 @@ type CheckResult struct {
 	Available      []Release `json:"available"`
 	CheckedAt      time.Time `json:"checked_at"`
 	Error          string    `json:"error,omitempty"`
+	// Unsupported — почему обновление через интерфейс недоступно (например, локальная сборка). Это не ошибка:
+	// версии для справки все равно проверяются, но Available остается пустым.
+	Unsupported string `json:"unsupported,omitempty"`
 }
 
 // StatusStep — строка прогресса updater.
@@ -119,20 +122,28 @@ func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 		Available:      []Release{},
 		CheckedAt:      time.Now(),
 		Error:          "",
+		Unsupported:    "",
 	}
 
 	s.lastCheck = result
 
-	repository, err := s.repository(ctx)
+	repository, localImage := s.repository(ctx)
+	result.Unsupported = unsupportedReason(localImage)
+
+	releases, err := s.registry.Releases(ctx, repository)
 	if err != nil {
 		result.Error = err.Error()
 
 		return result
 	}
 
-	releases, err := s.registry.Releases(ctx, repository)
-	if err != nil {
-		result.Error = err.Error()
+	// Локальная сборка обновляется пересборкой образа: показываем только последний релиз для справки.
+	if result.Unsupported != "" {
+		for _, release := range releases {
+			if result.LatestVersion == "" || semver.Compare(release.Version, result.LatestVersion) > 0 {
+				result.LatestVersion = release.Version
+			}
+		}
 
 		return result
 	}
@@ -183,6 +194,10 @@ func (s *Service) Start(ctx context.Context, target string) (*Status, error) {
 	self, err := s.self(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	if _, local := dockerHubRepository(self.Image); local {
+		return nil, errors.New(unsupportedReason(self.Image))
 	}
 
 	workingDir := self.Labels[composeWorkingDirLabel]
@@ -423,24 +438,45 @@ func (s *Service) removeFinishedUpdater(ctx context.Context) error {
 	return nil
 }
 
-// repository возвращает репозиторий образа в Docker Hub (например lanfix/sing-box-configurer).
-// Если свой контейнер найти нельзя (docker-controller недоступен), используется репозиторий по умолчанию.
-func (s *Service) repository(ctx context.Context) (string, error) {
+// repository возвращает репозиторий образа в Docker Hub (например lanfix/sing-box-configurer) и имя образа,
+// если он собран локально (docker compose build) — тогда используется репозиторий по умолчанию.
+// Если свой контейнер найти нельзя (docker-controller недоступен), тоже используется репозиторий по умолчанию.
+func (s *Service) repository(ctx context.Context) (string, string) {
 	self, err := s.self(ctx)
 	if err != nil {
 		log.Printf("Cannot detect own image, using default repository: %v", err)
 
-		return defaultRepository, nil
+		return defaultRepository, ""
 	}
 
-	repository, _, _ := strings.Cut(self.Image, ":")
+	if repository, local := dockerHubRepository(self.Image); !local {
+		return repository, ""
+	}
+
+	return defaultRepository, self.Image
+}
+
+// dockerHubRepository возвращает репозиторий образа в Docker Hub. local — образ собран локально
+// (например, deploy-sing-box-configurer после docker compose build) и в Docker Hub его нет.
+func dockerHubRepository(image string) (string, bool) {
+	repository, _, _ := strings.Cut(image, ":")
 	repository = strings.TrimPrefix(repository, "docker.io/")
 
-	if strings.Count(repository, "/") != 1 {
-		return "", fmt.Errorf("image %q is not a Docker Hub image", self.Image)
+	return repository, strings.Count(repository, "/") != 1
+}
+
+// unsupportedReason возвращает причину, по которой обновление через интерфейс недоступно, или пустую строку.
+// localImage — имя локально собранного образа.
+func unsupportedReason(localImage string) string {
+	if localImage != "" {
+		return fmt.Sprintf("Конфигуратор запущен из локально собранного образа %s. Чтобы обновиться, пересоберите его: docker compose up -d --build.", localImage)
 	}
 
-	return repository, nil
+	if !semver.IsValid(version.Version) {
+		return fmt.Sprintf("Сборка %s не является релизом: обновление через интерфейс недоступно, пересоберите образ из новой версии кода.", version.Version)
+	}
+
+	return ""
 }
 
 // lastLines возвращает последние n строк текста.

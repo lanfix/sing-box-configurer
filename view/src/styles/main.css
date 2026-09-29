@@ -130,23 +130,34 @@ body {
 }
 
 .btn {
-    padding: 8px 16px;
+    padding: 7px 14px;
+    min-height: 34px;
     border-radius: 6px;
     border: 1px solid #30363d;
     background: #21262d;
     color: #c9d1d9;
     cursor: pointer;
+    font-family: inherit;
     font-size: 14px;
     font-weight: 500;
-    transition: all 0.2s;
-    display: flex;
+    line-height: 1.2;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
+    white-space: nowrap;
+    text-decoration: none;
 }
 
 .btn:hover {
     background: #30363d;
-    border-color: #58a6ff;
+    border-color: #8b949e;
+}
+
+.btn:focus-visible {
+    outline: 2px solid #58a6ff;
+    outline-offset: 2px;
 }
 
 .btn-primary {
@@ -185,29 +196,42 @@ body {
     background: #da3633;
     border-color: #da3633;
     color: white;
-    padding: 6px 12px;
-    font-size: 12px;
 }
 
 .btn-danger:hover {
     background: #b62324;
+    border-color: #b62324;
 }
 
 .btn-info {
     background: #0969da;
     border-color: #0969da;
     color: white;
-    padding: 6px 12px;
-    font-size: 12px;
 }
 
 .btn-info:hover {
     background: #0550ae;
+    border-color: #0550ae;
 }
 
-.btn:disabled {
+/* Кнопка без фона: второстепенные действия рядом с основными */
+.btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: #8b949e;
+}
+
+.btn-ghost:hover {
+    background: #21262d;
+    border-color: #30363d;
+    color: #e6edf3;
+}
+
+.btn:disabled,
+.btn:disabled:hover {
     opacity: 0.5;
     cursor: not-allowed;
+    filter: saturate(0.6);
 }
 
 .content-area {
@@ -256,29 +280,67 @@ body {
 .form-label {
     font-size: 13px;
     font-weight: 500;
-    color: #8b949e;
+    color: #c9d1d9;
 }
 
 .form-input, .form-select, .form-textarea {
-    padding: 8px 12px;
+    width: 100%;
+    min-height: 36px;
+    padding: 7px 12px;
     background: #161b22;
     border: 1px solid #30363d;
     border-radius: 6px;
     color: #e6edf3;
     font-size: 14px;
     font-family: inherit;
-    transition: all 0.2s;
+    line-height: 1.4;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.form-input::placeholder, .form-textarea::placeholder {
+    color: #6e7681;
+}
+
+/* Свой шеврон вместо системного: одинаковый вид во всех браузерах */
+.form-select {
+    appearance: none;
+    padding-right: 34px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%238b949e'%3E%3Cpath d='M7.41 8.58 12 13.17l4.59-4.59L18 10l-6 6-6-6z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 18px;
+    cursor: pointer;
+}
+
+.form-select option {
+    background: #161b22;
 }
 
 .form-input:focus, .form-select:focus, .form-textarea:focus {
     outline: none;
     border-color: #58a6ff;
-    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+}
+
+/* Ошибка показывается только после того, как пользователь тронул поле */
+.form-input:user-invalid, .form-select:user-invalid, .form-textarea:user-invalid {
+    border-color: rgba(248, 81, 73, 0.7);
+}
+
+.form-input:disabled, .form-select:disabled, .form-textarea:disabled {
+    background: #0d1117;
+    color: #6e7681;
+    cursor: not-allowed;
+}
+
+.form-input.is-mono, .form-textarea.is-mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
 }
 
 .form-textarea {
     resize: vertical;
-    min-height: 60px;
+    min-height: 72px;
 }
 
 /* Таблица */
@@ -384,6 +446,7 @@ body {
 
 .status-badge {
     display: inline-block;
+    white-space: nowrap;
     padding: 4px 8px;
     border-radius: 4px;
     font-size: 11px;
@@ -430,8 +493,6 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: monospace;
-    font-size: 12px;
 }
 
 .date-cell {
@@ -459,31 +520,6 @@ body {
     color: #8b949e;
 }
 
-/* Messages */
-.message {
-    padding: 12px 20px;
-    border-radius: 6px;
-    margin-bottom: 20px;
-    display: none;
-    font-size: 14px;
-}
-
-.message.success {
-    background: rgba(35, 134, 54, 0.15);
-    color: #3fb950;
-    border: 1px solid rgba(35, 134, 54, 0.3);
-}
-
-.message.error {
-    background: rgba(218, 54, 51, 0.15);
-    color: #f85149;
-    border: 1px solid rgba(218, 54, 51, 0.3);
-}
-
-.message.show {
-    display: block;
-}
-
 .pending-badge {
     display: inline-block;
     background: #d97706;
@@ -493,17 +529,6 @@ body {
     font-size: 12px;
     font-weight: 600;
     margin-left: 10px;
-}
-
-.status-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    margin-top: 8px;
 }
 
 /* Длинные ошибки с URL переносятся и обрезаются до 3 строк, полный текст — в подсказке */
@@ -526,51 +551,75 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(1, 4, 9, 0.8);
+    background: rgba(1, 4, 9, 0.75);
     z-index: 1000;
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 16px;
 }
 
 .modal {
+    display: flex;
+    flex-direction: column;
+    width: min(560px, 100%);
+    max-height: calc(100vh - 32px);
     background: #161b22;
-    padding: 24px;
-    border-radius: 8px;
+    border-radius: 10px;
     border: 1px solid #30363d;
-    min-width: 500px;
-    max-width: 600px;
-    max-height: 80vh;
-    overflow: auto;
+    box-shadow: 0 16px 40px rgba(1, 4, 9, 0.6);
+    overflow: hidden;
 }
 
-.modal h3 {
-    margin-bottom: 20px;
-    color: #c9d1d9;
-    font-size: 18px;
+.modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 16px 14px 20px;
+    border-bottom: 1px solid #21262d;
+}
+
+.modal-heading {
+    min-width: 0;
+    padding-top: 4px;
+}
+
+.modal-title {
+    color: #e6edf3;
+    font-size: 17px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.modal-subtitle {
+    margin-top: 4px;
+    color: #8b949e;
+    font-size: 13px;
+    line-height: 1.5;
 }
 
 .modal .form-group {
     margin-bottom: 16px;
 }
 
-.modal .form-textarea {
-    min-height: 80px;
-}
-
-.modal .form-input:disabled,
-.modal .form-select:disabled,
-.modal .form-textarea:disabled {
-    background: #0d1117;
-    color: #6e7681;
-    cursor: not-allowed;
-    opacity: 0.6;
-}
-
+/* Кнопки формы прилипают к низу окна, даже когда форма длинная */
 .modal .form-actions {
-    margin-top: 24px;
-    padding-top: 20px;
-    border-top: 1px solid #30363d;
+    position: sticky;
+    bottom: -20px;
+    z-index: 2;
+    justify-content: flex-end;
+    margin: 20px -20px -20px;
+    padding: 14px 20px;
+    background: #161b22;
+    border-top: 1px solid #21262d;
+}
+
+.confirm-message {
+    color: #c9d1d9;
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre-line;
 }
 
 .modal-section {
@@ -592,10 +641,6 @@ body {
     max-height: 400px;
     margin: 0;
     color: #c9d1d9;
-}
-
-.modal-close {
-    margin-top: 10px;
 }
 
 /* Warning box */
@@ -935,12 +980,6 @@ body {
     line-height: 1.6;
 }
 
-.clash-controls {
-    display: flex;
-    align-items: flex-end;
-    gap: 12px;
-}
-
 /* Индикатор загрузки — тонкая бегущая полоса по верхней грани блока */
 .has-progress {
     position: relative;
@@ -1147,19 +1186,6 @@ body {
 
 
 /* Подписки Happ */
-.happ-hwid {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-.happ-hwid-label {
-    color: #8b949e;
-    font-size: 13px;
-}
-
-.happ-hwid code,
 .happ-card code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     background: #161b22;
@@ -1244,14 +1270,6 @@ body {
     margin-bottom: 12px;
 }
 
-#addHappProfileForm .form-row {
-    flex-wrap: wrap;
-}
-
-#addHappProfileForm .form-group {
-    min-width: 200px;
-}
-
 .happ-date {
     font-size: 22px;
 }
@@ -1313,11 +1331,6 @@ body {
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
-}
-
-.update-actions .form-select {
-    flex: 0 1 260px;
-    min-width: 160px;
 }
 
 .update-changelog {
@@ -1452,17 +1465,6 @@ body {
     margin: 4px 0 2px;
 }
 
-/* Сообщения: предупреждения и перенос многострочного текста */
-.message {
-    white-space: pre-line;
-}
-
-.message.warning {
-    background: rgba(217, 119, 6, 0.12);
-    color: #e3b341;
-    border: 1px solid rgba(217, 119, 6, 0.3);
-}
-
 /* Группы в левом меню */
 a.nav-item {
     text-decoration: none;
@@ -1558,14 +1560,14 @@ a.nav-item {
 }
 
 .modal.modal-wide {
-    max-width: 760px;
-    width: 92vw;
+    width: min(780px, 100%);
 }
 
 .modal-body-scroll {
-    max-height: 70vh;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    padding-right: 4px;
+    padding: 20px;
 }
 
 /* JSON-редактор и просмотр конфига */
@@ -1708,4 +1710,116 @@ a.nav-item {
 /* Точка-предупреждение в меню (например, подписка скоро закончится) */
 .badge-pending.is-warn {
     background: #d29922;
+}
+
+/* URLTest */
+.link-button {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #58a6ff;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.link-button:hover {
+    text-decoration: underline;
+}
+
+.chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.chip {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: rgba(110, 118, 129, 0.2);
+    color: #c9d1d9;
+    font-size: 12px;
+}
+
+.chip-off {
+    color: #6e7681;
+    text-decoration: line-through;
+}
+
+.chip-missing {
+    background: rgba(218, 54, 51, 0.15);
+    color: #f85149;
+}
+
+.urltest-filter {
+    margin-top: 6px;
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.source-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.source-list .source-nested {
+    padding-left: 24px;
+}
+
+.source-list .source-covered {
+    color: #6e7681;
+}
+
+.urltest-preview-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.member-list {
+    max-height: 260px;
+    overflow-y: auto;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+}
+
+.member-empty {
+    padding: 12px;
+    font-size: 13px;
+}
+
+.member-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    border-bottom: 1px solid #21262d;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.member-row:last-child {
+    border-bottom: none;
+}
+
+.member-row .member-tag {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.member-row.is-off .member-tag {
+    color: #6e7681;
+    text-decoration: line-through;
+}
+
+.member-row .member-source {
+    font-size: 12px;
+    white-space: nowrap;
 }

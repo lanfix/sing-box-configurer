@@ -70,3 +70,34 @@ func TestSettingsValidate(t *testing.T) {
 		t.Error("bad timeout: expected error")
 	}
 }
+
+func TestValidateExtra(t *testing.T) {
+	if err := ValidateExtra(map[string]any{"reverse_mapping": true}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []string{"rules", "servers", "final"} {
+		if err := ValidateExtra(map[string]any{key: nil}); err == nil {
+			t.Errorf("%s: expected error", key)
+		}
+	}
+}
+
+func TestSettingsApplySkipsReservedExtra(t *testing.T) {
+	settings := Settings{
+		Final: "yandex",
+		Extra: map[string]any{"rules": []any{}, "reverse_mapping": true},
+	}
+
+	dns := map[string]any{"rules": []any{"system"}}
+
+	settings.Apply(dns)
+
+	if rules, _ := dns["rules"].([]any); len(rules) != 1 {
+		t.Errorf("rules overwritten by extra: %v", dns["rules"])
+	}
+
+	if dns["reverse_mapping"] != true {
+		t.Error("reverse_mapping not applied")
+	}
+}

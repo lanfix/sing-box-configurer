@@ -1,26 +1,55 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { get, post } from '../../api/client'
 import type { DNSRecord } from '../../api/types'
 import ModalDialog from '../../components/ModalDialog.vue'
+import SvgIcon from '../../components/SvgIcon.vue'
+import ChipsInput from '../../components/ui/ChipsInput.vue'
+import FormField from '../../components/ui/FormField.vue'
+import HelpHint from '../../components/ui/HelpHint.vue'
+import IconButton from '../../components/ui/IconButton.vue'
+import { icons } from '../../icons'
+import { confirmAction } from '../../stores/confirm'
 import { showError, showMessage } from '../../stores/toast'
-import { parseList } from '../../utils/format'
+import { ipError, isDomain } from '../../utils/validate'
 
 const records = ref<DNSRecord[]>([])
 const loaded = ref(false)
+const search = ref('')
 
-const form = reactive({
-  domain: '',
-  addresses: '',
-  description: '',
+// Форма записи: id пустой при добавлении.
+const editor = ref<{ id: string; domain: string; addresses: string[]; description: string; error: string; saving: boolean } | null>(null)
+
+// filtered — записи с учетом поиска по домену, адресу и описанию.
+const filtered = computed(() => {
+  const query = search.value.trim().toLowerCase()
+
+  if (!query) {
+    return records.value
+  }
+
+  return records.value.filter((record) => record.domain.toLowerCase().includes(query)
+    || record.addresses.some((address) => address.includes(query))
+    || record.description.toLowerCase().includes(query))
 })
 
-const editing = ref<DNSRecord | null>(null)
-const editForm = reactive({
-  domain: '',
-  addresses: '',
-  description: '',
+// domainProblem — домен записи введен с ошибкой.
+const domainProblem = computed(() => {
+  const domain = editor.value?.domain.trim() ?? ''
+
+  if (!domain || isDomain(domain)) {
+    return ''
+  }
+
+  return domain.includes('://') || domain.includes('/') ? 'Нужен только домен, без схемы и пути' : 'Не похоже на домен'
+})
+
+// addressesProblem — среди адресов есть некорректные или список пуст после попытки сохранить.
+const addressesProblem = computed(() => {
+  const invalid = editor.value?.addresses.filter((address) => ipError(address)) ?? []
+
+  return invalid.length ? `Не похоже на IP-адрес: ${invalid.join(', ')}` : ''
 })
 
 // load загружает DNS-записи.
@@ -36,58 +65,63 @@ async function load(): Promise<void> {
   }
 }
 
-// add добавляет запись.
-async function add(): Promise<void> {
-  try {
-    await post('/api/dns-records/add', {
-      domain: form.domain,
-      addresses: parseList(form.addresses),
-      description: form.description,
-    })
-
-    showMessage('DNS-запись добавлена')
-    form.domain = ''
-    form.addresses = ''
-    form.description = ''
-    await load()
-  } catch (error) {
-    showError(error)
+// openEditor открывает форму новой или существующей записи.
+function openEditor(record?: DNSRecord): void {
+  editor.value = {
+    id: record?.id ?? '',
+    domain: record?.domain ?? '',
+    addresses: [...(record?.addresses ?? [])],
+    description: record?.description ?? '',
+    error: '',
+    saving: false,
   }
 }
 
-// openEdit открывает редактирование записи.
-function openEdit(record: DNSRecord): void {
-  editing.value = record
-  editForm.domain = record.domain
-  editForm.addresses = record.addresses.join(', ')
-  editForm.description = record.description
-}
+// save добавляет или сохраняет запись. Ошибка показывается прямо в форме.
+async function save(): Promise<void> {
+  const current = editor.value
 
-// saveEdit сохраняет запись.
-async function saveEdit(): Promise<void> {
-  if (!editing.value) {
+  if (!current) {
     return
   }
 
+  if (current.addresses.length === 0) {
+    current.error = 'Укажите хотя бы один IP-адрес'
+
+    return
+  }
+
+  current.saving = true
+  current.error = ''
+
   try {
-    await post('/api/dns-records/edit', {
-      id: editing.value.id,
-      domain: editForm.domain,
-      addresses: parseList(editForm.addresses),
-      description: editForm.description,
+    await post(current.id ? '/api/dns-records/edit' : '/api/dns-records/add', {
+      id: current.id || undefined,
+      domain: current.domain.trim(),
+      addresses: current.addresses,
+      description: current.description.trim(),
     })
 
-    showMessage('DNS-запись обновлена')
-    editing.value = null
+    showMessage(current.id ? 'DNS-запись сохранена' : 'DNS-запись добавлена')
+    editor.value = null
     await load()
   } catch (error) {
-    showError(error)
+    current.error = error instanceof Error ? error.message : String(error)
+  } finally {
+    current.saving = false
   }
 }
 
 // remove удаляет запись.
 async function remove(record: DNSRecord): Promise<void> {
-  if (!confirm(`Удалить DNS-запись ${record.domain}?`)) {
+  const confirmed = await confirmAction({
+    title: `Удалить DNS-запись ${record.domain}?`,
+    message: 'sing-box перестанет отвечать на этот домен заданными адресами.',
+    confirmText: 'Удалить',
+    danger: true,
+  })
+
+  if (!confirmed) {
     return
   }
 
@@ -104,81 +138,107 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="add-form-card">
-    <div class="form-header">Добавить DNS-запись</div>
-    <form @submit.prevent="add">
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label" for="recordDomain">Домен</label>
-          <input id="recordDomain" v-model="form.domain" class="form-input" type="text" placeholder="ha.home.lab" required>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="recordAddresses">IP-адреса</label>
-          <input id="recordAddresses" v-model="form.addresses" class="form-input" type="text" placeholder="192.168.50.8, через запятую или пробел" required>
-        </div>
-        <div class="form-group" style="flex: 2;">
-          <label class="form-label" for="recordDescription">Описание</label>
-          <input id="recordDescription" v-model="form.description" class="form-input" type="text" placeholder="Необязательно">
-        </div>
-      </div>
-      <div class="form-actions">
-        <button type="submit" class="btn btn-primary">Добавить</button>
-      </div>
-    </form>
-  </div>
+  <Teleport to="#topbar-actions" defer>
+    <button class="btn btn-primary" @click="openEditor()">
+      <SvgIcon class="btn-icon" :path="icons.plus" />
+      Добавить запись
+    </button>
+  </Teleport>
 
-  <h3 class="section-title">DNS-записи</h3>
-  <p class="section-hint">
-    DNS sing-box отвечает на запросы этих доменов указанными адресами (точное совпадение домена). Записи попадают
-    в hosts-сервер <code>configurer-hosts</code> и правило в начале <code>dns.rules</code> итогового конфига.
+  <p class="page-intro">
+    Свои ответы на DNS-запросы — как файл hosts, но для всех устройств сети. Например, <code>nas.home</code> →
+    <code>192.168.1.10</code>.
   </p>
+
+  <HelpHint>
+    <p>
+      Запись срабатывает только на точное совпадение домена, поддомены не затрагиваются. Записи собираются в
+      hosts-сервер <code>configurer-hosts</code>, а правило для них ставится первым в <code>dns.rules</code>,
+      поэтому они важнее всех остальных правил и групп.
+    </p>
+  </HelpHint>
+
+  <div v-if="records.length > 5" class="table-toolbar">
+    <div class="field">
+      <div class="search-input">
+        <SvgIcon :path="icons.search" />
+        <input v-model="search" class="form-input" type="search" placeholder="Домен, адрес или описание" aria-label="Поиск">
+      </div>
+    </div>
+    <span class="table-count">{{ filtered.length }} из {{ records.length }}</span>
+  </div>
 
   <div class="data-table">
     <table class="table">
       <thead>
         <tr>
           <th>Домен</th>
-          <th>IP-адреса</th>
+          <th>Отвечает адресами</th>
           <th>Описание</th>
-          <th style="width: 150px; text-align: center;">Действия</th>
+          <th class="col-actions"></th>
         </tr>
       </thead>
       <tbody>
         <tr v-if="loaded && records.length === 0">
-          <td colspan="4" class="empty-state">DNS-записей нет.</td>
+          <td colspan="4" class="empty-state">DNS-записей нет. Добавьте первую кнопкой «Добавить запись».</td>
         </tr>
-        <tr v-for="record in records" :key="record.id">
-          <td><strong>{{ record.domain }}</strong></td>
+        <tr v-else-if="loaded && filtered.length === 0">
+          <td colspan="4" class="empty-state">Ничего не найдено.</td>
+        </tr>
+        <tr v-for="record in filtered" :key="record.id">
+          <td><span class="cell-main">{{ record.domain }}</span></td>
           <td>
-            <div v-for="address in record.addresses" :key="address">{{ address }}</div>
+            <div class="value-list">
+              <code v-for="address in record.addresses" :key="address">{{ address }}</code>
+            </div>
           </td>
           <td class="description-cell">{{ record.description }}</td>
           <td class="actions-cell">
-            <button class="btn btn-secondary" @click="openEdit(record)">Редактировать</button>
-            <button class="btn btn-danger" @click="remove(record)">Удалить</button>
+            <div class="row-actions">
+              <IconButton icon="edit" title="Изменить" @click="openEditor(record)" />
+              <IconButton icon="trash" title="Удалить" danger @click="remove(record)" />
+            </div>
           </td>
         </tr>
       </tbody>
     </table>
   </div>
 
-  <ModalDialog v-if="editing" title="Редактировать DNS-запись" @close="editing = null">
-    <form @submit.prevent="saveEdit">
-      <div class="form-group">
-        <label class="form-label" for="editRecordDomain">Домен</label>
-        <input id="editRecordDomain" v-model="editForm.domain" class="form-input" type="text" required>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="editRecordAddresses">IP-адреса</label>
-        <input id="editRecordAddresses" v-model="editForm.addresses" class="form-input" type="text" required>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="editRecordDescription">Описание</label>
-        <input id="editRecordDescription" v-model="editForm.description" class="form-input" type="text">
-      </div>
+  <ModalDialog v-if="editor" :title="editor.id ? `DNS-запись ${editor.domain}` : 'Новая DNS-запись'" @close="editor = null">
+    <form class="form-stack" @submit.prevent="save">
+      <FormField label="Домен" input-id="recordDomain" :error="domainProblem" hint="Точное имя: поддомены не затрагиваются.">
+        <input
+          id="recordDomain"
+          v-model="editor.domain"
+          class="form-input"
+          type="text"
+          placeholder="nas.home"
+          autocomplete="off"
+          spellcheck="false"
+          required
+        >
+      </FormField>
+
+      <FormField
+        label="IP-адреса"
+        input-id="recordAddresses"
+        :error="addressesProblem"
+        hint="Введите адрес и нажмите Enter. Можно несколько, в том числе IPv6."
+      >
+        <ChipsInput v-model="editor.addresses" input-id="recordAddresses" placeholder="192.168.1.10" :validate="ipError" />
+      </FormField>
+
+      <FormField label="Описание" input-id="recordDescription" optional>
+        <input id="recordDescription" v-model="editor.description" class="form-input" type="text" placeholder="Например, домашний NAS">
+      </FormField>
+
+      <div v-if="editor.error" class="form-error">{{ editor.error }}</div>
+
       <div class="form-actions">
-        <button type="button" class="btn btn-secondary" @click="editing = null">Отмена</button>
-        <button type="submit" class="btn btn-primary">Сохранить</button>
+        <button type="button" class="btn btn-secondary" @click="editor = null">Отмена</button>
+        <button type="submit" class="btn btn-primary" :disabled="editor.saving || Boolean(domainProblem || addressesProblem)">
+          {{ editor.saving ? 'Сохранение...' : (editor.id ? 'Сохранить' : 'Добавить') }}
+        </button>
       </div>
     </form>
   </ModalDialog>

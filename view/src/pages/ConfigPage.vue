@@ -3,6 +3,7 @@ import { defineAsyncComponent, onMounted, ref } from 'vue'
 
 import { get, post } from '../api/client'
 import type { ApplyResult, ConfigState } from '../api/types'
+import { confirmAction } from '../stores/confirm'
 import { configChanged } from '../stores/configStatus'
 import { showError, showMessage } from '../stores/toast'
 
@@ -32,7 +33,13 @@ async function load(): Promise<void> {
 
 // apply проверяет итоговый конфиг, заменяет им рабочий и перезапускает sing-box.
 async function apply(): Promise<void> {
-  if (!confirm('Применить итоговый конфиг и перезагрузить sing-box?\n\nКонфиг будет проверен командой sing-box check. Текущие соединения могут быть разорваны.')) {
+  const confirmed = await confirmAction({
+    title: 'Применить конфиг и перезагрузить sing-box?',
+    message: 'Итоговый конфиг проверяется командой sing-box check, прежний сохраняется в резервную копию. Открытые соединения будут разорваны.',
+    confirmText: 'Применить',
+  })
+
+  if (!confirmed) {
     return
   }
 

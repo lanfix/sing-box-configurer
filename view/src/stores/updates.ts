@@ -1,4 +1,4 @@
-// Проверка и выполнение обновлений конфигуратора. Состояние общее для меню и страницы «Управление».
+// Проверка и выполнение обновлений конфигуратора. Состояние общее для меню и страницы «Обновление».
 
 import { computed, reactive } from 'vue'
 
@@ -20,7 +20,7 @@ export const updates = reactive({
 // inProgress — обновление выполняется.
 export const updateInProgress = computed(() => Boolean(updates.polling) || Boolean(updates.status?.running))
 
-// updateAvailable — есть версии новее текущей (бейдж «Управление» в меню).
+// updateAvailable — есть версии новее текущей (точка у пункта «Система» в меню).
 export const updateAvailable = computed(() => (updates.check?.available?.length ?? 0) > 0 && !updateInProgress.value)
 
 // checkUpdates запрашивает доступные версии. force сбрасывает кэш сервера.

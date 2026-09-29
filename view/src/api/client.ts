@@ -59,3 +59,8 @@ export async function post<T = { success: boolean; message?: string }>(path: str
 
   return result
 }
+
+// POST-запрос, который ничего не меняет (например, предпросмотр): статус конфига не обновляется.
+export function postQuiet<T>(path: string, body: unknown = {}): Promise<T> {
+  return request<T>('POST', path, body)
+}

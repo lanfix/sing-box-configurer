@@ -8,6 +8,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
 	"github.com/lanfix/sing-box-configurer/internal/inbounds"
+	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
 	"github.com/lanfix/sing-box-configurer/internal/settings"
 )
@@ -42,15 +43,18 @@ func testInput() Input {
 			{"type": "selector", "tag": "manual-select", "outbounds": []any{"vless-1"}},
 			{"type": "vless", "tag": "auto"},
 		},
-		Subscriptions: []Subscription{
+		Subscriptions: []outbound.Subscription{
 			{
-				Name: "Happ",
+				Source:      outbound.SourceHapp,
+				ProfileID:   "happ-1",
+				ProfileName: "Happ",
 				Outbounds: []map[string]any{
 					{"type": "vless", "tag": "sub-1"},
 					{"type": "vless", "tag": "vless-1"},
 				},
 			},
 		},
+		URLTests: outbound.DefaultURLTests(),
 		Mixed: []inbounds.Mixed{
 			{Tag: "mixed-proxy", Listen: "0.0.0.0", ListenPort: 1080},
 		},
@@ -109,7 +113,7 @@ func TestRenderOutbounds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Зарезервированный тег auto и повторяющийся vless-1 из подписки пропускаются.
+	// Тег urltest-а auto и повторяющийся vless-1 из подписки пропускаются.
 	if len(result.Warnings) != 3 {
 		t.Errorf("warnings = %v, want 3 (auto, duplicate, missing outbound)", result.Warnings)
 	}
@@ -119,6 +123,10 @@ func TestRenderOutbounds(t *testing.T) {
 	auto := byTag(outbounds, "auto")
 	if got := toJSON(t, auto["outbounds"]); got != `["vless-1","wg-1","sub-1"]` {
 		t.Errorf("auto members = %s", got)
+	}
+
+	if auto["url"] != outbound.DefaultTestURL || auto["interval"] != outbound.DefaultInterval || auto["tolerance"] != outbound.DefaultTolerance {
+		t.Errorf("auto params = %v", auto)
 	}
 
 	selector := byTag(outbounds, "select-default")
@@ -239,17 +247,98 @@ func TestRenderDNS(t *testing.T) {
 	}
 }
 
-func TestRenderEmpty(t *testing.T) {
-	result, err := Render(Input{RuleSetBaseURL: "http://127.0.0.1:8080"})
+func TestRenderURLTests(t *testing.T) {
+	in := testInput()
+	in.Groups = []rules.Group{
+		{Name: "happ", DefaultOutbound: "happ-fast"},
+	}
+	in.URLTests = []outbound.URLTest{
+		{
+			Tag:           "happ-fast",
+			Sources:       []outbound.URLTestSource{{Kind: outbound.SourceHapp, ProfileID: "happ-1"}},
+			ExcludeRegexp: "^sub-2$",
+			ExcludeTags:   []string{"sub-3"},
+			Tags:          []string{"vless-1", "gone"},
+		},
+		{
+			Tag:     "manual-only",
+			Sources: []outbound.URLTestSource{{Kind: outbound.SourceManual}},
+			// selector и urltest по источникам не подбираются.
+			IncludeRegexp: "select|wg",
+		},
+		{
+			Tag:     "empty",
+			Sources: []outbound.URLTestSource{{Kind: outbound.SourceAmnezia}},
+		},
+	}
+	in.Subscriptions[0].Outbounds = []map[string]any{
+		{"type": "vless", "tag": "sub-1"},
+		{"type": "vless", "tag": "sub-2"},
+		{"type": "vless", "tag": "sub-3"},
+		{"type": "urltest", "tag": "sub-balancer", "outbounds": []any{"sub-1"}},
+	}
+
+	result, err := Render(in)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	outbounds := field(t, result.Config, "outbounds").([]any)
 
-	// Без прокси urltest auto получает direct: пустой urltest sing-box не примет.
-	if got := toJSON(t, byTag(outbounds, "auto")["outbounds"]); got != `["direct"]` {
-		t.Errorf("auto members = %s", got)
+	if got := toJSON(t, byTag(outbounds, "happ-fast")["outbounds"]); got != `["sub-1","vless-1"]` {
+		t.Errorf("happ-fast members = %s", got)
+	}
+
+	if got := toJSON(t, byTag(outbounds, "manual-only")["outbounds"]); got != `["wg-1"]` {
+		t.Errorf("manual-only members = %s", got)
+	}
+
+	// Пустой urltest не выводится и не попадает в selector-ы.
+	if byTag(outbounds, "empty") != nil {
+		t.Error("empty urltest must be skipped")
+	}
+
+	selector := byTag(outbounds, "select-happ")
+
+	if selector["default"] != "happ-fast" {
+		t.Errorf("default = %v", selector["default"])
+	}
+
+	if got := toJSON(t, selector["outbounds"]); got != `["happ-fast","manual-only","vless-1","wg-1","manual-select","auto","sub-1","sub-2","sub-3","sub-balancer","direct","block"]` {
+		t.Errorf("selector members = %s", got)
+	}
+
+	// Не найден явно указанный outbound gone, пустой urltest пропущен.
+	for _, want := range []string{"urltest happ-fast: outbound gone не найден", "urltest empty пропущен — в нем нет outbound-ов"} {
+		if !slices.Contains(result.Warnings, want) {
+			t.Errorf("warnings = %v, want %q", result.Warnings, want)
+		}
+	}
+}
+
+func TestRenderEmpty(t *testing.T) {
+	in := Input{
+		Groups: []rules.Group{
+			{Name: "default", DefaultOutbound: "auto"},
+		},
+		URLTests:       outbound.DefaultURLTests(),
+		RuleSetBaseURL: "http://127.0.0.1:8080",
+	}
+
+	result, err := Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outbounds := field(t, result.Config, "outbounds").([]any)
+
+	// Без прокси urltest auto не выводится (пустой urltest sing-box не примет), и группа получает block.
+	if byTag(outbounds, "auto") != nil {
+		t.Error("empty auto must be skipped")
+	}
+
+	if byTag(outbounds, "select-default")["default"] != "block" {
+		t.Error("group with empty urltest must fall back to block")
 	}
 
 	if _, ok := result.Config["endpoints"]; ok {
@@ -264,7 +353,7 @@ func TestRenderEmpty(t *testing.T) {
 	}
 
 	// Рендер детерминирован.
-	again, _ := Render(Input{RuleSetBaseURL: "http://127.0.0.1:8080"})
+	again, _ := Render(in)
 
 	if toJSON(t, result.Config) != toJSON(t, again.Config) {
 		t.Error("render must be deterministic")

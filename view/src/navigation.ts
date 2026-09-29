@@ -29,6 +29,7 @@ export function isNavGroup(entry: NavEntry): entry is NavGroup {
 
 export const navigation: NavEntry[] = [
   { route: 'overview', title: 'Обзор', icon: icons.overview },
+  { route: 'proxies', title: 'Прокси', icon: icons.proxies },
   {
     id: 'rules',
     title: 'Правила',
@@ -47,9 +48,18 @@ export const navigation: NavEntry[] = [
       { route: 'dns-servers', title: 'Серверы' },
       { route: 'dns-records', title: 'Записи' },
       { route: 'dns-settings', title: 'Настройки' },
+      { route: 'dns-advanced', title: 'Расширенные' },
     ],
   },
-  { route: 'outbounds', title: 'Outbounds', icon: icons.outbounds },
+  {
+    id: 'outbounds',
+    title: 'Outbounds',
+    icon: icons.outbounds,
+    children: [
+      { route: 'outbounds', title: 'Серверы' },
+      { route: 'urltests', title: 'URLTest' },
+    ],
+  },
   { route: 'inbounds', title: 'Inbounds', icon: icons.inbounds },
   {
     id: 'subscriptions',
@@ -62,5 +72,14 @@ export const navigation: NavEntry[] = [
     ],
   },
   { route: 'config', title: 'Конфиг', icon: icons.config, badge: 'config' },
-  { route: 'control', title: 'Управление', icon: icons.control, badge: 'update' },
+  {
+    id: 'system',
+    title: 'Система',
+    icon: icons.control,
+    badge: 'update',
+    children: [
+      { route: 'system-settings', title: 'Настройки' },
+      { route: 'system-update', title: 'Обновление', badge: 'update' },
+    ],
+  },
 ]

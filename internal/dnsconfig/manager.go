@@ -150,12 +150,14 @@ func (m *Manager) DeleteServer(tag string) error {
 	return m.save()
 }
 
-// UpdateSettings заменяет общие параметры DNS.
+// UpdateSettings заменяет общие параметры DNS из формы. Дополнительные поля секции dns (Extra)
+// не меняются: они сохраняются вместе с правилами через UpdateAdvanced.
 func (m *Manager) UpdateSettings(settings Settings) error {
-	settings.Normalize()
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	settings.Extra = jsonmap.Clone(m.data.Settings.Extra)
+	settings.Normalize()
 
 	if err := settings.Validate(serverTags(m.data.Servers)); err != nil {
 		return err
@@ -166,18 +168,27 @@ func (m *Manager) UpdateSettings(settings Settings) error {
 	return m.save()
 }
 
-// UpdateRules заменяет пользовательские DNS-правила.
-func (m *Manager) UpdateRules(rules []map[string]any) error {
+// UpdateAdvanced заменяет пользовательские DNS-правила и дополнительные поля секции dns.
+func (m *Manager) UpdateAdvanced(rules []map[string]any, extra map[string]any) error {
 	for i, rule := range rules {
 		if len(rule) == 0 {
 			return fmt.Errorf("правило %d пустое", i+1)
 		}
 	}
 
+	if err := ValidateExtra(extra); err != nil {
+		return err
+	}
+
+	if len(extra) == 0 {
+		extra = nil
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.data.Rules = jsonmap.Clone(rules)
+	m.data.Settings.Extra = jsonmap.Clone(extra)
 
 	return m.save()
 }

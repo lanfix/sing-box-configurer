@@ -33,11 +33,6 @@ const (
 
 	// ruleSetUpdateInterval — как часто sing-box проверяет rule-set-ы (ответ 304, если набор не изменился).
 	ruleSetUpdateInterval = "30s"
-
-	// Параметры встроенного urltest auto.
-	autoTestURL   = "https://www.gstatic.com/generate_204"
-	autoInterval  = "3m"
-	autoTolerance = 100
 )
 
 // baseTemplate — постоянная часть конфига: tun и dns inbound-ы, встроенные outbound-ы, служебные
@@ -45,12 +40,6 @@ const (
 //
 //go:embed base.json
 var baseTemplate []byte
-
-// Subscription — outbound-ы одного источника подписок (Happ, Amnezia).
-type Subscription struct {
-	Name      string
-	Outbounds []map[string]any
-}
 
 // Input — данные, из которых собирается конфиг.
 type Input struct {
@@ -60,8 +49,11 @@ type Input struct {
 	DNSRecords []dnsrecords.Record
 
 	// Outbounds — outbound-ы и endpoint-ы, добавленные вручную.
-	Outbounds     []map[string]any
-	Subscriptions []Subscription
+	Outbounds []map[string]any
+
+	// Subscriptions — outbound-ы профилей подписок Happ и Amnezia.
+	Subscriptions []outbound.Subscription
+	URLTests      []outbound.URLTest
 	Mixed         []inbounds.Mixed
 	Settings      settings.Settings
 
@@ -84,9 +76,9 @@ type renderer struct {
 	proxyOutbounds []any
 	endpoints      []any
 
-	// proxyTags — теги всех прокси в порядке объявления, autoTags — участники urltest auto.
-	proxyTags []string
-	autoTags  []string
+	// proxyTags — теги всех прокси в порядке объявления, candidates — они же с источниками для urltest-ов.
+	proxyTags  []string
+	candidates []outbound.Candidate
 }
 
 // Render собирает конфиг sing-box.
@@ -103,7 +95,7 @@ func Render(in Input) (*Result, error) {
 		proxyOutbounds: []any{},
 		endpoints:      []any{},
 		proxyTags:      []string{},
-		autoTags:       []string{},
+		candidates:     []outbound.Candidate{},
 	}
 
 	r.collectProxies()
@@ -124,43 +116,64 @@ func Render(in Input) (*Result, error) {
 	}, nil
 }
 
+// Candidates возвращает outbound-ы, из которых urltest-ы подбирают участников, — в том виде, в котором
+// они попадут в конфиг (без пропущенных и повторяющихся).
+func Candidates(in Input) []outbound.Candidate {
+	r := &renderer{
+		in:             in,
+		warnings:       []string{},
+		proxyOutbounds: []any{},
+		endpoints:      []any{},
+		proxyTags:      []string{},
+		candidates:     []outbound.Candidate{},
+	}
+
+	r.collectProxies()
+
+	return r.candidates
+}
+
 // warn добавляет предупреждение.
 func (r *renderer) warn(format string, args ...any) {
 	r.warnings = append(r.warnings, fmt.Sprintf(format, args...))
 }
 
-// collectProxies собирает ручные outbound-ы и outbound-ы подписок. Элементы без тега, с занятым
-// или повторяющимся тегом пропускаются с предупреждением.
+// collectProxies собирает ручные outbound-ы и outbound-ы подписок. Элементы без тега, с зарезервированным
+// тегом, тегом urltest-а или повторяющимся тегом пропускаются с предупреждением.
 func (r *renderer) collectProxies() {
 	seen := map[string]string{}
 
-	add := func(source string, config map[string]any) {
+	for _, urlTest := range r.in.URLTests {
+		seen[urlTest.Tag] = "urltest"
+	}
+
+	add := func(label string, candidate outbound.Candidate, config map[string]any) {
 		tag := jsonmap.String(config, "tag")
 
 		switch {
 		case tag == "":
-			r.warn("%s: outbound без тега пропущен", source)
+			r.warn("%s: outbound без тега пропущен", label)
 
 			return
 
 		case outbound.IsReservedTag(tag):
-			r.warn("%s: outbound %s пропущен — тег зарезервирован", source, tag)
+			r.warn("%s: outbound %s пропущен — тег зарезервирован", label, tag)
 
 			return
 		}
 
 		if previous, ok := seen[tag]; ok {
-			r.warn("%s: outbound %s пропущен — тег уже занят (%s)", source, tag, previous)
+			r.warn("%s: outbound %s пропущен — тег уже занят (%s)", label, tag, previous)
 
 			return
 		}
 
-		seen[tag] = source
+		seen[tag] = label
 		r.proxyTags = append(r.proxyTags, tag)
 
-		if jsonmap.String(config, "type") != "selector" {
-			r.autoTags = append(r.autoTags, tag)
-		}
+		candidate.Tag = tag
+		candidate.Type = jsonmap.String(config, "type")
+		r.candidates = append(r.candidates, candidate)
 
 		if outbound.IsEndpoint(config) {
 			r.endpoints = append(r.endpoints, jsonmap.Clone(config))
@@ -172,40 +185,88 @@ func (r *renderer) collectProxies() {
 	}
 
 	for _, config := range r.in.Outbounds {
-		add("Outbounds", config)
+		add("Outbounds", outbound.Candidate{
+			Tag:       "",
+			Type:      "",
+			Source:    outbound.SourceManual,
+			ProfileID: "",
+		}, config)
 	}
 
 	for _, subscription := range r.in.Subscriptions {
 		for _, config := range subscription.Outbounds {
-			add(subscription.Name, config)
+			add(subscriptionLabel(subscription.Source, subscription.ProfileName), outbound.Candidate{
+				Tag:       "",
+				Type:      "",
+				Source:    subscription.Source,
+				ProfileID: subscription.ProfileID,
+			}, config)
 		}
 	}
 }
 
-// renderOutbounds собирает outbounds: прокси, urltest auto, встроенные direct и block, selector-ы групп.
-func (r *renderer) renderOutbounds(config map[string]any) {
-	builtin, _ := config["outbounds"].([]any)
+// renderURLTests собирает urltest-ы и возвращает их объекты. urltest без участников sing-box не примет,
+// поэтому такой urltest пропускается: группы, выбравшие его, получат block.
+func (r *renderer) renderURLTests() []any {
+	result := make([]any, 0, len(r.in.URLTests))
 
-	autoMembers := slices.Clone(r.autoTags)
+	for _, urlTest := range r.in.URLTests {
+		for _, source := range urlTest.Sources {
+			if source.ProfileID != "" && !r.hasSubscription(source) {
+				r.warn("urltest %s: профиль %s источника %s не найден", urlTest.Tag, source.ProfileID, source.Kind)
+			}
+		}
 
-	// urltest без участников sing-box не примет.
-	if len(autoMembers) == 0 {
-		autoMembers = []string{outbound.DirectTag}
+		members, err := urlTest.Resolve(r.candidates)
+		if err != nil {
+			r.warn("urltest %s пропущен: %v", urlTest.Tag, err)
+
+			continue
+		}
+
+		for _, member := range members {
+			if member.State == outbound.MemberMissing {
+				r.warn("urltest %s: outbound %s не найден", urlTest.Tag, member.Tag)
+			}
+		}
+
+		included := outbound.IncludedTags(members)
+
+		if len(included) == 0 {
+			r.warn("urltest %s пропущен — в нем нет outbound-ов", urlTest.Tag)
+
+			continue
+		}
+
+		result = append(result, urlTest.Config(included))
 	}
 
-	outbounds := slices.Clone(r.proxyOutbounds)
-	outbounds = append(outbounds, map[string]any{
-		"type":                        "urltest",
-		"tag":                         outbound.AutoTag,
-		"outbounds":                   toAnySlice(autoMembers),
-		"url":                         autoTestURL,
-		"interval":                    autoInterval,
-		"tolerance":                   autoTolerance,
-		"interrupt_exist_connections": false,
+	return result
+}
+
+// hasSubscription проверяет, что профиль источника source есть среди подписок.
+func (r *renderer) hasSubscription(source outbound.URLTestSource) bool {
+	return slices.ContainsFunc(r.in.Subscriptions, func(subscription outbound.Subscription) bool {
+		return subscription.Source == source.Kind && subscription.ProfileID == source.ProfileID
 	})
+}
+
+// renderOutbounds собирает outbounds: прокси, urltest-ы, встроенные direct и block, selector-ы групп.
+func (r *renderer) renderOutbounds(config map[string]any) {
+	builtin, _ := config["outbounds"].([]any)
+	urlTests := r.renderURLTests()
+
+	outbounds := slices.Clone(r.proxyOutbounds)
+	outbounds = append(outbounds, urlTests...)
 	outbounds = append(outbounds, builtin...)
 
-	members := append([]string{outbound.AutoTag}, r.proxyTags...)
+	members := make([]string, 0, len(urlTests)+len(r.proxyTags)+2)
+
+	for _, urlTest := range urlTests {
+		members = append(members, jsonmap.String(urlTest.(map[string]any), "tag"))
+	}
+
+	members = append(members, r.proxyTags...)
 	members = append(members, outbound.DirectTag, outbound.BlockTag)
 
 	for _, group := range r.in.Groups {
@@ -490,4 +551,18 @@ func toAnySlice(values []string) []any {
 	}
 
 	return result
+}
+
+// subscriptionLabel возвращает подпись профиля подписки для предупреждений.
+func subscriptionLabel(source, profileName string) string {
+	switch source {
+	case outbound.SourceHapp:
+		return "Happ " + profileName
+
+	case outbound.SourceAmnezia:
+		return "Amnezia " + profileName
+
+	default:
+		return profileName
+	}
 }

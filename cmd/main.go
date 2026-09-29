@@ -137,27 +137,19 @@ func main() {
 
 	// Данные для рендера конфига sing-box собираются из менеджеров при каждом рендере.
 	renderInput := func() (render.Input, error) {
-		amneziaOutbounds, amneziaWarnings := amneziaManager.Outbounds()
+		amneziaSubscriptions, amneziaWarnings := amneziaManager.Subscriptions()
 
 		for _, warning := range amneziaWarnings {
 			log.Printf("Render: %s", warning)
 		}
 
 		return render.Input{
-			Groups:     rulesManager.GetGroups(),
-			DNS:        dnsManager.Get(),
-			DNSRecords: dnsRecordsManager.List(),
-			Outbounds:  outboundConfigs(outboundManager.List()),
-			Subscriptions: []render.Subscription{
-				{
-					Name:      "Happ",
-					Outbounds: happManager.Outbounds(),
-				},
-				{
-					Name:      "Amnezia",
-					Outbounds: amneziaOutbounds,
-				},
-			},
+			Groups:         rulesManager.GetGroups(),
+			DNS:            dnsManager.Get(),
+			DNSRecords:     dnsRecordsManager.List(),
+			Outbounds:      outboundConfigs(outboundManager.List()),
+			Subscriptions:  append(happManager.Subscriptions(), amneziaSubscriptions...),
+			URLTests:       outboundManager.ListURLTests(),
 			Mixed:          inboundsManager.Mixed(),
 			Settings:       settingsManager.Get(),
 			RuleSetBaseURL: cfg.RuleSetBaseURL,

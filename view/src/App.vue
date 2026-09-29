@@ -3,9 +3,12 @@ import { onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 
 import AppSidebar from './components/AppSidebar.vue'
+import ConfirmHost from './components/ConfirmHost.vue'
+import SvgIcon from './components/SvgIcon.vue'
+import { icons } from './icons'
 import { startConfigStatusPolling } from './stores/configStatus'
 import { startSubscriptionAlertsPolling } from './stores/subscriptionAlerts'
-import { toast } from './stores/toast'
+import { hideToast, toast } from './stores/toast'
 import { initUpdates } from './stores/updates'
 
 const route = useRoute()
@@ -29,10 +32,22 @@ onMounted(() => {
       </div>
 
       <div class="content-area">
-        <div v-if="toast" class="message show" :class="toast.type">{{ toast.text }}</div>
-
         <RouterView />
       </div>
     </main>
+
+    <div class="toast-host" aria-live="polite">
+      <Transition name="toast">
+        <div v-if="toast" :key="toast.id" class="toast" :class="toast.type" role="status">
+          <SvgIcon class="toast-icon" :path="toast.type === 'success' ? icons.check : icons.alert" />
+          <span class="toast-text">{{ toast.text }}</span>
+          <button type="button" class="icon-btn toast-close" aria-label="Закрыть" @click="hideToast">
+            <SvgIcon :path="icons.close" />
+          </button>
+        </div>
+      </Transition>
+    </div>
+
+    <ConfirmHost />
   </div>
 </template>

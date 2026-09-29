@@ -70,11 +70,13 @@ const (
 	// BypassGroupName — системная группа: трафик по ее правилам идет мимо туннеля sing-box.
 	BypassGroupName = "bypass"
 
-	// DirectGroupName — группа прямого подключения, которая создается при первой инициализации.
-	DirectGroupName = "direct"
+	// DefaultGroupName — группа, которая создается при первой инициализации. В нее же попадали правила
+	// до появления групп.
+	DefaultGroupName = "default"
 
-	// legacyDefaultGroupName — группа, в которую попадали правила до появления групп.
-	legacyDefaultGroupName = "default"
+	// Outbound и DNS-сервер группы default новой инсталляции.
+	defaultGroupOutbound  = "auto"
+	defaultGroupDNSServer = "cloudflare"
 )
 
 // groupNameRe — допустимое имя группы: оно входит в теги rule-set-ов и selector-а.
@@ -185,13 +187,28 @@ func NewManager(appData *appdata.File, sourceListsProxyUrl string) (*Manager, er
 	}, nil
 }
 
-// initialGroups возвращает группы новой инсталляции.
+// initialGroups возвращает группы новой инсталляции (кроме системных block и bypass).
 func initialGroups() []Group {
 	return []Group{
 		{
-			Name:            DirectGroupName,
-			Description:     "Прямое подключение",
-			DefaultOutbound: "direct",
+			Name:            DefaultGroupName,
+			Description:     "Группа по умолчанию",
+			DefaultOutbound: defaultGroupOutbound,
+			DNSServer:       defaultGroupDNSServer,
+			CreatedAt:       time.Now(),
+			System:          false,
+		},
+	}
+}
+
+// legacyGroups возвращает группы для данных, созданных до появления групп: все правила попадают в default,
+// и их трафик, как и раньше, идет напрямую.
+func legacyGroups() []Group {
+	return []Group{
+		{
+			Name:            DefaultGroupName,
+			Description:     "Группа по умолчанию",
+			DefaultOutbound: "",
 			DNSServer:       "",
 			CreatedAt:       time.Now(),
 			System:          false,
@@ -231,27 +248,20 @@ func (rm *Manager) Load() error {
 		changed = true
 
 		if len(newData.Rules) > 0 || len(newData.URLSources) > 0 {
-			newData.Groups = append(newData.Groups, Group{
-				Name:            legacyDefaultGroupName,
-				Description:     "Группа по умолчанию",
-				DefaultOutbound: "",
-				DNSServer:       "",
-				CreatedAt:       time.Now(),
-				System:          false,
-			})
+			newData.Groups = legacyGroups()
 		}
 	}
 
 	for i := range newData.Rules {
 		if newData.Rules[i].Group == "" {
-			newData.Rules[i].Group = legacyDefaultGroupName
+			newData.Rules[i].Group = DefaultGroupName
 			changed = true
 		}
 	}
 
 	for i := range newData.URLSources {
 		if newData.URLSources[i].Group == "" {
-			newData.URLSources[i].Group = legacyDefaultGroupName
+			newData.URLSources[i].Group = DefaultGroupName
 			changed = true
 		}
 	}

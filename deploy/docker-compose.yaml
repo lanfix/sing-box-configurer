@@ -1,6 +1,6 @@
 services:
   sing-box-configurer:
-    image: docker.io/lanfix/sing-box-configurer:v0.6.2
+    image: docker.io/lanfix/sing-box-configurer:v0.8.0
     container_name: sing-box-configurer
     restart: always
     ports:

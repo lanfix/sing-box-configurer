@@ -151,8 +151,8 @@ func TestRowHandler(t *testing.T) {
 			row:  "discord.com",
 			expected: RuleSet{
 				CidrList:       []string{},
-				Domains:        []string{"discord.com"},
-				DomainSuffixes: []string{},
+				Domains:        []string{},
+				DomainSuffixes: []string{"discord.com"},
 			},
 		},
 		{
@@ -160,8 +160,8 @@ func TestRowHandler(t *testing.T) {
 			row:  "api.discord.com",
 			expected: RuleSet{
 				CidrList:       []string{},
-				Domains:        []string{"api.discord.com"},
-				DomainSuffixes: []string{},
+				Domains:        []string{},
+				DomainSuffixes: []string{"api.discord.com"},
 			},
 		},
 		{
@@ -169,8 +169,8 @@ func TestRowHandler(t *testing.T) {
 			row:  "  discord.com  ",
 			expected: RuleSet{
 				CidrList:       []string{},
-				Domains:        []string{"discord.com"},
-				DomainSuffixes: []string{},
+				Domains:        []string{},
+				DomainSuffixes: []string{"discord.com"},
 			},
 		},
 		{

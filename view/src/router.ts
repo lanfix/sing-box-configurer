@@ -16,6 +16,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Обзор' },
   },
   {
+    path: '/proxies',
+    name: 'proxies',
+    component: () => import('./pages/ProxiesPage.vue'),
+    meta: { title: 'Прокси-группы' },
+  },
+  {
     path: '/rules/groups',
     name: 'groups',
     component: () => import('./pages/rules/GroupsPage.vue'),
@@ -46,6 +52,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'DNS-записи' },
   },
   {
+    path: '/dns/advanced',
+    name: 'dns-advanced',
+    component: () => import('./pages/dns/DnsAdvancedPage.vue'),
+    meta: { title: 'Расширенные настройки DNS' },
+  },
+  {
     path: '/dns/settings',
     name: 'dns-settings',
     component: () => import('./pages/dns/DnsSettingsPage.vue'),
@@ -54,8 +66,14 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/outbounds',
     name: 'outbounds',
-    component: () => import('./pages/OutboundsPage.vue'),
-    meta: { title: 'Outbounds' },
+    component: () => import('./pages/outbounds/ServersPage.vue'),
+    meta: { title: 'Outbound-серверы' },
+  },
+  {
+    path: '/outbounds/urltest',
+    name: 'urltests',
+    component: () => import('./pages/outbounds/URLTestsPage.vue'),
+    meta: { title: 'URLTest' },
   },
   {
     path: '/inbounds',
@@ -82,10 +100,22 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Конфигурация sing-box' },
   },
   {
+    path: '/system/settings',
+    name: 'system-settings',
+    component: () => import('./pages/system/SettingsPage.vue'),
+    meta: { title: 'Настройки' },
+  },
+  {
+    path: '/system/update',
+    name: 'system-update',
+    component: () => import('./pages/system/UpdatePage.vue'),
+    meta: { title: 'Обновление' },
+  },
+  // Старый адрес страницы «Управление».
+  {
     path: '/control',
-    name: 'control',
-    component: () => import('./pages/ControlPage.vue'),
-    meta: { title: 'Управление' },
+    redirect: '/system/settings',
+    meta: { title: '' },
   },
   {
     path: '/:pathMatch(.*)*',

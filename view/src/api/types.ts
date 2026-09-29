@@ -80,7 +80,7 @@ export interface DNSRecord {
   created_at: string
 }
 
-export type OutboundSource = 'manual' | 'happ' | 'amnezia' | 'builtin'
+export type OutboundSource = 'manual' | 'happ' | 'amnezia' | 'builtin' | 'urltest'
 
 export interface OutboundView {
   id?: string
@@ -90,7 +90,64 @@ export interface OutboundView {
   port?: number
   source: OutboundSource
   source_name?: string
+  profile_id?: string
   config?: Record<string, unknown>
+}
+
+// URLTestSourceKind — источник участников urltest-а.
+export type URLTestSourceKind = 'all' | 'manual' | 'happ' | 'amnezia'
+
+export interface URLTestSource {
+  kind: URLTestSourceKind
+  profile_id?: string
+}
+
+export interface URLTest {
+  id: string
+  tag: string
+  description: string
+  sources: URLTestSource[]
+  include_regexp?: string
+  exclude_regexp?: string
+  tags: string[]
+  exclude_tags: string[]
+  url?: string
+  interval?: string
+  tolerance?: number
+  interrupt_exist_connections: boolean
+  created_at?: string
+}
+
+export type URLTestMemberState = 'included' | 'excluded_tag' | 'excluded_regexp' | 'missing'
+
+export interface URLTestMember {
+  tag: string
+  state: URLTestMemberState
+}
+
+export interface URLTestView extends URLTest {
+  members: URLTestMember[]
+  error?: string
+}
+
+// URLTestCandidate — outbound, который может войти в urltest.
+export interface URLTestCandidate {
+  tag: string
+  type: string
+  source: 'manual' | 'happ' | 'amnezia'
+  profile_id?: string
+}
+
+export interface SubscriptionProfileRef {
+  source: 'happ' | 'amnezia'
+  id: string
+  name: string
+}
+
+export interface URLTestsData {
+  urltests: URLTestView[]
+  candidates: URLTestCandidate[]
+  profiles: SubscriptionProfileRef[]
 }
 
 export interface MixedUser {
@@ -240,6 +297,8 @@ export interface UpdateCheck {
   available: Release[]
   checked_at?: string
   error?: string
+  // unsupported — почему обновление через интерфейс недоступно (например, локальная сборка).
+  unsupported?: string
 }
 
 export interface UpdateStep {

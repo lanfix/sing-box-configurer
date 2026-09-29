@@ -22,7 +22,7 @@ inbound-ами и подписками.
 | Раздел | Откуда |
 |---|---|
 | `inbounds` | встроенные `tun-in` (tun0, 198.18.0.1/30, auto_redirect) и `dns-in` (0.0.0.0:53), mixed-прокси со страницы Inbounds |
-| `outbounds`, `endpoints` | outbound-ы, добавленные вручную, серверы подписок Happ и Amnezia, встроенные `auto` (urltest из всех outbound-ов, кроме selector-ов), `direct`, `block` и selector-ы групп `select-<группа>` |
+| `outbounds`, `endpoints` | outbound-ы, добавленные вручную, серверы подписок Happ и Amnezia, urltest-ы со страницы Outbounds → URLTest, встроенные `direct`, `block` и selector-ы групп `select-<группа>` |
 | `route` | служебные правила (bypass, sniff, hijack-dns, resolve для mixed-прокси, private → direct), `reject` для группы block, правила групп; `final: direct` |
 | `dns` | DNS-серверы, DNS-записи (`configurer-hosts`), правила групп с DNS-сервером, фильтр HTTPS-записей, пользовательские DNS-правила, общие параметры |
 | `experimental` | cache_file и Clash API на `0.0.0.0:9090` с токеном и CORS-origin-ами |
@@ -43,27 +43,41 @@ inbound-ами и подписками.
 ## Интерфейс
 
 - **Обзор** — трафик, подключения, график скорости и память sing-box (Clash API).
+- **Прокси** — прокси-группы Clash API: переключение узла в selector-ах на лету, поиск и замер задержки.
 - **Правила**
   - **Группы.** Каждая группа создает rule-set-ы `configurer-<группа>` (домены) и `configurer-<группа>@ip` (IP/CIDR)
     и selector `select-<группа>` с outbound-ом по умолчанию. Если у группы задан DNS-сервер, домены группы
     резолвятся через него. Системные группы: **block** — соединения отклоняются, **bypass** — трафик идет мимо
-    туннеля sing-box. Новая инсталляция создает группу **direct**. Удалить можно только пустую группу.
+    туннеля sing-box. Новая инсталляция создает группу **default** (outbound `auto`, DNS-сервер `cloudflare`).
+    Удалить можно только пустую группу.
   - **Одиночные** — домены, суффиксы, IP и CIDR. Изменения применяются кнопкой «Применить правила».
   - **Источники URL** — списки правил, которые конфигуратор периодически загружает.
 - **DNS**
   - **Серверы** — UDP, TCP, DNS over TLS, DNS over HTTPS, DNS over HTTP/3, DNS over QUIC, local, DHCP.
-    Поля без места в форме задаются JSON-ом «Дополнительные параметры».
+    Популярные публичные серверы (Cloudflare, Google, Quad9, AdGuard, Яндекс) подставляются в один клик, адрес
+    можно вставить ссылкой целиком (`https://dns.google/dns-query`). Поля без места в форме задаются JSON-ом
+    «Дополнительные параметры».
   - **Записи** — домен и IP-адреса, которыми отвечает DNS sing-box.
-  - **Настройки** — final, стратегия, резолвер доменов outbound-ов, кэш, таймаут и пользовательские DNS-правила.
-- **Outbounds** — share-ссылки (vless, hysteria2, trojan, wireguard) или JSON. Показываются и outbound-ы подписок.
+  - **Настройки** — сервер по умолчанию (final), IP-версия, резолвер адресов outbound-ов, таймаут и кэш.
+  - **Расширенные** — JSON: пользовательские DNS-правила (идут после системных) и дополнительные поля секции
+    `dns` (например, `reverse_mapping`). Поля, которые задает конфигуратор (`servers`, `rules`, `final` и др.),
+    в дополнительных полях запрещены.
+- **Outbounds**
+  - **Серверы** — share-ссылки (vless, hysteria2, trojan, wireguard) или JSON. Показываются и outbound-ы подписок.
+  - **URLTest** — urltest-ы, состав которых собирается при каждом рендере: outbound-ы источников (все, добавленные
+    вручную, подписка Happ или Amnezia целиком либо отдельный профиль), подходящие под regexp-фильтр по тегу,
+    плюс явно добавленные, минус исключенные вручную или regexp-ом. Новая инсталляция создает urltest `auto`
+    из всех outbound-ов; его можно изменить или удалить. urltest без outbound-ов в конфиг не попадает, группы
+    с ним получают block. Удалить urltest, выбранный группой или указанный detour-ом DNS-сервера, нельзя.
 - **Inbounds** — mixed-прокси (HTTP и SOCKS5) с пользователями.
 - **Подписки** — Happ и Amnezia. Серверы подписок сразу попадают в итоговый конфиг. Точка в меню
   предупреждает, что подписка заканчивается: желтая — меньше недели или 75% трафика, красная — меньше
   3 дней, истекла или 90% трафика.
 - **Конфиг** — итоговый конфиг, diff с рабочим и применение. Бейдж в меню горит, если итоговый конфиг
   отличается от рабочего.
-- **Управление** — обновления, общие настройки (уровень логов, токен Clash API, CORS), плановая
-  перезагрузка sing-box, прокси-группы Clash API и перезапуск sing-box.
+- **Система**
+  - **Настройки** — уровень логов, токен Clash API, CORS, плановая перезагрузка и перезапуск sing-box.
+  - **Обновление** — доступные версии, список изменений и журнал последнего обновления.
 
 ### Плановая перезагрузка
 
@@ -172,7 +186,7 @@ cd view && npm run dev               # интерфейс с горячей пе
 ## Обновления
 
 Версия приложения равна тегу docker-образа (`docker.io/lanfix/sing-box-configurer:vX.Y.Z`).
-Обновление запускается на странице «Управление» и выполняется атомарно: либо новая версия
+Обновление запускается на странице «Система → Обновление» и выполняется атомарно: либо новая версия
 запускается и проходит проверку, либо всё возвращается в исходное состояние.
 
 ### Как это работает
@@ -237,9 +251,10 @@ sing-box во время обновления не перезапускаетс�
 | GET/POST | `/api/rules`, `/api/rules/add`, `/api/rules/add-bulk`, `/api/rules/edit`, `/api/rules/delete`, `/api/apply` | Правила |
 | GET/POST | `/api/groups`, `/api/groups/add`, `/api/groups/edit`, `/api/groups/delete` | Группы (системные — с `"system": true`) |
 | GET/POST | `/api/url-sources`, `.../add`, `.../edit`, `.../delete`, `.../refresh`, `.../apply`, `.../validate`, `/api/url-sources/rules?id=` | URL-источники |
-| GET/POST | `/api/dns`, `/api/dns/servers/add`, `.../edit`, `.../delete`, `/api/dns/settings`, `/api/dns/rules` | DNS-серверы, настройки, пользовательские правила |
+| GET/POST | `/api/dns`, `/api/dns/servers/add`, `.../edit`, `.../delete`, `/api/dns/settings`, `/api/dns/advanced` | DNS-серверы, настройки, пользовательские правила и дополнительные поля |
 | GET/POST | `/api/dns-records`, `.../add`, `.../edit`, `.../delete` | DNS-записи |
 | GET/POST | `/api/outbounds`, `.../add` (share-ссылка), `.../add-json`, `.../edit`, `.../delete` | Outbound-ы |
+| GET/POST | `/api/urltests`, `.../add`, `.../edit`, `.../delete`, `.../preview` | urltest-ы (preview подбирает состав без сохранения) |
 | GET/POST | `/api/inbounds`, `/api/inbounds/mixed/add`, `.../edit`, `.../delete` | Mixed-прокси |
 | GET/POST | `/api/settings`, `/api/settings/regenerate-secret` | Уровень логов, токен и CORS Clash API |
 | GET/POST | `/api/settings/restart` | Плановая перезагрузка: `{"enabled", "schedule", "timezone"}`, в ответе GET — также `next_run`, `last_run`, `last_error` |

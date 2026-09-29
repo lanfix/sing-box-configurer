@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lanfix/sing-box-configurer/internal/jsonmap"
+	"github.com/lanfix/sing-box-configurer/internal/outbound"
 )
 
 const (
@@ -54,17 +55,27 @@ func (m *Manager) List() []Profile {
 	return m.store.List()
 }
 
-// Outbounds возвращает outbound-ы серверов всех профилей для рендера конфига.
-func (m *Manager) Outbounds() []map[string]any {
-	outbounds := make([]map[string]any, 0)
+// Subscriptions возвращает outbound-ы серверов каждого профиля для рендера конфига.
+func (m *Manager) Subscriptions() []outbound.Subscription {
+	profiles := m.store.List()
+	subscriptions := make([]outbound.Subscription, 0, len(profiles))
 
-	for _, profile := range m.store.List() {
+	for _, profile := range profiles {
+		outbounds := make([]map[string]any, 0, len(profile.Servers))
+
 		for _, server := range profile.Servers {
 			outbounds = append(outbounds, jsonmap.Clone(server.Outbound))
 		}
+
+		subscriptions = append(subscriptions, outbound.Subscription{
+			Source:      outbound.SourceHapp,
+			ProfileID:   profile.ID,
+			ProfileName: profile.Name,
+			Outbounds:   outbounds,
+		})
 	}
 
-	return outbounds
+	return subscriptions
 }
 
 // Add загружает подписку и сохраняет профиль.

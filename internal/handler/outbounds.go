@@ -8,12 +8,10 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
 )
 
-// Источники outbound-ов в ответе API.
+// Источники outbound-ов в ответе API, кроме источников серверов из пакета outbound.
 const (
-	sourceManual  = "manual"
-	sourceHapp    = "happ"
-	sourceAmnezia = "amnezia"
 	sourceBuiltin = "builtin"
+	sourceURLTest = "urltest"
 )
 
 // outboundView — outbound для страницы Outbounds и выбора outbound-а группы.
@@ -25,11 +23,12 @@ type outboundView struct {
 	Port       int            `json:"port,omitempty"`
 	Source     string         `json:"source"`
 	SourceName string         `json:"source_name,omitempty"`
+	ProfileID  string         `json:"profile_id,omitempty"`
 	Config     map[string]any `json:"config,omitempty"`
 }
 
 // newOutboundView собирает описание outbound-а из его объекта sing-box.
-func newOutboundView(config map[string]any, source, sourceName string) outboundView {
+func newOutboundView(config map[string]any, source, sourceName, profileID string) outboundView {
 	view := outboundView{
 		ID:         "",
 		Tag:        jsonmap.String(config, "tag"),
@@ -38,6 +37,7 @@ func newOutboundView(config map[string]any, source, sourceName string) outboundV
 		Port:       jsonmap.Int(config, "server_port"),
 		Source:     source,
 		SourceName: sourceName,
+		ProfileID:  profileID,
 		Config:     nil,
 	}
 
@@ -52,16 +52,31 @@ func newOutboundView(config map[string]any, source, sourceName string) outboundV
 	return view
 }
 
-// GetOutbounds возвращает outbound-ы всех источников: встроенные, добавленные вручную и из подписок.
+// GetOutbounds возвращает outbound-ы всех источников: urltest-ы, встроенные, добавленные вручную и из подписок.
 func (h *Handler) GetOutbounds(w http.ResponseWriter, _ *http.Request) {
-	views := []outboundView{
-		{Tag: outbound.AutoTag, Type: "urltest", Source: sourceBuiltin, SourceName: "Самый быстрый из всех outbound-ов"},
-		{Tag: outbound.DirectTag, Type: "direct", Source: sourceBuiltin, SourceName: "Прямое подключение"},
-		{Tag: outbound.BlockTag, Type: "block", Source: sourceBuiltin, SourceName: "Блокировка"},
+	views := make([]outboundView, 0)
+
+	for _, urlTest := range h.outboundManager.ListURLTests() {
+		views = append(views, outboundView{
+			ID:         urlTest.ID,
+			Tag:        urlTest.Tag,
+			Type:       "urltest",
+			Server:     "",
+			Port:       0,
+			Source:     sourceURLTest,
+			SourceName: urlTest.Description,
+			ProfileID:  "",
+			Config:     nil,
+		})
 	}
 
+	views = append(views,
+		outboundView{Tag: outbound.DirectTag, Type: "direct", Source: sourceBuiltin, SourceName: "Прямое подключение"},
+		outboundView{Tag: outbound.BlockTag, Type: "block", Source: sourceBuiltin, SourceName: "Блокировка"},
+	)
+
 	for _, item := range h.outboundManager.List() {
-		view := newOutboundView(item.Config, sourceManual, "")
+		view := newOutboundView(item.Config, outbound.SourceManual, "", "")
 		view.ID = item.ID
 		view.Config = item.Config
 
@@ -70,13 +85,13 @@ func (h *Handler) GetOutbounds(w http.ResponseWriter, _ *http.Request) {
 
 	for _, profile := range h.happManager.List() {
 		for _, server := range profile.Servers {
-			views = append(views, newOutboundView(server.Outbound, sourceHapp, profile.Name))
+			views = append(views, newOutboundView(server.Outbound, outbound.SourceHapp, profile.Name, profile.ID))
 		}
 	}
 
 	for _, profile := range h.amneziaManager.List() {
 		for _, item := range profile.Items {
-			views = append(views, newOutboundView(item.Config, sourceAmnezia, profile.Name))
+			views = append(views, newOutboundView(item.Config, outbound.SourceAmnezia, profile.Name, profile.ID))
 		}
 	}
 

@@ -100,10 +100,11 @@ func (h *Handler) UpdateDNSSettings(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, "Настройки DNS сохранены")
 }
 
-// UpdateDNSRules заменяет пользовательские DNS-правила.
-func (h *Handler) UpdateDNSRules(w http.ResponseWriter, r *http.Request) {
+// UpdateDNSAdvanced заменяет пользовательские DNS-правила и дополнительные поля секции dns.
+func (h *Handler) UpdateDNSAdvanced(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Rules []map[string]any `json:"rules"`
+		Extra map[string]any   `json:"extra"`
 	}
 
 	if !decodeJSON(w, r, &req) {
@@ -114,11 +115,11 @@ func (h *Handler) UpdateDNSRules(w http.ResponseWriter, r *http.Request) {
 		req.Rules = []map[string]any{}
 	}
 
-	if err := h.dnsManager.UpdateRules(req.Rules); err != nil {
+	if err := h.dnsManager.UpdateAdvanced(req.Rules, req.Extra); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 
 		return
 	}
 
-	writeSuccess(w, "DNS-правила сохранены")
+	writeSuccess(w, "Расширенные настройки DNS сохранены")
 }

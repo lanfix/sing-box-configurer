@@ -16,9 +16,11 @@ import (
 
 // Теги встроенных outbound-ов, которые создает рендер конфига.
 const (
-	AutoTag   = "auto"
 	DirectTag = "direct"
 	BlockTag  = "block"
+
+	// AutoTag — тег urltest-а, который создается при первой инициализации. Его можно удалить.
+	AutoTag = "auto"
 
 	// SelectorTagPrefix — префикс тегов selector-ов групп (select-<группа>).
 	SelectorTagPrefix = "select-"
@@ -41,12 +43,13 @@ func (i *Item) Tag() string {
 
 // appDataSection описывает раздел app.json, которым владеет менеджер.
 type appDataSection struct {
-	Outbounds *[]Item `json:"outbounds"`
+	Outbounds *[]Item    `json:"outbounds"`
+	URLTests  *[]URLTest `json:"urltests"`
 }
 
 // IsReservedTag проверяет, что тег занят встроенным outbound-ом или selector-ом группы.
 func IsReservedTag(tag string) bool {
-	return tag == AutoTag || tag == DirectTag || tag == BlockTag || strings.HasPrefix(tag, SelectorTagPrefix)
+	return tag == DirectTag || tag == BlockTag || strings.HasPrefix(tag, SelectorTagPrefix)
 }
 
 // IsEndpoint проверяет, что объект — endpoint sing-box (WireGuard), а не outbound.
@@ -54,19 +57,23 @@ func IsEndpoint(config map[string]any) bool {
 	return jsonmap.String(config, "type") == "wireguard"
 }
 
-// Manager хранит outbound-ы, добавленные вручную, в разделе "outbounds" файла app.json.
+// Manager хранит outbound-ы, добавленные вручную, и urltest-ы в разделах "outbounds" и "urltests"
+// файла app.json. Теги outbound-ов и urltest-ов не пересекаются.
 type Manager struct {
-	appData *appdata.File
-	mu      sync.RWMutex
-	items   []Item
+	appData  *appdata.File
+	mu       sync.RWMutex
+	items    []Item
+	urlTests []URLTest
 }
 
-// NewManager загружает outbound-ы из app.json.
+// NewManager загружает outbound-ы и urltest-ы из app.json. Если раздела urltests нет (новая инсталляция
+// или данные до его появления), создается urltest auto из всех outbound-ов — как прежний встроенный auto.
 func NewManager(appData *appdata.File) (*Manager, error) {
 	m := &Manager{
-		appData: appData,
-		mu:      sync.RWMutex{},
-		items:   []Item{},
+		appData:  appData,
+		mu:       sync.RWMutex{},
+		items:    []Item{},
+		urlTests: []URLTest{},
 	}
 
 	var section appDataSection
@@ -77,6 +84,18 @@ func NewManager(appData *appdata.File) (*Manager, error) {
 
 	if section.Outbounds != nil {
 		m.items = *section.Outbounds
+	}
+
+	if section.URLTests != nil {
+		m.urlTests = *section.URLTests
+
+		return m, nil
+	}
+
+	m.urlTests = DefaultURLTests()
+
+	if err := m.save(); err != nil {
+		return nil, err
 	}
 
 	return m, nil
@@ -194,7 +213,7 @@ func (m *Manager) validateLocked(config map[string]any, exceptID string) error {
 	}
 
 	if IsReservedTag(tag) {
-		return fmt.Errorf("тег %s зарезервирован (auto, direct, block и select-*)", tag)
+		return fmt.Errorf("тег %s зарезервирован (direct, block и select-*)", tag)
 	}
 
 	for _, item := range m.items {
@@ -203,13 +222,17 @@ func (m *Manager) validateLocked(config map[string]any, exceptID string) error {
 		}
 	}
 
+	if m.urlTestIndexByTagLocked(tag) >= 0 {
+		return fmt.Errorf("тег %s занят urltest-ом", tag)
+	}
+
 	return nil
 }
 
 // uniqueTagLocked возвращает свободный тег на основе tag (без блокировки).
 func (m *Manager) uniqueTagLocked(tag string) string {
 	taken := func(candidate string) bool {
-		return IsReservedTag(candidate) || slices.ContainsFunc(m.items, func(item Item) bool {
+		return IsReservedTag(candidate) || m.urlTestIndexByTagLocked(candidate) >= 0 || slices.ContainsFunc(m.items, func(item Item) bool {
 			return item.Tag() == candidate
 		})
 	}
@@ -232,10 +255,11 @@ func (m *Manager) indexLocked(id string) int {
 	})
 }
 
-// save сохраняет outbound-ы в app.json (без блокировки).
+// save сохраняет outbound-ы и urltest-ы в app.json (без блокировки).
 func (m *Manager) save() error {
 	section := appDataSection{
 		Outbounds: &m.items,
+		URLTests:  &m.urlTests,
 	}
 
 	if err := m.appData.Merge(section); err != nil {

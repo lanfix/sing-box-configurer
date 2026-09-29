@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/render"
 	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
@@ -109,6 +110,16 @@ func (s *Service) Render() ([]byte, []string, error) {
 	}
 
 	return data, result.Warnings, nil
+}
+
+// Candidates возвращает outbound-ы, из которых urltest-ы подбирают участников при рендере.
+func (s *Service) Candidates() ([]outbound.Candidate, error) {
+	input, err := s.source()
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect render input: %w", err)
+	}
+
+	return render.Candidates(input), nil
 }
 
 // State возвращает отрендеренный конфиг, рабочий конфиг в нормализованном виде и признак различий.

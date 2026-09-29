@@ -22,11 +22,13 @@ import (
 
 // outboundsByTag возвращает outbound-ы профилей для рендера, сгруппированные по тегу, и предупреждения.
 func outboundsByTag(manager *Manager) (map[string]map[string]any, []string) {
-	outbounds, warnings := manager.Outbounds()
-	result := make(map[string]map[string]any, len(outbounds))
+	subscriptions, warnings := manager.Subscriptions()
+	result := make(map[string]map[string]any)
 
-	for _, outbound := range outbounds {
-		result[outbound["tag"].(string)] = outbound
+	for _, subscription := range subscriptions {
+		for _, outbound := range subscription.Outbounds {
+			result[outbound["tag"].(string)] = outbound
+		}
 	}
 
 	return result, warnings

@@ -53,7 +53,8 @@ func (h *Handler) AddAmneziaProfile(w http.ResponseWriter, r *http.Request) {
 
 	warning := ""
 
-	if profile.RequiresAWG() && !h.amneziaManager.AWGSupport().Supported {
+	// Если версию sing-box узнать не удалось, серверы AmneziaWG попадают в конфиг: предупреждать не о чем.
+	if support := h.amneziaManager.AWGSupport(); profile.RequiresAWG() && !support.Supported && support.Error == "" {
 		warning = "текущий sing-box не поддерживает AmneziaWG: серверы не попадут в конфиг, пока не будет установлен sing-box-lx"
 	}
 

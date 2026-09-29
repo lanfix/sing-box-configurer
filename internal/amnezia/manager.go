@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lanfix/sing-box-configurer/internal/jsonmap"
+	"github.com/lanfix/sing-box-configurer/internal/outbound"
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
 )
 
@@ -148,20 +149,22 @@ func (m *Manager) List() []Profile {
 	return result
 }
 
-// Outbounds возвращает outbound-ы и endpoint-ы всех профилей для рендера конфига. Серверы AmneziaWG
+// Subscriptions возвращает outbound-ы и endpoint-ы каждого профиля для рендера конфига. Серверы AmneziaWG
 // пропускаются, если запущенный sing-box точно их не поддерживает: иначе он не запустится с неизвестными
 // полями. Для пропущенных серверов возвращаются предупреждения.
-func (m *Manager) Outbounds() ([]map[string]any, []string) {
+func (m *Manager) Subscriptions() ([]outbound.Subscription, []string) {
 	profiles := m.List()
 	support := m.AWGSupport()
 
 	// Версию узнать не удалось — поддержку не отрицаем, конфиг все равно проверит sing-box check.
 	skipAWG := support.Error == "" && !support.Supported
 
-	outbounds := make([]map[string]any, 0)
+	subscriptions := make([]outbound.Subscription, 0, len(profiles))
 	warnings := make([]string, 0)
 
 	for _, profile := range profiles {
+		outbounds := make([]map[string]any, 0, len(profile.Items))
+
 		for _, item := range profile.Items {
 			if item.RequiresAWG && skipAWG {
 				warnings = append(warnings, fmt.Sprintf("Amnezia: сервер %s пропущен — %s не поддерживает AmneziaWG", item.Tag, support.Version))
@@ -171,9 +174,16 @@ func (m *Manager) Outbounds() ([]map[string]any, []string) {
 
 			outbounds = append(outbounds, jsonmap.Clone(item.Config))
 		}
+
+		subscriptions = append(subscriptions, outbound.Subscription{
+			Source:      outbound.SourceAmnezia,
+			ProfileID:   profile.ID,
+			ProfileName: profile.Name,
+			Outbounds:   outbounds,
+		})
 	}
 
-	return outbounds, warnings
+	return subscriptions, warnings
 }
 
 // Add импортирует ключ vpn:// — конфигурацию своего сервера или подписку Amnezia Premium (формат

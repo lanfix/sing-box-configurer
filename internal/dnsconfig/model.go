@@ -35,7 +35,22 @@ var (
 
 	// tagRe — допустимый тег сервера.
 	tagRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+	// reservedExtraKeys — поля секции dns, которые конфигуратор заполняет сам: в Extra их задавать нельзя,
+	// иначе они молча перезапишут серверы, системные правила или параметры из формы.
+	reservedExtraKeys = []string{"servers", "rules", "final", "strategy", "cache_capacity", "optimistic", "timeout"}
 )
+
+// ValidateExtra проверяет дополнительные поля секции dns: зарезервированные поля запрещены.
+func ValidateExtra(extra map[string]any) error {
+	for _, key := range reservedExtraKeys {
+		if _, ok := extra[key]; ok {
+			return fmt.Errorf("поле %q задается конфигуратором и не может быть в дополнительных полях секции dns", key)
+		}
+	}
+
+	return nil
+}
 
 // Server — DNS-сервер sing-box. Поля Extra дописываются в объект сервера как есть: так задаются параметры,
 // для которых нет полей формы (например, neighbor_domain форка sing-box-lx).
@@ -304,10 +319,11 @@ func (s *Settings) Validate(servers []string) error {
 		}
 	}
 
-	return nil
+	return ValidateExtra(s.Extra)
 }
 
-// Apply дописывает общие параметры в секцию dns конфига sing-box.
+// Apply дописывает общие параметры в секцию dns конфига sing-box. Зарезервированные поля из Extra
+// пропускаются: они могли остаться в данных, сохраненных до появления проверки.
 func (s *Settings) Apply(dns map[string]any) {
 	if s.Final != "" {
 		dns["final"] = s.Final
@@ -329,5 +345,5 @@ func (s *Settings) Apply(dns map[string]any) {
 		dns["timeout"] = s.Timeout
 	}
 
-	jsonmap.Merge(dns, s.Extra)
+	jsonmap.Merge(dns, jsonmap.Without(s.Extra, reservedExtraKeys...))
 }

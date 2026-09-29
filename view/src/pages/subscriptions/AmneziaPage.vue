@@ -3,7 +3,9 @@ import { reactive, ref } from 'vue'
 
 import { get, post } from '../../api/client'
 import type { AmneziaPremium, AmneziaProfile, AWGSupport } from '../../api/types'
+import FormField from '../../components/ui/FormField.vue'
 import { usePolling } from '../../composables/usePolling'
+import { confirmAction } from '../../stores/confirm'
 import { refreshSubscriptionAlerts } from '../../stores/subscriptionAlerts'
 import { showError, showMessage } from '../../stores/toast'
 import { dayLevel, daysLeft, formatAgo, formatDate, pluralDays } from '../../utils/format'
@@ -71,7 +73,14 @@ async function add(): Promise<void> {
 
 // action выполняет обновление или удаление профиля.
 async function action(profile: AmneziaProfile, name: 'refresh' | 'delete'): Promise<void> {
-  if (name === 'delete' && !confirm('Удалить конфигурацию? Ее серверы пропадут из итогового конфига.\n\nДля Amnezia Premium освободится место устройства в подписке.')) {
+  const confirmed = name !== 'delete' || await confirmAction({
+    title: `Удалить конфигурацию ${profile.name}?`,
+    message: 'Ее серверы пропадут из итогового конфига. Для Amnezia Premium освободится место устройства в подписке.',
+    confirmText: 'Удалить',
+    danger: true,
+  })
+
+  if (!confirmed) {
     return
   }
 
@@ -153,34 +162,41 @@ function premiumTiles(premium: AmneziaPremium) {
 </script>
 
 <template>
-  <div class="add-form-card">
-    <div class="form-header">Конфигурации Amnezia</div>
-    <p class="card-hint" style="margin-bottom: 16px;">
-      Импорт ключа <code>vpn://</code> из приложения Amnezia VPN — формат определяется автоматически: свой сервер
-      (AmneziaWG, WireGuard, Xray) или подписка Amnezia Premium (конфигурация запрашивается у шлюза Amnezia).
-      Серверы сразу попадают в итоговый конфиг; чтобы они заработали, примените конфиг на странице
-      <RouterLink :to="{ name: 'config' }">«Конфиг»</RouterLink>.
-    </p>
+  <p class="page-intro">
+    Импорт ключа <code>vpn://</code> из приложения Amnezia VPN. Формат определяется автоматически: свой сервер
+    (AmneziaWG, WireGuard, Xray) или подписка Amnezia Premium. Серверы сразу попадают в итоговый конфиг; чтобы они
+    заработали, примените <RouterLink :to="{ name: 'config' }">конфиг</RouterLink>.
+  </p>
 
-    <div v-if="!support" class="happ-note">Проверяю версию sing-box...</div>
-    <div v-else-if="support.supported" class="happ-note">{{ support.version }} поддерживает AmneziaWG.</div>
-    <div v-else class="happ-note is-warn">
-      {{ support.version || 'sing-box' }} не поддерживает AmneziaWG<template v-if="support.error"> ({{ support.error }})</template>.
-      WireGuard и Xray импортируются как обычно, а серверы AmneziaWG не попадут в конфиг: официальный sing-box
-      не запустится с параметрами обфускации. Нужен форк
+  <div class="add-form-card">
+    <div class="form-header">Импортировать ключ</div>
+
+    <div v-if="support?.error" class="happ-note">
+      Не удалось узнать версию sing-box: он не запущен или недоступен Clash API. Серверы AmneziaWG все равно попадут
+      в конфиг, а если sing-box их не поддерживает, применение конфига остановит проверка <code>sing-box check</code>.
+      <details class="happ-servers" style="margin-top: 6px;">
+        <summary>Подробности</summary>
+        <span class="cell-mono">{{ support.error }}</span>
+      </details>
+    </div>
+    <div v-else-if="support && !support.supported" class="happ-note is-warn">
+      {{ support.version || 'sing-box' }} не поддерживает AmneziaWG. WireGuard и Xray импортируются как обычно, а
+      серверы AmneziaWG не попадут в конфиг: официальный sing-box не запустится с параметрами обфускации. Нужен форк
       <a href="https://github.com/Leadaxe/sing-box-lx" target="_blank" rel="noopener">sing-box-lx</a>.
     </div>
 
-    <form @submit.prevent="add">
-      <div class="form-group" style="margin-bottom: 16px;">
-        <label class="form-label" for="amneziaKey">Ключ подключения</label>
-        <textarea id="amneziaKey" v-model="form.key" class="form-textarea amnezia-key" placeholder="vpn://..." required></textarea>
-      </div>
-      <div class="form-group" style="margin-bottom: 16px;">
-        <label class="form-label" for="amneziaName">Название</label>
-        <input id="amneziaName" v-model="form.name" class="form-input" type="text" placeholder="Из ключа">
-      </div>
-      <div class="form-actions">
+    <form class="form-stack" @submit.prevent="add">
+      <FormField label="Ключ подключения" input-id="amneziaKey">
+        <textarea id="amneziaKey" v-model="form.key" class="form-textarea amnezia-key" placeholder="vpn://..." required spellcheck="false"></textarea>
+        <template #hint>
+          Ключ из приложения Amnezia VPN, начинается с <code>vpn://</code>.
+          <span v-if="support?.supported">{{ support.version }} поддерживает AmneziaWG.</span>
+        </template>
+      </FormField>
+      <FormField label="Название" input-id="amneziaName" optional hint="По умолчанию — из ключа.">
+        <input id="amneziaName" v-model="form.name" class="form-input" type="text" placeholder="Мой сервер">
+      </FormField>
+      <div class="form-actions" style="margin-top: 0;">
         <button type="submit" class="btn btn-primary" :disabled="adding">{{ adding ? 'Импортирую...' : 'Импортировать' }}</button>
       </div>
     </form>

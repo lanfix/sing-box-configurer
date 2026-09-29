@@ -123,10 +123,10 @@ export function parseList(value: string): string[] {
 // ruleTypeLabel возвращает название типа правила.
 export function ruleTypeLabel(type: string): string {
   const labels: Record<string, string> = {
-    domain: 'Домен',
-    domain_suffix: 'Суффикс',
-    ip: 'IP',
-    cidr: 'CIDR',
+    domain: 'Точный домен',
+    domain_suffix: 'Домен и поддомены',
+    ip: 'IP-адрес',
+    cidr: 'Подсеть',
   }
 
   return labels[type] ?? type

@@ -2,11 +2,13 @@
 // Прокси-группы Clash API: переключение активного узла в selector-ах и замер задержки.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
-import { get, post } from '../../api/client'
-import type { ClashProxy } from '../../api/types'
-import SvgIcon from '../../components/SvgIcon.vue'
-import { icons } from '../../icons'
-import { showError, showMessage } from '../../stores/toast'
+import { get, post } from '../api/client'
+import type { ClashProxy } from '../api/types'
+import SvgIcon from '../components/SvgIcon.vue'
+import FormField from '../components/ui/FormField.vue'
+import HelpHint from '../components/ui/HelpHint.vue'
+import { icons } from '../icons'
+import { showError, showMessage } from '../stores/toast'
 
 // Типы прокси-групп, которые показываются на странице.
 const groupTypes = ['Selector', 'URLTest', 'LoadBalance', 'Fallback']
@@ -14,10 +16,22 @@ const groupTypes = ['Selector', 'URLTest', 'LoadBalance', 'Fallback']
 // GLOBAL — служебный selector sing-box: маршрутизация задается правилами, поэтому группа скрыта.
 const hiddenGroups = ['GLOBAL']
 
+// defaultTestURL — адрес замера задержки по умолчанию.
+const defaultTestURL = 'http://www.gstatic.com/generate_204'
+
+// typeTitles — пояснения к типам групп.
+const typeTitles: Record<string, string> = {
+  Selector: 'Узел выбирается вручную',
+  URLTest: 'Узел выбирается автоматически по задержке',
+  Fallback: 'Первый доступный узел',
+  LoadBalance: 'Нагрузка распределяется между узлами',
+}
+
 const proxies = ref<Record<string, ClashProxy>>({})
 const error = ref('')
 const loading = ref(false)
-const testURL = ref('http://www.gstatic.com/generate_204')
+const testURL = ref(defaultTestURL)
+const search = ref('')
 
 // busy — операции в полете: пока они идут, фоновое обновление не перезаписывает данные.
 const busy = ref(0)
@@ -28,6 +42,17 @@ let timer: ReturnType<typeof setInterval> | null = null
 const groups = computed(() => Object.values(proxies.value)
   .filter((proxy) => groupTypes.includes(proxy.type) && !hiddenGroups.includes(proxy.name))
   .sort((a, b) => a.name.localeCompare(b.name)))
+
+// visibleGroups — группы, у которых имя или один из узлов подходит под поиск.
+const visibleGroups = computed(() => {
+  const query = search.value.trim().toLowerCase()
+
+  if (!query) {
+    return groups.value
+  }
+
+  return groups.value.filter((group) => group.name.toLowerCase().includes(query) || (group.all ?? []).some((member) => member.toLowerCase().includes(query)))
+})
 
 // merge сохраняет уже замеренные задержки, если sing-box вернул пустую историю.
 function merge(fresh: Record<string, ClashProxy>): void {
@@ -76,7 +101,7 @@ function lastDelay(name?: string): number | undefined {
   return history?.length ? history[history.length - 1].delay : undefined
 }
 
-// delayClass и delayText форматируют задержку.
+// delayClass возвращает класс цвета задержки.
 function delayClass(delay?: number): string {
   if (delay === undefined) {
     return ''
@@ -93,17 +118,18 @@ function delayClass(delay?: number): string {
   return delay < 400 ? 'd-ok' : 'd-slow'
 }
 
+// delayText форматирует задержку.
 function delayText(delay?: number): string {
   if (delay === undefined) {
     return '—'
   }
 
-  return delay <= 0 ? 'timeout' : `${delay} ms`
+  return delay <= 0 ? 'нет ответа' : `${delay} мс`
 }
 
 // select переключает активный узел selector-группы.
 async function select(group: ClashProxy, name: string): Promise<void> {
-  if (group.type !== 'Selector') {
+  if (group.type !== 'Selector' || group.now === name) {
     return
   }
 
@@ -127,7 +153,8 @@ function applyDelays(delays: Record<string, number>): void {
 
 // testGroup замеряет задержку всех узлов группы.
 async function testGroup(name: string): Promise<number> {
-  const data = await get<{ delays: Record<string, number> }>(`/api/clash/group/delay?group=${encodeURIComponent(name)}&url=${encodeURIComponent(testURL.value.trim() || 'http://www.gstatic.com/generate_204')}`)
+  const url = testURL.value.trim() || defaultTestURL
+  const data = await get<{ delays: Record<string, number> }>(`/api/clash/group/delay?group=${encodeURIComponent(name)}&url=${encodeURIComponent(url)}`)
 
   applyDelays(data.delays ?? {})
 
@@ -160,11 +187,15 @@ async function testAll(): Promise<void> {
   const failed: string[] = []
 
   for (const group of groups.value) {
+    testingGroups.value = [...testingGroups.value, group.name]
+
     try {
       await testGroup(group.name)
       ok++
     } catch {
       failed.push(group.name)
+    } finally {
+      testingGroups.value = testingGroups.value.filter((name) => name !== group.name)
     }
   }
 
@@ -174,7 +205,7 @@ async function testAll(): Promise<void> {
   if (failed.length === 0) {
     showMessage(`Задержка замерена: групп — ${ok}`)
   } else {
-    showMessage(`Замер завершён: успешно ${ok}, с ошибкой ${failed.join(', ')}`, 'error')
+    showMessage(`Замер завершен: успешно ${ok}, с ошибкой ${failed.join(', ')}`, 'error')
   }
 }
 
@@ -191,67 +222,103 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="add-form-card has-progress" :class="{ 'is-loading': loading }">
-    <div class="progress-line"></div>
-    <div class="form-header" style="margin-bottom: 4px;">Прокси-группы</div>
-    <p class="card-hint" style="margin: 0 0 16px;">
-      Переключение активного узла в selector-группах и замер задержки. Данные из Clash API sing-box обновляются автоматически.
+  <Teleport to="#topbar-actions" defer>
+    <button class="btn btn-secondary" :disabled="loading" @click="load()">
+      <SvgIcon class="btn-icon" :path="icons.refresh" />
+      Обновить
+    </button>
+    <button class="btn btn-primary" :disabled="groups.length === 0 || loading" @click="testAll">
+      <SvgIcon class="btn-icon" :path="icons.speedometer" />
+      Проверить все
+    </button>
+  </Teleport>
+
+  <p class="page-intro">
+    Активные узлы групп в работающем sing-box. В группах с ручным выбором узел переключается кликом — сразу, без
+    применения конфига. Узел по умолчанию после перезапуска задается в настройках
+    <RouterLink :to="{ name: 'groups' }">групп</RouterLink>.
+  </p>
+
+  <HelpHint title="Цвета задержки">
+    <p>
+      <span class="proxy-delay d-good">до 200 мс</span> — отлично,
+      <span class="proxy-delay d-ok">до 400 мс</span> — нормально,
+      <span class="proxy-delay d-slow">до 800 мс</span> — медленно,
+      <span class="proxy-delay d-bad">больше 800 мс или нет ответа</span> — проблема.
+      Задержка замеряется запросом к адресу проверки через каждый узел.
     </p>
-    <div class="clash-controls">
-      <div class="form-group" style="flex: 1;">
-        <label class="form-label" for="clashTestURL">URL для проверки задержки</label>
-        <input id="clashTestURL" v-model="testURL" class="form-input" type="text">
+  </HelpHint>
+
+  <div class="table-toolbar">
+    <FormField label="Поиск" input-id="proxySearch">
+      <div class="search-input">
+        <SvgIcon :path="icons.search" />
+        <input id="proxySearch" v-model="search" class="form-input" type="search" placeholder="Группа или узел">
       </div>
-      <button class="btn btn-secondary" @click="load()">
-        <SvgIcon class="btn-icon" :path="icons.refresh" />
-        Обновить
-      </button>
-      <button class="btn btn-primary" :disabled="groups.length === 0 || loading" @click="testAll">
-        <SvgIcon class="btn-icon" :path="icons.speedometer" />
-        Проверить все
-      </button>
-    </div>
+    </FormField>
+    <FormField label="Адрес для замера задержки" input-id="clashTestURL" class="toolbar-wide">
+      <input id="clashTestURL" v-model="testURL" class="form-input" type="url" :placeholder="defaultTestURL">
+    </FormField>
+    <span class="table-count">Групп: {{ visibleGroups.length }}</span>
   </div>
 
-  <div class="clash-groups">
-    <div v-if="error" class="empty-state">Не удалось получить данные Clash API: {{ error }}</div>
-    <div v-else-if="groups.length === 0 && !loading" class="empty-state">Прокси-группы не найдены.</div>
+  <div class="clash-groups has-progress" :class="{ 'is-loading': loading }">
+    <div class="progress-line"></div>
+    <div v-if="error" class="callout is-bad">Не удалось получить данные Clash API: {{ error }}</div>
+    <div v-else-if="groups.length === 0 && !loading" class="empty-state">Прокси-группы не найдены. Возможно, sing-box не запущен.</div>
+    <div v-else-if="visibleGroups.length === 0" class="empty-state">Ничего не найдено.</div>
 
-    <div v-for="group in groups" :key="group.name" class="clash-group has-progress" :class="{ 'is-loading': testingGroups.includes(group.name) }">
+    <div
+      v-for="group in visibleGroups"
+      :key="group.name"
+      class="clash-group has-progress"
+      :class="{ 'is-loading': testingGroups.includes(group.name) }"
+    >
       <div class="progress-line"></div>
       <div class="clash-group-head">
         <div class="clash-group-meta">
           <div class="clash-group-title">
             <strong>{{ group.name }}</strong>
-            <span class="clash-type">{{ group.type }}</span>
+            <span class="clash-type" :title="typeTitles[group.type]">{{ group.type }}</span>
           </div>
-          <div class="clash-group-now">Активен: {{ group.now || '—' }}</div>
+          <div class="clash-group-now">
+            {{ group.type === 'Selector' ? 'Выбран' : 'Сейчас используется' }}: {{ group.now || '—' }}
+            <span v-if="group.type !== 'Selector'" class="muted"> · {{ typeTitles[group.type] }}</span>
+          </div>
         </div>
         <div class="clash-group-actions">
           <span class="proxy-delay" :class="delayClass(lastDelay(group.now))">{{ delayText(lastDelay(group.now)) }}</span>
           <button class="btn btn-secondary btn-sm" :disabled="testingGroups.includes(group.name)" @click="testOne(group)">
             <SvgIcon class="btn-icon" :path="icons.speedometer" />
-            Проверить
+            {{ testingGroups.includes(group.name) ? 'Проверка...' : 'Проверить' }}
           </button>
         </div>
       </div>
       <div class="proxy-grid">
-        <div
+        <component
+          :is="group.type === 'Selector' ? 'button' : 'div'"
           v-for="member in group.all ?? []"
           :key="member"
+          :type="group.type === 'Selector' ? 'button' : undefined"
           class="proxy-node"
-          :class="{ active: member === group.now, selectable: group.type === 'Selector', readonly: group.type !== 'Selector' }"
+          :class="{
+            active: member === group.now,
+            selectable: group.type === 'Selector',
+            readonly: group.type !== 'Selector',
+            'is-match': search.trim() && member.toLowerCase().includes(search.trim().toLowerCase()),
+          }"
+          :title="group.type === 'Selector' ? `Выбрать ${member}` : member"
           @click="select(group, member)"
         >
           <div class="proxy-node-row">
-            <span class="proxy-node-name" :title="member">{{ member }}</span>
-            <span v-if="proxies[member]?.udp" class="proxy-udp">UDP</span>
+            <span class="proxy-node-name">{{ member }}</span>
+            <span v-if="proxies[member]?.udp" class="proxy-udp" title="Поддерживает UDP">UDP</span>
           </div>
           <div class="proxy-node-row">
             <span class="proxy-node-type">{{ proxies[member]?.type || '—' }}</span>
             <span class="proxy-delay" :class="delayClass(lastDelay(member))">{{ delayText(lastDelay(member)) }}</span>
           </div>
-        </div>
+        </component>
       </div>
     </div>
   </div>
