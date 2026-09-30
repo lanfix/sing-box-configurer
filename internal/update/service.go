@@ -21,6 +21,10 @@ const (
 	// Как долго кэшировать результат проверки обновлений.
 	checkCacheTTL = time.Hour
 
+	// Как долго кэшировать неудачную проверку: ошибка часто временная (например, DNS недоступен, пока
+	// перезапускается sing-box), и держать ее в интерфейсе час нельзя.
+	checkErrorCacheTTL = time.Minute
+
 	// Сколько последних релизов показывать со списком изменений.
 	maxChangelogReleases = 10
 )
@@ -84,12 +88,13 @@ func NewService(p platform.Platform) *Service {
 	}
 }
 
-// Check возвращает доступные обновления. Результат кэшируется на час, force сбрасывает кэш.
+// Check возвращает доступные обновления. Автоматическая проверка берет результат из кэша (успешный — на час,
+// ошибку — на минуту), ручная (force) всегда проверяет заново.
 func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !force && s.lastCheck != nil && time.Since(s.lastCheck.CheckedAt) < checkCacheTTL {
+	if !force && s.lastCheck != nil && time.Since(s.lastCheck.CheckedAt) < s.lastCheck.cacheTTL() {
 		return s.lastCheck
 	}
 
@@ -273,4 +278,13 @@ func lastLines(text string, n int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// cacheTTL возвращает, сколько хранить результат проверки: неудачную — минуту, успешную — час.
+func (r *CheckResult) cacheTTL() time.Duration {
+	if r.Error != "" {
+		return checkErrorCacheTTL
+	}
+
+	return checkCacheTTL
 }
