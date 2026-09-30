@@ -15,6 +15,7 @@ const props = defineProps<{
 
 // sourceTitles — заголовки групп списка в порядке показа.
 const sourceTitles: [OutboundSource, string][] = [
+  ['group', 'Группы (outbound, выбранный в группе)'],
   ['builtin', 'Встроенные'],
   ['urltest', 'Автовыбор самого быстрого (URLTest)'],
   ['manual', 'Добавленные вручную'],

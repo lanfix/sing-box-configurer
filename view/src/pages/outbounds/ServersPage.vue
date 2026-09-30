@@ -13,8 +13,8 @@ import { showError, showMessage } from '../../stores/toast'
 
 const JsonEditor = defineAsyncComponent(() => import('../../components/JsonEditor.vue'))
 
-// ServerSource — источники серверов: urltest-ы настраиваются на своей странице.
-type ServerSource = Exclude<OutboundSource, 'urltest'>
+// ServerSource — источники серверов: urltest-ы настраиваются на своей странице, selector-ы групп — на странице групп.
+type ServerSource = Exclude<OutboundSource, 'urltest' | 'group'>
 
 const outbounds = ref<OutboundView[]>([])
 const loaded = ref(false)

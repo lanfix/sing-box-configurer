@@ -40,6 +40,7 @@ func (rm *Manager) AddURLSource(source URLSource) error {
 		return fmt.Errorf("группа %s не существует", source.Group)
 	}
 
+	source.Detour = strings.TrimSpace(source.Detour)
 	source.Applied = false
 	source.CreatedAt = time.Now()
 	source.LastStatus = "pending"
@@ -48,8 +49,8 @@ func (rm *Manager) AddURLSource(source URLSource) error {
 	return rm.save()
 }
 
-// EditURLSource обновляет параметры URL источника.
-func (rm *Manager) EditURLSource(id string, description string, group string) error {
+// EditURLSource обновляет описание, группу и detour URL источника.
+func (rm *Manager) EditURLSource(id, description, group, detour string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -65,6 +66,7 @@ func (rm *Manager) EditURLSource(id string, description string, group string) er
 		if rm.data.URLSources[i].ID == id {
 			rm.data.URLSources[i].Description = description
 			rm.data.URLSources[i].Group = group
+			rm.data.URLSources[i].Detour = strings.TrimSpace(detour)
 			found = true
 
 			break
@@ -110,7 +112,10 @@ func (rm *Manager) ApplyURLSources() error {
 
 			rm.urlRulesMu.Lock()
 			delete(rm.urlRules, source.ID)
+			delete(rm.attempted, source.ID)
 			rm.urlRulesMu.Unlock()
+
+			rm.removeCachedSource(source.ID)
 
 			continue
 		}
@@ -165,7 +170,9 @@ func (rm *Manager) StartAllURLSourceUpdates() {
 	}
 }
 
-// startURLSourceUpdates starts periodic updates for a URL source
+// startURLSourceUpdates периодически загружает список источника. После неудачной загрузки следующая попытка
+// выполняется раньше интервала (от минуты с удвоением): например, источник с detour через VPN загрузится,
+// как только поднимется sing-box.
 func (rm *Manager) startURLSourceUpdates(source URLSource) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -173,18 +180,24 @@ func (rm *Manager) startURLSourceUpdates(source URLSource) {
 	rm.cancelFuncs[source.ID] = cancel
 	rm.cancelFuncsMu.Unlock()
 
-	_ = rm.fetchRulesFromSource(source.ID)
-
-	ticker := time.NewTicker(time.Duration(source.Interval) * time.Minute)
-	defer ticker.Stop()
+	interval := time.Duration(source.Interval) * time.Minute
+	retry := time.Minute
 
 	for {
+		wait := interval
+
+		if err := rm.fetchRulesFromSource(source.ID); err != nil && retry < interval {
+			wait = retry
+			retry *= 2
+		} else if err == nil {
+			retry = time.Minute
+		}
+
 		select {
 		case <-ctx.Done():
 			return
 
-		case <-ticker.C:
-			_ = rm.fetchRulesFromSource(source.ID)
+		case <-time.After(wait):
 		}
 	}
 }
@@ -220,13 +233,14 @@ func (rm *Manager) RefreshURLSource(sourceID string) error {
 	return rm.fetchRulesFromSource(sourceID)
 }
 
-// fetchRulesFromSource загружает правила источника и обновляет его статус.
+// fetchRulesFromSource загружает правила источника, обновляет его статус и кэш на диске.
 func (rm *Manager) fetchRulesFromSource(sourceID string) error {
 	rm.mu.RLock()
 
 	var (
 		sourceURL         string
 		sourceDescription string
+		sourceDetour      string
 		found             bool
 	)
 
@@ -236,6 +250,7 @@ func (rm *Manager) fetchRulesFromSource(sourceID string) error {
 		if rm.data.URLSources[i].ID == sourceID {
 			sourceURL = rm.data.URLSources[i].URL
 			sourceDescription = rm.data.URLSources[i].Description
+			sourceDetour = rm.data.URLSources[i].Detour
 			found = true
 
 			break
@@ -248,19 +263,21 @@ func (rm *Manager) fetchRulesFromSource(sourceID string) error {
 		return ErrURLSourceNotFound
 	}
 
-	log.Printf("Fetching URL source: %s (%s)", sourceDescription, sourceURL)
+	log.Printf("Fetching URL source: %s (%s, detour: %q)", sourceDescription, sourceURL, sourceDetour)
 
-	ruleSet := RuleSet{
-		CidrList:       make([]string, 0),
-		Domains:        make([]string, 0),
-		DomainSuffixes: make([]string, 0),
+	ruleSet, err := rm.GatherRuleSetFromURL(sourceURL, sourceDetour)
+
+	rm.urlRulesMu.Lock()
+
+	rm.attempted[sourceID] = true
+
+	if err == nil {
+		rm.urlRules[sourceID] = *ruleSet
 	}
 
-	handler := func(row string) error {
-		return rowHandler(row, &ruleSet)
-	}
+	rm.urlRulesMu.Unlock()
 
-	if err := rm.scanAndHandleRowsFromURL(sourceURL, handler); err != nil {
+	if err != nil {
 		log.Printf("Error scanning and handling URL source %s: %s", sourceURL, err)
 
 		rm.updateURLSourceError(sourceID, err.Error())
@@ -268,9 +285,9 @@ func (rm *Manager) fetchRulesFromSource(sourceID string) error {
 		return err
 	}
 
-	rm.urlRulesMu.Lock()
-	rm.urlRules[sourceID] = ruleSet
-	rm.urlRulesMu.Unlock()
+	if err = rm.saveCachedSource(sourceID, sourceURL, *ruleSet); err != nil {
+		log.Printf("Cannot cache URL source %s: %v", sourceDescription, err)
+	}
 
 	rm.updateURLSourceStatus(sourceID, "success", "", ruleSet.Total())
 
@@ -333,8 +350,24 @@ func (rs *RuleSet) Total() uint64 {
 	return uint64(len(rs.CidrList) + len(rs.Domains) + len(rs.DomainSuffixes))
 }
 
-// GatherRuleSetFromURL запрашивает данные по url и собирает их в структуру.
-func (rm *Manager) GatherRuleSetFromURL(url string) (*RuleSet, error) {
+// Detours возвращает outbound-ы, через которые загружаются источники (без повторов, в порядке добавления).
+func (rm *Manager) Detours() []string {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	detours := make([]string, 0)
+
+	for _, source := range rm.data.URLSources {
+		if source.Detour != "" && !source.Deleted && !slices.Contains(detours, source.Detour) {
+			detours = append(detours, source.Detour)
+		}
+	}
+
+	return detours
+}
+
+// GatherRuleSetFromURL запрашивает данные по url (через outbound detour, если он задан) и собирает их в структуру.
+func (rm *Manager) GatherRuleSetFromURL(url, detour string) (*RuleSet, error) {
 	ruleSet := RuleSet{
 		CidrList:       make([]string, 0),
 		Domains:        make([]string, 0),
@@ -345,23 +378,44 @@ func (rm *Manager) GatherRuleSetFromURL(url string) (*RuleSet, error) {
 		return rowHandler(row, &ruleSet)
 	}
 
-	if err := rm.scanAndHandleRowsFromURL(url, handler); err != nil {
+	if err := rm.scanAndHandleRowsFromURL(url, detour, handler); err != nil {
 		return nil, fmt.Errorf("cannot scan and handle rows from url: %w", err)
 	}
 
 	return &ruleSet, nil
 }
 
-func (rm *Manager) scanAndHandleRowsFromURL(url string, f func(row string) error) error {
+// scanAndHandleRowsFromURL загружает список и передает его строки в f. Источник с detour загружается через
+// служебный inbound sing-box, который направляет запрос в outbound detour.
+func (rm *Manager) scanAndHandleRowsFromURL(url, detour string, f func(row string) error) error {
+	proxy := rm.sourceListsProxy
+
+	if detour != "" {
+		if rm.detourProxy == nil {
+			return fmt.Errorf("загрузка через outbound %s не поддерживается", detour)
+		}
+
+		proxyURL, err := rm.detourProxy(detour)
+		if err != nil {
+			return fmt.Errorf("cannot get proxy for outbound %s: %w", detour, err)
+		}
+
+		proxy = http.ProxyURL(proxyURL)
+	}
+
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 20 * time.Second,
 		Transport: &http.Transport{
-			Proxy: rm.sourceListsProxy,
+			Proxy: proxy,
 		},
 	}
 
 	resp, err := client.Get(url)
 	if err != nil {
+		if detour != "" {
+			return fmt.Errorf("cannot get URL source %s through outbound %s (the config with it must be applied): %v", url, detour, err)
+		}
+
 		return fmt.Errorf("cannot get URL source %s: %v", url, err)
 	}
 

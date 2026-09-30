@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -119,7 +120,26 @@ func serve(cfg *config.AppConfig, configPath string) {
 		log.Printf("Warning: panel login is disabled, anyone with network access can manage sing-box (enable it in System → Settings)")
 	}
 
-	rulesManager, err := rules.NewManager(appData, cfg.SourceListsProxyUrl)
+	settingsManager, err := settings.NewManager(appData)
+	if err != nil {
+		log.Fatal(fmt.Errorf("failed to initialize settings manager: %w", err))
+	}
+
+	// Источники с detour загружаются через служебный inbound sing-box: логин — тег outbound-а.
+	detourProxy := func(detour string) (*url.URL, error) {
+		return &url.URL{
+			Scheme: "http",
+			User:   url.UserPassword(detour, settingsManager.Get().SourcesProxy.Password),
+			Host:   cfg.SourcesProxyAddr(),
+		}, nil
+	}
+
+	// Загруженные списки источников хранятся рядом с app.json: после перезапуска rule-set-ы готовы сразу.
+	rulesManager, err := rules.NewManager(appData, rules.Options{
+		SourceListsProxyURL: cfg.SourceListsProxyUrl,
+		CacheDir:            filepath.Join(filepath.Dir(cfg.AppDataPath), "url-sources"),
+		DetourProxy:         detourProxy,
+	})
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize rules manager: %w", err))
 	}
@@ -148,11 +168,6 @@ func serve(cfg *config.AppConfig, configPath string) {
 	inboundsManager, err := inbounds.NewManager(appData)
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize inbounds manager: %w", err))
-	}
-
-	settingsManager, err := settings.NewManager(appData)
-	if err != nil {
-		log.Fatal(fmt.Errorf("failed to initialize settings manager: %w", err))
 	}
 
 	// Секрет Clash API берется из рабочего конфига sing-box: он меняется только при применении конфига.
@@ -208,6 +223,11 @@ func serve(cfg *config.AppConfig, configPath string) {
 			Mixed:          inboundsManager.Mixed(),
 			Settings:       settingsManager.Get(),
 			RuleSetBaseURL: cfg.RuleSetBaseURL,
+			SourcesProxy: render.SourcesProxy{
+				Listen:  cfg.SourcesProxyListen,
+				Port:    cfg.SourcesProxyPort,
+				Detours: rulesManager.Detours(),
+			},
 		}, nil
 	}
 

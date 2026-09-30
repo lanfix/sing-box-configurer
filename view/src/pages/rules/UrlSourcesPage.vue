@@ -2,9 +2,10 @@
 import { computed, ref } from 'vue'
 
 import { get, post, postQuiet } from '../../api/client'
-import type { URLSource } from '../../api/types'
+import type { OutboundView, URLSource } from '../../api/types'
 import GroupBadge from '../../components/GroupBadge.vue'
 import ModalDialog from '../../components/ModalDialog.vue'
+import OutboundSelect from '../../components/OutboundSelect.vue'
 import SvgIcon from '../../components/SvgIcon.vue'
 import FormField from '../../components/ui/FormField.vue'
 import HelpHint from '../../components/ui/HelpHint.vue'
@@ -33,6 +34,17 @@ const sources = ref<URLSource[]>([])
 const loaded = ref(false)
 const applying = ref(false)
 
+// outbounds — outbound-ы для выбора detour (загружаются при открытии формы).
+const outbounds = ref<OutboundView[]>([])
+
+// detourOptions — через что можно загружать список: selector-ы групп и outbound-ы, кроме block.
+const detourOptions = computed<OutboundView[]>(() => [
+  ...groups.value
+    .filter((group) => !group.system)
+    .map((group) => ({ tag: `select-${group.name}`, type: 'selector', source: 'group' as const, source_name: group.description || group.name })),
+  ...outbounds.value.filter((outbound) => outbound.tag !== 'block'),
+])
+
 // ID источников, которые сейчас загружаются вручную.
 const refreshing = ref<string[]>([])
 
@@ -43,6 +55,7 @@ const editor = ref<{
   group: string
   interval: number
   description: string
+  detour: string
   error: string
   saving: boolean
   check: { state: 'idle' | 'checking' | 'ok' | 'bad'; text: string }
@@ -89,9 +102,23 @@ function openEditor(source?: URLSource): void {
     group: source?.group ?? groups.value.find((group) => !group.system)?.name ?? groups.value[0]?.name ?? '',
     interval: source?.interval ?? 60,
     description: source?.description ?? '',
+    detour: source?.detour ?? '',
     error: '',
     saving: false,
     check: { state: 'idle', text: '' },
+  }
+
+  void loadOutbounds()
+}
+
+// loadOutbounds загружает outbound-ы для выбора detour.
+async function loadOutbounds(): Promise<void> {
+  try {
+    const data = await get<{ outbounds: OutboundView[] }>('/api/outbounds')
+
+    outbounds.value = data.outbounds ?? []
+  } catch (error) {
+    showError(error, 'Ошибка загрузки outbound-ов')
   }
 }
 
@@ -106,7 +133,10 @@ async function validate(): Promise<void> {
   current.check = { state: 'checking', text: 'Загружаю список...' }
 
   try {
-    const result = await postQuiet<{ valid: boolean; error: string; count: number }>('/api/url-sources/validate', { url: current.url.trim() })
+    const result = await postQuiet<{ valid: boolean; error: string; count: number }>('/api/url-sources/validate', {
+      url: current.url.trim(),
+      detour: current.detour,
+    })
 
     current.check = result.valid
       ? { state: 'ok', text: `Список загружен, записей: ${result.count}` }
@@ -129,7 +159,12 @@ async function save(): Promise<void> {
 
   try {
     if (current.id) {
-      await post('/api/url-sources/edit', { id: current.id, group: current.group, description: current.description.trim() })
+      await post('/api/url-sources/edit', {
+        id: current.id,
+        group: current.group,
+        description: current.description.trim(),
+        detour: current.detour,
+      })
       showMessage('Источник сохранен')
     } else {
       await post('/api/url-sources/add', {
@@ -137,6 +172,7 @@ async function save(): Promise<void> {
         group: current.group,
         interval: current.interval,
         description: current.description.trim(),
+        detour: current.detour,
       })
 
       showMessage('Источник добавлен. Примените источники, чтобы список загрузился.')
@@ -261,6 +297,10 @@ function applyStatus(source: URLSource): { cls: string; text: string } {
       <code>//</code> пропускаются. Кнопка «Проверить» в форме покажет, сколько записей удалось распознать.
     </p>
     <p>Новый или удаленный источник начинает действовать после применения источников.</p>
+    <p>
+      Загруженные списки сохраняются на диске: после перезапуска конфигуратор сразу отдает их sing-box, даже если
+      источник пока недоступен. Если список не загрузился, следующая попытка будет через минуту, затем реже.
+    </p>
   </HelpHint>
 
   <div v-if="pendingCount > 0" class="pending-bar">
@@ -290,7 +330,10 @@ function applyStatus(source: URLSource): { cls: string; text: string } {
         <tr v-for="source in sources" :key="source.id">
           <td class="url-cell" :title="source.url">
             <span class="cell-mono">{{ source.url }}</span>
-            <div v-if="source.description" class="cell-sub">{{ source.description }}</div>
+            <div v-if="source.description || source.detour" class="cell-sub">
+              {{ source.description }}<template v-if="source.description && source.detour"> · </template>
+              <template v-if="source.detour">загрузка через {{ source.detour }}</template>
+            </div>
           </td>
           <td><GroupBadge :group="source.group" /></td>
           <td>
@@ -367,6 +410,21 @@ function applyStatus(source: URLSource): { cls: string; text: string } {
           </select>
         </FormField>
       </div>
+
+      <FormField label="Загружать через" input-id="sourceDetour">
+        <OutboundSelect
+          v-model="editor.detour"
+          :outbounds="detourOptions"
+          input-id="sourceDetour"
+          empty-label="Напрямую из конфигуратора"
+          @update:model-value="editor.check = { state: 'idle', text: '' }"
+        />
+        <template #hint>
+          Для списков на заблокированных сайтах выберите VPN: список загрузится через этот outbound sing-box.
+          Начнет работать после <RouterLink :to="{ name: 'config' }">применения конфига</RouterLink>, пока sing-box
+          не запущен — действует последний загруженный список.
+        </template>
+      </FormField>
 
       <FormField label="Описание" input-id="sourceDescription" optional>
         <input id="sourceDescription" v-model="editor.description" class="form-input" type="text" placeholder="Например, сервисы Google">

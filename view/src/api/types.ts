@@ -24,6 +24,8 @@ export interface URLSource {
   applied: boolean
   deleted: boolean
   created_at: string
+  // detour — outbound sing-box, через который загружается список; пусто — напрямую.
+  detour?: string
 }
 
 export interface Group {
@@ -80,7 +82,8 @@ export interface DNSRecord {
   created_at: string
 }
 
-export type OutboundSource = 'manual' | 'happ' | 'amnezia' | 'builtin' | 'urltest'
+// group — selector группы правил (выбранный в группе outbound).
+export type OutboundSource = 'manual' | 'happ' | 'amnezia' | 'builtin' | 'urltest' | 'group'
 
 export interface OutboundView {
   id?: string

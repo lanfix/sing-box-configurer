@@ -11,6 +11,7 @@ func newTestManager(rules []Rule, sources []URLSource, urlRules map[string]RuleS
 	return &Manager{
 		urlRules:    urlRules,
 		cancelFuncs: map[string]context.CancelFunc{},
+		attempted:   map[string]bool{},
 		data: RulesData{
 			Rules:      rules,
 			URLSources: sources,

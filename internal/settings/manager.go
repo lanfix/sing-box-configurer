@@ -39,11 +39,20 @@ type Restart struct {
 	Timezone string `json:"timezone"`
 }
 
+// SourcesProxy — служебный mixed-inbound sing-box, через который конфигуратор загружает URL-источники
+// с detour: логин — тег outbound-а, пароль общий.
+type SourcesProxy struct {
+	Password string `json:"password"`
+}
+
 // Settings — общие настройки sing-box.
 type Settings struct {
 	LogLevel string   `json:"log_level"`
 	ClashAPI ClashAPI `json:"clash_api"`
 	Restart  Restart  `json:"restart"`
+
+	// SourcesProxy генерируется при первом запуске.
+	SourcesProxy SourcesProxy `json:"sources_proxy"`
 }
 
 // appDataSection описывает раздел app.json, которым владеет менеджер.
@@ -70,6 +79,9 @@ func Default() Settings {
 			AllowOrigins: []string{"*"},
 		},
 		Restart: DefaultRestart(),
+		SourcesProxy: SourcesProxy{
+			Password: "",
+		},
 	}
 }
 
@@ -131,6 +143,16 @@ func NewManager(appData *appdata.File) (*Manager, error) {
 		}
 
 		m.data.ClashAPI.Secret = secret
+		changed = true
+	}
+
+	if m.data.SourcesProxy.Password == "" {
+		password, err := GenerateSecret()
+		if err != nil {
+			return nil, err
+		}
+
+		m.data.SourcesProxy.Password = password
 		changed = true
 	}
 

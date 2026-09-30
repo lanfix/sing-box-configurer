@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/lanfix/sing-box-configurer/internal/platform"
@@ -34,6 +36,14 @@ type AppConfig struct {
 
 	// BackupDir — каталог резервных копий конфига sing-box. По умолчанию backups рядом с app_data_path.
 	BackupDir string `json:"backup_dir"`
+
+	// SourcesProxyPort — порт служебного inbound-а sing-box, через который загружаются URL-источники
+	// с detour. Конфигуратор подключается к нему по хосту clash_api_base_url.
+	SourcesProxyPort int `json:"sources_proxy_port"`
+
+	// SourcesProxyListen — адрес, который слушает служебный inbound: в docker конфигуратор подключается
+	// из своей сети, поэтому 0.0.0.0 (доступ закрыт паролем), в systemd — 127.0.0.1.
+	SourcesProxyListen string `json:"sources_proxy_listen"`
 
 	// Systemd — параметры установки без контейнеров.
 	Systemd SystemdConfig `json:"systemd"`
@@ -66,6 +76,8 @@ func Read(path string) (*AppConfig, error) {
 		ClashAPISecret:      "",
 		RuleSetBaseURL:      "",
 		BackupDir:           "",
+		SourcesProxyPort:    0,
+		SourcesProxyListen:  "",
 		Systemd: SystemdConfig{
 			SingBoxUnit:       "",
 			SingBoxBinary:     "",
@@ -105,10 +117,12 @@ func (c *AppConfig) setDefaults() error {
 		// Конфигуратор работает в сети compose, а sing-box — в сети хоста: Clash API доступен
 		// через host.docker.internal (extra_hosts: host-gateway в docker-compose.yaml).
 		setDefault(&c.ClashAPIBaseURL, "http://host.docker.internal:9090")
+		setDefault(&c.SourcesProxyListen, "0.0.0.0")
 
 	case platform.NameSystemd:
 		setDefault(&c.AppDataPath, "/var/lib/sing-box-configurer/app.json")
 		setDefault(&c.ClashAPIBaseURL, "http://127.0.0.1:9090")
+		setDefault(&c.SourcesProxyListen, "127.0.0.1")
 		setDefault(&c.Systemd.SingBoxUnit, "sing-box")
 		setDefault(&c.Systemd.SingBoxBinary, "/usr/local/bin/sing-box")
 		setDefault(&c.Systemd.ConfigurerUnit, "sing-box-configurer")
@@ -124,6 +138,10 @@ func (c *AppConfig) setDefaults() error {
 	setDefault(&c.BackupDir, filepath.Join(filepath.Dir(c.AppDataPath), "backups"))
 
 	c.RuleSetBaseURL = strings.TrimSuffix(c.RuleSetBaseURL, "/")
+
+	if c.SourcesProxyPort == 0 {
+		c.SourcesProxyPort = 9091
+	}
 
 	return nil
 }
@@ -162,4 +180,16 @@ func setDefault(field *string, value string) {
 	if *field == "" {
 		*field = value
 	}
+}
+
+// SourcesProxyAddr возвращает адрес служебного inbound-а sing-box для конфигуратора: хост Clash API
+// (так конфигуратор уже достает до sing-box) и порт sources_proxy_port.
+func (c *AppConfig) SourcesProxyAddr() string {
+	host := "127.0.0.1"
+
+	if parsed, err := url.Parse(c.ClashAPIBaseURL); err == nil && parsed.Hostname() != "" {
+		host = parsed.Hostname()
+	}
+
+	return net.JoinHostPort(host, strconv.Itoa(c.SourcesProxyPort))
 }

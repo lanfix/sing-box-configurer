@@ -3,6 +3,8 @@
 Веб-приложение на Go и Vue 3 для управления sing-box: правилами маршрутизации, группами, DNS, outbound-ами,
 inbound-ами и подписками.
 
+![Страница «Обзор»: трафик, память sing-box и карта трафика](docs/overview.png)
+
 ## Установка
 
 Конфигуратор ставится на Linux-сервер или роутер вместе с sing-box
@@ -25,7 +27,15 @@ inbound-ами и подписками.
   sudo mkdir -p /etc/systemd/resolved.conf.d && printf '[Resolve]\nDNSStubListener=no\n' | sudo tee /etc/systemd/resolved.conf.d/no-stub.conf && sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf && sudo systemctl restart systemd-resolved
   ```
 
-- Свободный порт 8080 (панель) и 9090 (Clash API sing-box).
+  После этого сам сервер резолвит имена через DNS провайдера, а не через sing-box. Если вы направили DNS сервера
+  на sing-box (`nameserver 127.0.0.1` в `/etc/resolv.conf`), добавьте запасной сервер: иначе, пока sing-box
+  остановлен, сервер не резолвит имена и не скачает образы и обновления.
+
+  ```bash
+  sudo rm -f /etc/resolv.conf && printf 'nameserver 127.0.0.1\nnameserver 1.1.1.1\noptions timeout:1 attempts:1\n' | sudo tee /etc/resolv.conf
+  ```
+
+- Свободный порт 8080 (панель), 9090 (Clash API sing-box) и 9091 (служебный inbound для загрузки источников).
 
 ### Docker
 
@@ -80,6 +90,14 @@ sudo docker compose up -d
 
 При первом запуске конфигуратор записывает стартовый конфиг sing-box, и sing-box запускается с ним.
 Каталоги `data` и `sing-box` монтируются целиком: так файлы заменяются атомарно (временный файл и rename).
+
+Обновляйте конфигуратор из интерфейса. Если меняете `docker-compose.yaml` вручную, не останавливайте
+весь проект (`docker compose down`): пока sing-box выключен, хост может остаться без DNS и VPN и не скачает образы.
+Загрузите образы заранее и пересоздайте только изменившиеся контейнеры:
+
+```bash
+sudo docker compose pull && sudo docker compose up -d --remove-orphans
+```
 
 Удаление: `cd /opt/sing-box-configurer && sudo docker compose down -v && cd / && sudo rm -rf /opt/sing-box-configurer`.
 
@@ -165,7 +183,7 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json auth reset
 
 | Раздел | Откуда |
 |---|---|
-| `inbounds` | встроенные `tun-in` (tun0, 198.18.0.1/30, auto_redirect) и `dns-in` (0.0.0.0:53), mixed-прокси со страницы Inbounds |
+| `inbounds` | встроенные `tun-in` (tun0, 198.18.0.1/30, auto_redirect) и `dns-in` (0.0.0.0:53), mixed-прокси со страницы Inbounds, служебный `configurer-sources` для загрузки источников через outbound-ы |
 | `outbounds`, `endpoints` | outbound-ы, добавленные вручную, серверы подписок Happ и Amnezia, urltest-ы со страницы Outbounds → URLTest, встроенные `direct`, `block` и selector-ы групп `select-<группа>` |
 | `route` | служебные правила (bypass, sniff, hijack-dns, resolve для mixed-прокси, private → direct), `reject` для группы block, правила групп; `final: direct` |
 | `dns` | DNS-серверы, DNS-записи (`configurer-hosts`), правила групп с DNS-сервером, фильтр HTTPS-записей, пользовательские DNS-правила, общие параметры |
@@ -209,7 +227,12 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json auth reset
     туннеля sing-box. Новая инсталляция создает группу **default** (outbound `auto`, DNS-сервер `cloudflare`).
     Удалить можно только пустую группу.
   - **Одиночные** — домены, суффиксы, IP и CIDR. Изменения применяются кнопкой «Применить правила».
-  - **Источники URL** — списки правил, которые конфигуратор периодически загружает.
+  - **Источники URL** — списки правил, которые конфигуратор периодически загружает. Загруженные списки
+    хранятся на диске (`url-sources` рядом с `app.json`): после перезапуска rule-set-ы готовы сразу, даже если
+    источник недоступен. Список с заблокированного сайта можно загружать через outbound или группу («Загружать
+    через»): конфигуратор ходит к нему через служебный mixed-inbound sing-box `configurer-sources`, где логин —
+    тег outbound-а, а правило `auth_user` направляет запрос в этот outbound. После неудачной загрузки повтор —
+    через минуту с удвоением интервала.
 - **DNS**
   - **Серверы** — UDP, TCP, DNS over TLS, DNS over HTTPS, DNS over HTTP/3, DNS over QUIC, local, DHCP.
     Популярные публичные серверы (Cloudflare, Google, Quad9, AdGuard, Яндекс) подставляются в один клик, адрес
@@ -278,6 +301,8 @@ tun-inbound-а и отсекаются в nftables, домены матчатс�
   "clash_api_secret": "",
   "rule_set_base_url": "",
   "backup_dir": "",
+  "sources_proxy_port": 9091,
+  "sources_proxy_listen": "127.0.0.1",
   "systemd": {
     "sing_box_unit": "sing-box",
     "sing_box_binary": "/usr/local/bin/sing-box",
@@ -301,6 +326,9 @@ tun-inbound-а и отсекаются в nftables, домены матчатс�
   `http://127.0.0.1:<порт listen_addr>`.
 - **backup_dir** — каталог резервных копий конфига sing-box (хранятся 10 последних). По умолчанию
   `backups` рядом с `app_data_path`.
+- **sources_proxy_port**, **sources_proxy_listen** — порт (9091) и адрес служебного inbound-а sing-box для загрузки
+  источников через outbound-ы: `0.0.0.0` в docker (конфигуратор подключается из своей сети по хосту
+  `clash_api_base_url`, доступ закрыт паролем) и `127.0.0.1` в systemd.
 - **systemd** — службы sing-box и конфигуратора, бинарник sing-box для `sing-box check` и репозиторий
   GitHub, из релизов которого загружаются обновления.
 

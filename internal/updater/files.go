@@ -16,8 +16,8 @@ const (
 	maxBackupFileSize = 16 << 20
 )
 
-// skipBackupDirs — каталоги внутри каталогов данных, которые не бэкапятся.
-var skipBackupDirs = []string{UpdatesDirName, "backups"}
+// skipBackupDirs — каталоги внутри каталогов данных, которые не бэкапятся (резервные копии и кэши).
+var skipBackupDirs = []string{UpdatesDirName, "backups", "url-sources"}
 
 // localPath возвращает путь файла rel (относительно root) в файловой системе updater.
 func localPath(root, rel string) string {

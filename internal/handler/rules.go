@@ -357,6 +357,7 @@ func (h *Handler) AddURLSource(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 		Interval    int    `json:"interval"`
 		Group       string `json:"group"`
+		Detour      string `json:"detour"`
 	}
 
 	if !decodeJSON(w, r, &req) {
@@ -379,6 +380,7 @@ func (h *Handler) AddURLSource(w http.ResponseWriter, r *http.Request) {
 		Description: req.Description,
 		Interval:    req.Interval,
 		Group:       req.Group,
+		Detour:      req.Detour,
 	}
 
 	if err := h.rulesManager.AddURLSource(source); err != nil {
@@ -390,12 +392,13 @@ func (h *Handler) AddURLSource(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, "URL-источник добавлен")
 }
 
-// EditURLSource меняет описание и группу URL-источника.
+// EditURLSource меняет описание, группу и outbound загрузки URL-источника.
 func (h *Handler) EditURLSource(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID          string `json:"id"`
 		Description string `json:"description"`
 		Group       string `json:"group"`
+		Detour      string `json:"detour"`
 	}
 
 	if !decodeJSON(w, r, &req) {
@@ -408,7 +411,7 @@ func (h *Handler) EditURLSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.rulesManager.EditURLSource(req.ID, req.Description, req.Group); err != nil {
+	if err := h.rulesManager.EditURLSource(req.ID, req.Description, req.Group, req.Detour); err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 
 		return
@@ -478,7 +481,8 @@ func (h *Handler) ApplyURLSources(w http.ResponseWriter, _ *http.Request) {
 // ValidateURLSource загружает список по URL и возвращает количество найденных правил.
 func (h *Handler) ValidateURLSource(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		URL string `json:"url"`
+		URL    string `json:"url"`
+		Detour string `json:"detour"`
 	}
 
 	if !decodeJSON(w, r, &req) {
@@ -491,7 +495,7 @@ func (h *Handler) ValidateURLSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ruleSet, err := h.rulesManager.GatherRuleSetFromURL(strings.TrimSpace(req.URL))
+	ruleSet, err := h.rulesManager.GatherRuleSetFromURL(strings.TrimSpace(req.URL), strings.TrimSpace(req.Detour))
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"valid": false,

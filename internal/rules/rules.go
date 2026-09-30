@@ -42,6 +42,10 @@ type URLSource struct {
 	Applied     bool      `json:"applied"`
 	Deleted     bool      `json:"deleted"`
 	CreatedAt   time.Time `json:"created_at"`
+
+	// Detour — outbound sing-box, через который загружается список (например, VPN для заблокированного
+	// сайта). Пустой — загрузка напрямую из конфигуратора.
+	Detour string `json:"detour,omitempty"`
 }
 
 // Group представляет логическую группу для правил.
@@ -128,7 +132,7 @@ const (
 	RuleSetKindIP RuleSetKind = "ip"
 )
 
-// ErrRuleSetNotReady возвращается, пока URL-источники набора не загружены после старта.
+// ErrRuleSetNotReady возвращается, пока идет первая загрузка URL-источника набора, у которого нет кэша на диске.
 // Неполный набор отдавать нельзя: sing-box закэширует его и отправит трафик мимо туннеля.
 var ErrRuleSetNotReady = errors.New("rule-set is not ready")
 
@@ -148,37 +152,61 @@ type SingBoxRuleSet struct {
 	Rules   []map[string]interface{} `json:"rules"`
 }
 
+// DetourProxy возвращает адрес прокси, через который загружается источник с detour (outbound sing-box).
+type DetourProxy func(detour string) (*url.URL, error)
+
+// Options — параметры менеджера правил.
+type Options struct {
+	// SourceListsProxyURL — прокси для загрузки источников без detour (необязательно).
+	SourceListsProxyURL string
+
+	// CacheDir — каталог кэша загруженных списков источников. Пустой — кэш выключен.
+	CacheDir string
+
+	// DetourProxy — прокси для источников с detour. nil — detour не поддерживается.
+	DetourProxy DetourProxy
+}
+
 // Manager handles rules operations
 type Manager struct {
 	mu               sync.RWMutex
 	data             RulesData
 	appData          *appdata.File
 	sourceListsProxy func(r *http.Request) (*url.URL, error)
+	detourProxy      DetourProxy
+	cacheDir         string
 	urlRules         map[string]RuleSet // URL ID -> rules
 	urlRulesMu       sync.RWMutex
 	cancelFuncs      map[string]context.CancelFunc // URL ID -> cancel function
 	cancelFuncsMu    sync.Mutex
+
+	// attempted — источники, загрузка которых уже выполнялась после старта (под urlRulesMu).
+	attempted map[string]bool
 }
 
-func NewManager(appData *appdata.File, sourceListsProxyUrl string) (*Manager, error) {
+// NewManager создает менеджер правил.
+func NewManager(appData *appdata.File, opts Options) (*Manager, error) {
 	var sourceListsProxy func(r *http.Request) (*url.URL, error)
 
-	if sourceListsProxyUrl != "" {
-		proxyURL, err := url.Parse(sourceListsProxyUrl)
+	if opts.SourceListsProxyURL != "" {
+		proxyURL, err := url.Parse(opts.SourceListsProxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("cannot parse source lists proxy url: %w", err)
 		}
 
 		sourceListsProxy = http.ProxyURL(proxyURL)
 
-		log.Printf("using http proxy for source lists: %s", sourceListsProxyUrl)
+		log.Printf("using http proxy for source lists: %s", opts.SourceListsProxyURL)
 	}
 
 	return &Manager{
 		appData:          appData,
 		sourceListsProxy: sourceListsProxy,
+		detourProxy:      opts.DetourProxy,
+		cacheDir:         opts.CacheDir,
 		urlRules:         map[string]RuleSet{},
 		cancelFuncs:      map[string]context.CancelFunc{},
+		attempted:        map[string]bool{},
 		data: RulesData{
 			Rules:      []Rule{},
 			URLSources: []URLSource{},
@@ -273,6 +301,8 @@ func (rm *Manager) Load() error {
 			log.Printf("Warning: failed to save normalized rules data: %v", err)
 		}
 	}
+
+	rm.loadCachedSources()
 
 	return nil
 }
@@ -525,9 +555,16 @@ func (rm *Manager) getRuleSetLocked(kind RuleSetKind, groupName string) (SingBox
 		}
 
 		ruleSet, ok := rm.urlRules[source.ID]
-		if !ok {
+
+		// Источник без кэша, который не загрузился и после попытки, не держит всю группу: прежде
+		// в наборе его тоже не было, а без набора sing-box может не запуститься.
+		if !ok && !rm.attempted[source.ID] {
 			notLoaded = append(notLoaded, source.Description)
 
+			continue
+		}
+
+		if !ok {
 			continue
 		}
 

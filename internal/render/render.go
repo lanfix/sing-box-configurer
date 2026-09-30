@@ -60,6 +60,22 @@ type Input struct {
 
 	// RuleSetBaseURL — адрес конфигуратора, по которому sing-box забирает rule-set-ы (без / в конце).
 	RuleSetBaseURL string
+
+	// SourcesProxy — служебный inbound для загрузки URL-источников через outbound-ы.
+	SourcesProxy SourcesProxy
+}
+
+// SourcesProxyTag — тег служебного mixed-inbound-а, через который конфигуратор загружает URL-источники с detour.
+const SourcesProxyTag = "configurer-sources"
+
+// SourcesProxy описывает служебный inbound: логин пользователя — тег outbound-а, пароль общий
+// (Settings.SourcesProxy.Password). Inbound рендерится, только если есть источники с detour.
+type SourcesProxy struct {
+	Listen string
+	Port   int
+
+	// Detours — outbound-ы, через которые загружаются источники.
+	Detours []string
 }
 
 // Result — отрендеренный конфиг и предупреждения о пропущенных элементах.
@@ -80,6 +96,12 @@ type renderer struct {
 	// proxyTags — теги всех прокси в порядке объявления, candidates — они же с источниками для urltest-ов.
 	proxyTags  []string
 	candidates []outbound.Candidate
+
+	// outboundTags — теги всех outbound-ов итогового конфига, включая selector-ы групп.
+	outboundTags []string
+
+	// sourceDetours — outbound-ы загрузки URL-источников, которые есть в конфиге.
+	sourceDetours []string
 }
 
 // Render собирает конфиг sing-box.
@@ -97,6 +119,8 @@ func Render(in Input) (*Result, error) {
 		endpoints:      []any{},
 		proxyTags:      []string{},
 		candidates:     []outbound.Candidate{},
+		outboundTags:   []string{},
+		sourceDetours:  []string{},
 	}
 
 	r.collectProxies()
@@ -106,6 +130,7 @@ func Render(in Input) (*Result, error) {
 	}
 
 	r.renderOutbounds(config)
+	r.sourceDetours = r.collectSourceDetours()
 	r.renderInbounds(config)
 	r.renderRoute(config)
 	r.renderDNS(config)
@@ -127,6 +152,8 @@ func Candidates(in Input) []outbound.Candidate {
 		endpoints:      []any{},
 		proxyTags:      []string{},
 		candidates:     []outbound.Candidate{},
+		outboundTags:   []string{},
+		sourceDetours:  []string{},
 	}
 
 	r.collectProxies()
@@ -292,6 +319,12 @@ func (r *renderer) renderOutbounds(config map[string]any) {
 		})
 	}
 
+	r.outboundTags = slices.Clone(members)
+
+	for _, group := range r.in.Groups {
+		r.outboundTags = append(r.outboundTags, SelectorTag(group.Name))
+	}
+
 	config["outbounds"] = outbounds
 
 	if len(r.endpoints) > 0 {
@@ -316,6 +349,10 @@ func (r *renderer) renderInbounds(config map[string]any) {
 		}
 	}
 
+	if len(r.sourceDetours) > 0 {
+		result = append(result, r.sourcesProxyInbound(r.sourceDetours))
+	}
+
 	config["inbounds"] = result
 }
 
@@ -331,6 +368,15 @@ func (r *renderer) renderRoute(config map[string]any) {
 	}
 
 	routeRules := make([]any, 0, len(baseRules)+len(r.in.Groups)+2)
+
+	// Загрузка источников через outbound: правила первыми, до bypass и sniff — они для служебного inbound-а не нужны.
+	for _, detour := range r.sourceDetours {
+		routeRules = append(routeRules, map[string]any{
+			"inbound":   SourcesProxyTag,
+			"auth_user": []any{detour},
+			"outbound":  detour,
+		})
+	}
 
 	for _, item := range baseRules {
 		rule := item.(map[string]any)
@@ -580,5 +626,55 @@ func subscriptionLabel(source, profileName string) string {
 
 	default:
 		return profileName
+	}
+}
+
+// collectSourceDetours возвращает outbound-ы для загрузки источников, которые есть в конфиге. Для отсутствующих
+// добавляется предупреждение: источники с ними не загрузятся.
+func (r *renderer) collectSourceDetours() []string {
+	proxy := r.in.SourcesProxy
+
+	if len(proxy.Detours) == 0 {
+		return nil
+	}
+
+	if proxy.Port <= 0 || r.in.Settings.SourcesProxy.Password == "" {
+		r.warn("источники URL: не задан порт или пароль служебного inbound-а, загрузка через outbound-ы недоступна")
+
+		return nil
+	}
+
+	detours := make([]string, 0, len(proxy.Detours))
+
+	for _, detour := range proxy.Detours {
+		if !slices.Contains(r.outboundTags, detour) {
+			r.warn("источники URL: outbound %s для загрузки не найден, источники с ним не загрузятся", detour)
+
+			continue
+		}
+
+		detours = append(detours, detour)
+	}
+
+	return detours
+}
+
+// sourcesProxyInbound возвращает служебный mixed-inbound: пользователь на каждый outbound загрузки.
+func (r *renderer) sourcesProxyInbound(detours []string) map[string]any {
+	users := make([]any, 0, len(detours))
+
+	for _, detour := range detours {
+		users = append(users, map[string]any{
+			"username": detour,
+			"password": r.in.Settings.SourcesProxy.Password,
+		})
+	}
+
+	return map[string]any{
+		"type":        "mixed",
+		"tag":         SourcesProxyTag,
+		"listen":      r.in.SourcesProxy.Listen,
+		"listen_port": r.in.SourcesProxy.Port,
+		"users":       users,
 	}
 }

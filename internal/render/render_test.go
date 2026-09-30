@@ -3,6 +3,7 @@ package render
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
@@ -357,5 +358,56 @@ func TestRenderEmpty(t *testing.T) {
 
 	if toJSON(t, result.Config) != toJSON(t, again.Config) {
 		t.Error("render must be deterministic")
+	}
+}
+
+// TestRenderSourcesProxy проверяет служебный inbound для загрузки URL-источников через outbound-ы.
+func TestRenderSourcesProxy(t *testing.T) {
+	in := testInput()
+
+	// Без источников с detour inbound-а нет.
+	result, err := Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if byTag(field(t, result.Config, "inbounds").([]any), SourcesProxyTag) != nil {
+		t.Fatal("sources proxy inbound must not be rendered without detours")
+	}
+
+	in.Settings.SourcesProxy.Password = "pass"
+	in.SourcesProxy = SourcesProxy{
+		Listen:  "127.0.0.1",
+		Port:    9091,
+		Detours: []string{"vless-1", "select-default", "missing"},
+	}
+
+	result, err = Render(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inbound := byTag(field(t, result.Config, "inbounds").([]any), SourcesProxyTag)
+	if inbound == nil {
+		t.Fatal("sources proxy inbound must be rendered")
+	}
+
+	wantUsers := `[{"password":"pass","username":"vless-1"},{"password":"pass","username":"select-default"}]`
+
+	if got := toJSON(t, inbound["users"]); got != wantUsers || inbound["listen_port"] != 9091 {
+		t.Errorf("inbound = %s", toJSON(t, inbound))
+	}
+
+	routeRules := field(t, result.Config, "route", "rules").([]any)
+	wantFirst := `{"auth_user":["vless-1"],"inbound":"configurer-sources","outbound":"vless-1"}`
+
+	if got := toJSON(t, routeRules[0]); got != wantFirst {
+		t.Errorf("first route rule = %s, want %s", got, wantFirst)
+	}
+
+	if !slices.ContainsFunc(result.Warnings, func(warning string) bool {
+		return strings.Contains(warning, "outbound missing для загрузки не найден")
+	}) {
+		t.Errorf("missing detour must produce a warning: %v", result.Warnings)
 	}
 }
