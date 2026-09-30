@@ -122,6 +122,41 @@ func (s *Service) Candidates() ([]outbound.Candidate, error) {
 	return render.Candidates(input), nil
 }
 
+// ActualConfig возвращает разобранный рабочий конфиг — тот, с которым запущен sing-box.
+func (s *Service) ActualConfig() (map[string]any, error) {
+	return s.provider.GetActualConfigParsed()
+}
+
+// ProxyClusters возвращает подпись подписки («Happ · профиль») по тегу каждого ее outbound-а.
+func (s *Service) ProxyClusters() (map[string]string, error) {
+	input, err := s.source()
+	if err != nil {
+		return nil, fmt.Errorf("cannot collect render input: %w", err)
+	}
+
+	clusters := map[string]string{}
+
+	for _, subscription := range input.Subscriptions {
+		label := subscription.ProfileName
+
+		switch subscription.Source {
+		case outbound.SourceHapp:
+			label = "Happ · " + subscription.ProfileName
+
+		case outbound.SourceAmnezia:
+			label = "Amnezia · " + subscription.ProfileName
+		}
+
+		for _, config := range subscription.Outbounds {
+			if tag, _ := config["tag"].(string); tag != "" {
+				clusters[tag] = label
+			}
+		}
+	}
+
+	return clusters, nil
+}
+
 // State возвращает отрендеренный конфиг, рабочий конфиг в нормализованном виде и признак различий.
 func (s *Service) State() (*State, error) {
 	rendered, warnings, err := s.Render()

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-// Обзор: суммарный трафик, подключения, график скорости за 60 секунд и потребление памяти.
+// Обзор: суммарный трафик, подключения, график скорости за 60 секунд, потребление памяти и карта трафика.
 // Цвета серий заданы в main.css (--series-down / --series-up); обе серии на одной оси Y (B/s).
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 
 import { get } from '../api/client'
 import type { Overview, TrafficSample } from '../api/types'
+import TrafficMap from '../components/traffic-map/TrafficMap.vue'
 import { usePolling } from '../composables/usePolling'
 import { monotonePath, niceMax } from '../utils/chart'
 import { formatRate, splitBytes } from '../utils/format'
@@ -368,4 +369,6 @@ function onPointer(event: PointerEvent): void {
       </dl>
     </div>
   </div>
+
+  <TrafficMap />
 </template>

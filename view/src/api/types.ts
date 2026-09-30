@@ -322,3 +322,129 @@ export interface UpdateStatus {
   started_at?: string
   finished_at?: string
 }
+
+// ===== Карта трафика =====
+
+export type TopologyNodeKind = 'inbound' | 'router' | 'dns-router' | 'selector' | 'urltest' | 'outbound' | 'action' | 'dns-server'
+
+export type TopologyEdgeKind = 'inbound' | 'route' | 'member' | 'dns' | 'detour'
+
+export interface GroupStats {
+  domains: number
+  suffixes: number
+  ips: number
+  sources: number
+  source_items: number
+}
+
+export interface TopologyGroup {
+  name: string
+  description: string
+  dns_server?: string
+  stats: GroupStats
+}
+
+// TopologyRow — строка маршрутизатора: правило и узел, куда оно направляет трафик.
+export interface TopologyRow {
+  id: string
+  index: number
+  label: string
+  detail?: string
+  action: string
+  target?: string
+  groups?: string[]
+}
+
+export interface TopologyNode {
+  id: string
+  kind: TopologyNodeKind
+  tag: string
+  type: string
+  label: string
+  detail?: string
+  rows?: TopologyRow[]
+  members?: string[]
+  now?: string
+  delay?: number
+  cluster?: string
+  group?: TopologyGroup
+  detour?: string
+  detour_implicit?: boolean
+}
+
+export interface TopologyEdge {
+  id: string
+  source: string
+  source_handle?: string
+  target: string
+  kind: TopologyEdgeKind
+  active: boolean
+  implicit?: boolean
+}
+
+export interface TopologyGraph {
+  nodes: TopologyNode[]
+  edges: TopologyEdge[]
+  warnings: string[]
+}
+
+// TopologyConnection — активное соединение, привязанное к карте.
+export interface TopologyConnection {
+  id: string
+  host: string
+  destination: string
+  network: string
+  source: string
+  inbound: string
+  row: string
+  rule: string
+  chain: string[]
+  upload: number
+  download: number
+  start: string
+}
+
+export interface RuleMatch {
+  type: string
+  value: string
+  source: 'manual' | 'url'
+  source_name?: string
+}
+
+export interface TraceStep {
+  row: string
+  label: string
+  action: string
+  matched: boolean
+  reason: string
+  matches?: RuleMatch[]
+}
+
+export interface TraceResult {
+  query: string
+  domain?: string
+  ips: string[]
+  resolved?: 'hosts' | 'system'
+  resolve_error?: string
+  inbound: string
+  dns?: {
+    row: string
+    label: string
+    action: string
+    server?: string
+    reason: string
+    matches?: RuleMatch[]
+    chain: string[]
+    implicit?: boolean
+  }
+  steps: TraceStep[]
+  row: string
+  action: string
+  chain: string[]
+  outbound?: string
+  nodes: string[]
+  edges: string[]
+  dns_nodes: string[]
+  dns_edges: string[]
+  notes: string[]
+}

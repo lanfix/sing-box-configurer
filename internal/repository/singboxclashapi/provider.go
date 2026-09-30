@@ -226,7 +226,10 @@ func (api *ClashAPI) TestGroupDelay(group, testURL string, timeoutMs int) (map[s
 
 // ConnectionMetadata — сведения об одном соединении.
 type ConnectionMetadata struct {
-	Network         string `json:"network"`
+	Network string `json:"network"`
+
+	// Type — тип и тег inbound-а, через который пришло соединение («tun/tun-in»).
+	Type            string `json:"type"`
 	Host            string `json:"host"`
 	DestinationIP   string `json:"destinationIP"`
 	DestinationPort string `json:"destinationPort"`
@@ -235,6 +238,7 @@ type ConnectionMetadata struct {
 
 // Connection — активное соединение из Clash API.
 type Connection struct {
+	ID       string             `json:"id"`
 	Chains   []string           `json:"chains"`
 	Rule     string             `json:"rule"`
 	Upload   int64              `json:"upload"`

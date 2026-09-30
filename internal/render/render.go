@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
@@ -530,6 +531,21 @@ func RuleSetTag(groupName string) string {
 // IPRuleSetTag возвращает тег rule-set-а с IP/CIDR группы.
 func IPRuleSetTag(groupName string) string {
 	return RuleSetTag(groupName) + ipRuleSetTagSuffix
+}
+
+// ParseRuleSetTag возвращает имя группы rule-set-а конфигуратора с тегом tag и признак набора IP/CIDR.
+// Для чужих rule-set-ов ok равен false.
+func ParseRuleSetTag(tag string) (groupName string, ip bool, ok bool) {
+	name, found := strings.CutPrefix(tag, RuleSetTagPrefix+"-")
+	if !found || name == "" {
+		return "", false, false
+	}
+
+	if group, isIP := strings.CutSuffix(name, ipRuleSetTagSuffix); isIP {
+		return group, true, group != ""
+	}
+
+	return name, false, true
 }
 
 // SelectorTag возвращает тег selector-а группы.

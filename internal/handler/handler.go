@@ -152,6 +152,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clash/proxies/delay", h.TestClashProxyDelay)
 	mux.HandleFunc("GET /api/clash/group/delay", h.TestClashGroupDelay)
 
+	mux.HandleFunc("GET /api/topology", h.GetTopology)
+	mux.HandleFunc("GET /api/topology/connections", h.GetTopologyConnections)
+	mux.HandleFunc("GET /api/topology/trace", h.TraceTopology)
+
 	mux.HandleFunc("GET /api/update/check", h.CheckUpdates)
 	mux.HandleFunc("POST /api/update/start", h.StartUpdate)
 	mux.HandleFunc("GET /api/update/status", h.UpdateStatus)
