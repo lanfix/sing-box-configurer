@@ -10,26 +10,26 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
+	"github.com/lanfix/sing-box-configurer/internal/platform"
 	"github.com/lanfix/sing-box-configurer/internal/render"
-	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 )
 
 const (
-	// Сколько ждать запуска sing-box после перезапуска контейнера.
+	// Сколько ждать запуска sing-box после перезапуска.
 	startTimeout = 30 * time.Second
 
-	// Сколько контейнер должен проработать, чтобы считаться запущенным, если Clash API недоступен.
+	// Сколько sing-box должен проработать, чтобы считаться запущенным, если Clash API недоступен.
 	stableRunTime = 5 * time.Second
 
 	// Сколько строк логов sing-box показывать при неудачном запуске.
-	logsTail = "30"
+	logsTail = 30
 )
 
 var (
@@ -38,15 +38,6 @@ var (
 
 	// ErrCheckFailed — sing-box check отклонил конфиг.
 	ErrCheckFailed = errors.New("sing-box check отклонил конфиг")
-
-	// containerLabels — лейблы контейнера sing-box.
-	containerLabels = map[string]string{
-		"app":     "sing-box",
-		"managed": "true",
-	}
-
-	// checkCommand проверяет конфиг, переданный на стандартный ввод.
-	checkCommand = []string{"sing-box", "check", "--disable-color", "-c", "stdin"}
 )
 
 // InputSource собирает данные для рендера из менеджеров приложения.
@@ -72,24 +63,50 @@ type ApplyResult struct {
 
 // Service рендерит и применяет конфиг sing-box.
 type Service struct {
-	source     InputSource
-	provider   *singboxconfig.Provider
-	controller *dockercontroller.Provider
-	clash      *singboxclashapi.ClashAPI
+	source   InputSource
+	provider *singboxconfig.Provider
+	runtime  platform.SingBox
+	clash    *singboxclashapi.ClashAPI
 
 	// Применения выполняются по одному.
 	mu sync.Mutex
 }
 
-// NewService создает сервис.
-func NewService(source InputSource, provider *singboxconfig.Provider, controller *dockercontroller.Provider, clash *singboxclashapi.ClashAPI) *Service {
+// NewService создает сервис. runtime управляет процессом sing-box на платформе установки.
+func NewService(source InputSource, provider *singboxconfig.Provider, runtime platform.SingBox, clash *singboxclashapi.ClashAPI) *Service {
 	return &Service{
-		source:     source,
-		provider:   provider,
-		controller: controller,
-		clash:      clash,
-		mu:         sync.Mutex{},
+		source:   source,
+		provider: provider,
+		runtime:  runtime,
+		clash:    clash,
+		mu:       sync.Mutex{},
 	}
+}
+
+// EnsureConfig записывает отрендеренный конфиг, если рабочего конфига еще нет (новая инсталляция):
+// sing-box сможет запуститься, а применять следующие конфиги можно будет с проверкой sing-box check.
+func (s *Service) EnsureConfig() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.provider.GetActualConfig(); !errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+
+	rendered, _, err := s.Render()
+	if err != nil {
+		return false, err
+	}
+
+	if err = os.MkdirAll(filepath.Dir(s.provider.Path()), 0755); err != nil {
+		return false, fmt.Errorf("cannot create sing-box config dir: %w", err)
+	}
+
+	if err = s.provider.Write(rendered); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 // Render рендерит конфиг и возвращает его в том виде, в котором он будет записан на диск.
@@ -205,12 +222,7 @@ func (s *Service) Apply(ctx context.Context) (*ApplyResult, error) {
 		return nil, ErrNoChanges
 	}
 
-	container, err := s.findContainer(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if err = s.check(ctx, container.ID, rendered); err != nil {
+	if err = s.check(ctx, rendered); err != nil {
 		return nil, err
 	}
 
@@ -229,7 +241,7 @@ func (s *Service) Apply(ctx context.Context) (*ApplyResult, error) {
 
 	log.Printf("sing-box config written (backup: %s), restarting sing-box", backup)
 
-	startErr := s.restart(ctx, container.ID, clashReachable)
+	startErr := s.restart(ctx, clashReachable)
 	if startErr == nil {
 		return &ApplyResult{
 			Message:  "Конфиг применен, sing-box перезапущен",
@@ -238,7 +250,7 @@ func (s *Service) Apply(ctx context.Context) (*ApplyResult, error) {
 		}, nil
 	}
 
-	logs, _ := s.controller.ContainerLogs(ctx, container.ID, logsTail)
+	logs, _ := s.runtime.Logs(ctx, logsTail)
 
 	if backup == "" {
 		return nil, fmt.Errorf("sing-box не запустился с новым конфигом, прежнего конфига нет: %w\n%s", startErr, logs)
@@ -250,7 +262,7 @@ func (s *Service) Apply(ctx context.Context) (*ApplyResult, error) {
 		return nil, fmt.Errorf("sing-box не запустился с новым конфигом (%v), восстановить прежний не удалось: %w", startErr, err)
 	}
 
-	if err = s.restart(ctx, container.ID, clashReachable); err != nil {
+	if err = s.restart(ctx, clashReachable); err != nil {
 		return nil, fmt.Errorf("sing-box не запустился с новым конфигом (%v), прежний конфиг восстановлен, но sing-box не запустился и с ним: %w", startErr, err)
 	}
 
@@ -258,11 +270,11 @@ func (s *Service) Apply(ctx context.Context) (*ApplyResult, error) {
 }
 
 // Restart перезапускает sing-box без изменения конфига. Не выполняется одновременно с применением конфига.
-func (s *Service) Restart() error {
+func (s *Service) Restart(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.controller.RestartContainersByLabels(containerLabels)
+	return s.runtime.Restart(ctx)
 }
 
 // normalizedActual возвращает рабочий конфиг в том же виде, что и рендер. Если конфиг не разбирается,
@@ -290,54 +302,24 @@ func (s *Service) normalizedActual() ([]byte, error) {
 	return normalized, nil
 }
 
-// findContainer находит запущенный контейнер sing-box.
-func (s *Service) findContainer(ctx context.Context) (*dockercontroller.Container, error) {
-	containers, err := s.controller.ListContainers(ctx, dockercontroller.ContainerFilter{
-		ID:     "",
-		Name:   "",
-		Labels: containerLabels,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("не удалось найти контейнер sing-box: %w", err)
-	}
-
-	for i := range containers {
-		if containers[i].Running && !containers[i].Restarting {
-			return &containers[i], nil
-		}
-	}
-
-	if len(containers) == 0 {
-		return nil, errors.New("контейнер sing-box с лейблами app=sing-box и managed=true не найден")
-	}
-
-	return nil, fmt.Errorf("контейнер sing-box %s не запущен: проверить конфиг негде", containers[0].Name)
-}
-
-// check проверяет конфиг командой sing-box check внутри контейнера sing-box.
-func (s *Service) check(ctx context.Context, containerID string, config []byte) error {
-	result, err := s.controller.Exec(ctx, containerID, checkCommand, config)
-	if errors.Is(err, dockercontroller.ErrNotFound) {
-		return fmt.Errorf("docker-controller не поддерживает exec (нужна версия v0.0.3+): %w", err)
-	}
-
+// check проверяет конфиг командой sing-box check.
+func (s *Service) check(ctx context.Context, config []byte) error {
+	result, err := s.runtime.Check(ctx, config)
 	if err != nil {
 		return fmt.Errorf("не удалось выполнить sing-box check: %w", err)
 	}
 
 	if result.ExitCode != 0 {
-		output := strings.TrimSpace(result.Stderr + "\n" + result.Stdout)
-
-		return fmt.Errorf("%w: %s", ErrCheckFailed, output)
+		return fmt.Errorf("%w: %s", ErrCheckFailed, result.Output)
 	}
 
 	return nil
 }
 
 // restart перезапускает sing-box и ждет его запуска. Если Clash API был доступен до перезапуска,
-// запуск подтверждается ответом Clash API, иначе — тем, что контейнер работает без перезапусков.
-func (s *Service) restart(ctx context.Context, containerID string, clashReachable bool) error {
-	if err := s.controller.RestartContainersByLabels(containerLabels); err != nil {
+// запуск подтверждается ответом Clash API, иначе — тем, что sing-box работает без перезапусков.
+func (s *Service) restart(ctx context.Context, clashReachable bool) error {
+	if err := s.runtime.Restart(ctx); err != nil {
 		return fmt.Errorf("не удалось перезапустить sing-box: %w", err)
 	}
 
@@ -353,16 +335,16 @@ func (s *Service) restart(ctx context.Context, containerID string, clashReachabl
 		case <-time.After(time.Second):
 		}
 
-		container, err := s.controller.GetContainer(ctx, containerID)
+		state, err := s.runtime.State(ctx)
 		if err != nil {
 			continue
 		}
 
-		if container.Exited() {
-			return fmt.Errorf("sing-box завершился с кодом %d", container.ExitCode)
+		if state.Failed {
+			return fmt.Errorf("sing-box завершился с кодом %d", state.ExitCode)
 		}
 
-		if !container.Running {
+		if !state.Running {
 			runningSince = time.Time{}
 
 			continue

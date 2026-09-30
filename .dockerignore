@@ -1,5 +1,7 @@
 .git
+.github
 .idea
 view/node_modules
 view/dist
 deploy
+dist

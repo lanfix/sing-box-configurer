@@ -13,13 +13,22 @@ import { formatAgo } from '../../utils/format'
 const stepTitles: Record<string, string> = {
   start: 'Запуск',
   prepare: 'Проверка',
-  pull: 'Загрузка образов',
-  'update-controller': 'Обновление docker-controller',
+  download: 'Загрузка новой версии',
   backup: 'Резервная копия',
   'update-configurer': 'Обновление конфигуратора',
-  'update-compose': 'Обновление compose-файла',
+  finish: 'Завершение установки',
   commit: 'Завершение',
   rollback: 'Откат',
+  // Шаги журналов прежних версий.
+  pull: 'Загрузка образов',
+  'update-controller': 'Обновление docker-controller',
+  'update-compose': 'Обновление compose-файла',
+}
+
+// platformTitles — способы установки.
+const platformTitles: Record<string, string> = {
+  docker: 'Docker',
+  systemd: 'systemd',
 }
 
 const selected = ref('')
@@ -53,7 +62,7 @@ const state = computed(() => {
   if (check.unsupported) {
     const latest = check.latest_version ? ` Последний релиз — ${check.latest_version}.` : ''
 
-    return { dot: '', title: 'Локальная сборка', text: `${check.unsupported}${latest}` }
+    return { dot: '', title: 'Обновление недоступно', text: `${check.unsupported}${latest}` }
   }
 
   if (check.error) {
@@ -151,6 +160,7 @@ function stepLevel(level: string): string {
             <div class="stat-value">{{ updates.check?.current_version || '—' }}</div>
             <div class="stat-foot">
               <template v-if="updates.check?.checked_at">Проверено {{ formatAgo(updates.check.checked_at) }}</template>
+              <template v-if="updates.check?.platform"> · {{ platformTitles[updates.check.platform] ?? updates.check.platform }}</template>
             </div>
           </div>
           <div class="stat-tile">

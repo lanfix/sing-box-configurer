@@ -59,9 +59,9 @@ func (h *Handler) ApplyConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ReloadSingBox перезапускает контейнер sing-box без изменения конфига.
-func (h *Handler) ReloadSingBox(w http.ResponseWriter, _ *http.Request) {
-	if err := h.singBox.Restart(); err != nil {
+// ReloadSingBox перезапускает sing-box без изменения конфига.
+func (h *Handler) ReloadSingBox(w http.ResponseWriter, r *http.Request) {
+	if err := h.singBox.Restart(r.Context()); err != nil {
 		log.Printf("Error restarting sing-box: %v", err)
 		writeJSONError(w, http.StatusBadGateway, "Не удалось перезапустить sing-box: "+err.Error())
 

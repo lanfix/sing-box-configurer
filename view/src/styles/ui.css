@@ -1124,3 +1124,72 @@ button.proxy-node:focus-visible {
     font-size: 13px;
     font-weight: 600;
 }
+
+/* ===== Вход в панель ===== */
+.login-page {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    height: 100vh;
+    padding: 24px 16px;
+    overflow-y: auto;
+    background: radial-gradient(circle at 50% 0%, rgba(88, 166, 255, 0.08), transparent 60%), #0d1117;
+}
+
+.login-card {
+    width: min(380px, 100%);
+    padding: 28px 28px 24px;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    background: #161b22;
+    box-shadow: 0 16px 48px rgba(1, 4, 9, 0.5);
+}
+
+.login-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.login-title {
+    margin: 24px 0 20px;
+    color: #e6edf3;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.login-submit {
+    width: 100%;
+    min-height: 38px;
+}
+
+.login-hint {
+    margin-top: 20px;
+    color: #8b949e;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.login-hint code {
+    font-size: 11.5px;
+}
+
+/* Подвал меню: пользователь и выход */
+.sidebar-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px 10px 20px;
+    border-top: 1px solid #30363d;
+}
+
+.sidebar-user {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: #8b949e;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

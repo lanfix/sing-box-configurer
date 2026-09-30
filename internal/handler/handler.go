@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/lanfix/sing-box-configurer/internal/amnezia"
+	"github.com/lanfix/sing-box-configurer/internal/auth"
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
 	"github.com/lanfix/sing-box-configurer/internal/happ"
@@ -26,6 +27,7 @@ const maxRequestBody = 8 << 20
 
 // Deps — зависимости обработчиков.
 type Deps struct {
+	Auth           *auth.Manager
 	Rules          *rules.Manager
 	DNS            *dnsconfig.Manager
 	DNSRecords     *dnsrecords.Manager
@@ -43,6 +45,7 @@ type Deps struct {
 
 // Handler обрабатывает запросы API.
 type Handler struct {
+	auth              *auth.Manager
 	rulesManager      *rules.Manager
 	dnsManager        *dnsconfig.Manager
 	dnsRecordsManager *dnsrecords.Manager
@@ -61,6 +64,7 @@ type Handler struct {
 // NewHandler создает обработчики API.
 func NewHandler(deps Deps) *Handler {
 	return &Handler{
+		auth:              deps.Auth,
 		rulesManager:      deps.Rules,
 		dnsManager:        deps.DNS,
 		dnsRecordsManager: deps.DNSRecords,
@@ -79,6 +83,13 @@ func NewHandler(deps Deps) *Handler {
 
 // Register регистрирует маршруты API.
 func (h *Handler) Register(mux *http.ServeMux) {
+	// Вход в панель. status, login и logout доступны без входа (см. auth.Middleware).
+	mux.HandleFunc("GET /api/auth/status", h.GetAuthStatus)
+	mux.HandleFunc("POST /api/auth/login", h.Login)
+	mux.HandleFunc("POST /api/auth/logout", h.Logout)
+	mux.HandleFunc("GET /api/auth/settings", h.GetAuthSettings)
+	mux.HandleFunc("POST /api/auth/settings", h.UpdateAuthSettings)
+
 	// Rule-set-ы, которые забирает sing-box.
 	mux.HandleFunc("GET /api/ruleset/group", h.GetRuleSetByGroupKind(rules.RuleSetKindAll))
 	mux.HandleFunc("GET /api/ruleset/domain", h.GetRuleSetByGroupKind(rules.RuleSetKindDomain))

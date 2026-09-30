@@ -2,21 +2,27 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/lanfix/sing-box-configurer/internal/platform"
 )
 
+// AppConfig — конфигурация сервиса. Поля, которых нет в файле, получают значения по умолчанию для платформы.
 type AppConfig struct {
+	// Platform — способ установки: docker или systemd. Пустое значение — определяется автоматически
+	// (docker, если сервис запущен в контейнере).
+	Platform string `json:"platform"`
+
 	AppDataPath         string `json:"app_data_path"`
 	ListenAddr          string `json:"listen_addr"`
-	DockerControllerURL string `json:"docker_controller_url"`
-	// DockerControllerAPIKey — ключ API docker-controller (X-API-Key), обязателен для обновлений и применения конфига.
-	DockerControllerAPIKey string `json:"docker_controller_api_key"`
-	SourceListsProxyUrl    string `json:"source_lists_proxy_url"`
-	SingBoxConfigPath      string `json:"sing_box_config_path"`
-	ClashAPIBaseURL        string `json:"clash_api_base_url"`
+	SourceListsProxyUrl string `json:"source_lists_proxy_url"`
+	SingBoxConfigPath   string `json:"sing_box_config_path"`
+	ClashAPIBaseURL     string `json:"clash_api_base_url"`
 
 	// ClashAPISecret — секрет Clash API на случай, если его нет в рабочем конфиге sing-box.
 	// Обычно секрет берется из рабочего конфига, куда его записывает конфигуратор.
@@ -28,51 +34,132 @@ type AppConfig struct {
 
 	// BackupDir — каталог резервных копий конфига sing-box. По умолчанию backups рядом с app_data_path.
 	BackupDir string `json:"backup_dir"`
+
+	// Systemd — параметры установки без контейнеров.
+	Systemd SystemdConfig `json:"systemd"`
 }
 
-// Read читает конфигурацию из файла path. Поля, которых нет в файле, получают значения по умолчанию.
+// SystemdConfig — параметры платформы systemd.
+type SystemdConfig struct {
+	// SingBoxUnit — служба sing-box.
+	SingBoxUnit string `json:"sing_box_unit"`
+
+	// SingBoxBinary — бинарник sing-box для sing-box check.
+	SingBoxBinary string `json:"sing_box_binary"`
+
+	// ConfigurerUnit — служба конфигуратора (перезапускается при обновлении).
+	ConfigurerUnit string `json:"configurer_unit"`
+
+	// ReleaseRepository — репозиторий GitHub, из релизов которого загружаются обновления.
+	ReleaseRepository string `json:"release_repository"`
+}
+
+// Read читает конфигурацию из файла path. Если файла нет, используются значения по умолчанию.
 func Read(path string) (*AppConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	// json.Unmarshal перезапишет только поля, заданные в файле.
 	cfg := &AppConfig{
-		AppDataPath:            "app.json",
-		ListenAddr:             ":8080",
-		DockerControllerURL:    "http://docker-controller:8081",
-		DockerControllerAPIKey: "",
-		SourceListsProxyUrl:    "",
-		SingBoxConfigPath:      "/etc/sing-box/config.json",
-		ClashAPIBaseURL:        "http://127.0.0.1:9090",
-		ClashAPISecret:         "",
-		RuleSetBaseURL:         "",
-		BackupDir:              "",
+		Platform:            "",
+		AppDataPath:         "",
+		ListenAddr:          "",
+		SourceListsProxyUrl: "",
+		SingBoxConfigPath:   "",
+		ClashAPIBaseURL:     "",
+		ClashAPISecret:      "",
+		RuleSetBaseURL:      "",
+		BackupDir:           "",
+		Systemd: SystemdConfig{
+			SingBoxUnit:       "",
+			SingBoxBinary:     "",
+			ConfigurerUnit:    "",
+			ReleaseRepository: "",
+		},
 	}
 
-	if err = json.Unmarshal(data, cfg); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 
-	if cfg.RuleSetBaseURL == "" {
-		cfg.RuleSetBaseURL = "http://127.0.0.1:" + listenPort(cfg.ListenAddr)
+	if err == nil {
+		if err = json.Unmarshal(data, cfg); err != nil {
+			return nil, err
+		}
 	}
 
-	cfg.RuleSetBaseURL = strings.TrimSuffix(cfg.RuleSetBaseURL, "/")
+	if cfg.Platform == "" {
+		cfg.Platform = detectPlatform()
+	}
 
-	if cfg.BackupDir == "" {
-		cfg.BackupDir = filepath.Join(filepath.Dir(cfg.AppDataPath), "backups")
+	if err = cfg.setDefaults(); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
 }
 
-// listenPort возвращает порт из адреса listen_addr (8080, если его не удалось разобрать).
-func listenPort(listenAddr string) string {
-	if _, port, err := net.SplitHostPort(listenAddr); err == nil && port != "" {
+// setDefaults заполняет незаданные поля значениями по умолчанию для платформы.
+func (c *AppConfig) setDefaults() error {
+	switch c.Platform {
+	case platform.NameDocker:
+		setDefault(&c.AppDataPath, "/app/data/app.json")
+
+		// Конфигуратор работает в сети compose, а sing-box — в сети хоста: Clash API доступен
+		// через host.docker.internal (extra_hosts: host-gateway в docker-compose.yaml).
+		setDefault(&c.ClashAPIBaseURL, "http://host.docker.internal:9090")
+
+	case platform.NameSystemd:
+		setDefault(&c.AppDataPath, "/var/lib/sing-box-configurer/app.json")
+		setDefault(&c.ClashAPIBaseURL, "http://127.0.0.1:9090")
+		setDefault(&c.Systemd.SingBoxUnit, "sing-box")
+		setDefault(&c.Systemd.SingBoxBinary, "/usr/local/bin/sing-box")
+		setDefault(&c.Systemd.ConfigurerUnit, "sing-box-configurer")
+		setDefault(&c.Systemd.ReleaseRepository, "lanfix/sing-box-configurer")
+
+	default:
+		return fmt.Errorf("unknown platform %q (supported: %s, %s)", c.Platform, platform.NameDocker, platform.NameSystemd)
+	}
+
+	setDefault(&c.ListenAddr, ":8080")
+	setDefault(&c.SingBoxConfigPath, "/etc/sing-box/config.json")
+	setDefault(&c.RuleSetBaseURL, "http://127.0.0.1:"+c.ListenPort())
+	setDefault(&c.BackupDir, filepath.Join(filepath.Dir(c.AppDataPath), "backups"))
+
+	c.RuleSetBaseURL = strings.TrimSuffix(c.RuleSetBaseURL, "/")
+
+	return nil
+}
+
+// ListenPort возвращает порт из адреса listen_addr (8080, если его не удалось разобрать).
+func (c *AppConfig) ListenPort() string {
+	if _, port, err := net.SplitHostPort(c.ListenAddr); err == nil && port != "" {
 		return port
 	}
 
 	return "8080"
+}
+
+// LocalURL возвращает адрес HTTP-сервера конфигуратора для запросов с этого же хоста.
+func (c *AppConfig) LocalURL() string {
+	host, _, err := net.SplitHostPort(c.ListenAddr)
+
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+
+	return "http://" + net.JoinHostPort(host, c.ListenPort())
+}
+
+// detectPlatform определяет платформу: в контейнере Docker есть файл /.dockerenv.
+func detectPlatform() string {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return platform.NameDocker
+	}
+
+	return platform.NameSystemd
+}
+
+// setDefault задает значение поля, если оно пустое.
+func setDefault(field *string, value string) {
+	if *field == "" {
+		*field = value
+	}
 }

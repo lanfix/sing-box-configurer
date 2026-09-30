@@ -297,6 +297,8 @@ export interface UpdateCheck {
   available: Release[]
   checked_at?: string
   error?: string
+  // platform — способ установки: docker или systemd.
+  platform?: string
   // unsupported — почему обновление через интерфейс недоступно (например, локальная сборка).
   unsupported?: string
 }

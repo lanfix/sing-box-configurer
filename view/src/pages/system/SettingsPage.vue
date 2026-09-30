@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Системные настройки: параметры sing-box, Clash API и плановая перезагрузка.
+// Системные настройки: доступ к панели, параметры sing-box, Clash API и плановая перезагрузка.
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import { get, post } from '../../api/client'
@@ -14,6 +14,7 @@ import { useLeaveGuard, useSavedState } from '../../composables/useSavedState'
 import { icons } from '../../icons'
 import { confirmAction } from '../../stores/confirm'
 import { showError, showMessage } from '../../stores/toast'
+import PanelAccessCard from './PanelAccessCard.vue'
 
 interface RestartStatus {
   enabled: boolean
@@ -251,6 +252,8 @@ onMounted(() => {
   </Teleport>
 
   <div class="page-narrow">
+    <PanelAccessCard />
+
     <form class="settings-card" @submit.prevent="saveGeneral">
       <div class="settings-card-head">
         <div class="settings-card-title">sing-box и Clash API</div>
@@ -303,7 +306,7 @@ onMounted(() => {
       <div class="settings-card-head">
         <div class="settings-card-title">Плановая перезагрузка</div>
         <p class="settings-card-description">
-          Конфигуратор перезапускает sing-box по расписанию через docker-controller — это освобождает память и
+          Конфигуратор перезапускает sing-box по расписанию — это освобождает память и
           сбрасывает зависшие соединения. Расписание действует сразу после сохранения.
         </p>
       </div>

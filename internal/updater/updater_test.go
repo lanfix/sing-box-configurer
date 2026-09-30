@@ -1,98 +1,226 @@
 package updater
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/lanfix/sing-box-configurer/internal/version"
 )
 
-// TestSplitImage проверяет разделение образа на репозиторий и тег.
-func TestSplitImage(t *testing.T) {
-	cases := map[string][2]string{
-		"docker.io/lanfix/sing-box-configurer:v0.0.19": {"docker.io/lanfix/sing-box-configurer", "v0.0.19"},
-		"lanfix/docker-controller:v0.0.1":              {"lanfix/docker-controller", "v0.0.1"},
-		"registry:5000/app":                            {"registry:5000/app", "latest"},
-		"registry:5000/app:v1.0.0":                     {"registry:5000/app", "v1.0.0"},
-	}
+// fakeTarget — платформа в памяти: «версия» конфигуратора — строка, данные — файл в root.
+type fakeTarget struct {
+	root    string
+	running string
+	calls   []string
 
-	for ref, want := range cases {
-		repository, tag := splitImage(ref)
-
-		if repository != want[0] || tag != want[1] {
-			t.Errorf("splitImage(%q) = %q, %q; want %q, %q", ref, repository, tag, want[0], want[1])
-		}
-	}
+	replaceErr error
 }
 
-// TestDeployPathsRelative проверяет сопоставление путей хоста и папки деплоя.
-func TestDeployPathsRelative(t *testing.T) {
-	paths := deployPaths{
-		hostDir:  "/opt/vpn/",
-		localDir: "/deploy",
-	}
-
-	cases := map[string]string{
-		"/opt/vpn/app.json":           "app.json",
-		"/opt/vpn/conf/sing-box.json": "conf/sing-box.json",
-		"/opt/vpn":                    "",
-		"/opt/vpn2/app.json":          "",
-		"/var/run/docker.sock":        "",
-	}
-
-	for hostPath, want := range cases {
-		rel, ok := paths.relative(hostPath)
-
-		if rel != want || ok != (want != "") {
-			t.Errorf("relative(%q) = %q, %v; want %q", hostPath, rel, ok, want)
-		}
-	}
+func (f *fakeTarget) Root() string {
+	return f.root
 }
 
-// TestSetComposeImageTag проверяет замену тега только у нужного образа.
-func TestSetComposeImageTag(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "docker-compose.yaml")
-	original := `services:
-  sing-box-configurer:
-    image: docker.io/lanfix/sing-box-configurer:v0.0.10
-  docker-controller:
-    image: "lanfix/docker-controller:v0.0.1"
-  sing-box:
-    image: ghcr.io/sagernet/sing-box:v1.14.0
-`
+func (f *fakeTarget) Prepare(_ context.Context, journal *Journal) ([]string, error) {
+	f.calls = append(f.calls, "prepare")
+	journal.FromVersion = f.running
 
-	if err := os.WriteFile(file, []byte(original), 0644); err != nil {
+	return []string{"data"}, nil
+}
+
+func (f *fakeTarget) Download(_ context.Context, _ *Journal) error {
+	f.calls = append(f.calls, "download")
+
+	return nil
+}
+
+func (f *fakeTarget) Replace(_ context.Context, journal *Journal) error {
+	f.calls = append(f.calls, "replace")
+	journal.State["previous"] = f.running
+
+	// Новая версия «мигрирует» данные.
+	if err := os.WriteFile(filepath.Join(f.root, "data", "app.json"), []byte("migrated"), 0644); err != nil {
+		return err
+	}
+
+	f.running = journal.ToVersion
+
+	return f.replaceErr
+}
+
+func (f *fakeTarget) Alive(_ context.Context, _ *Journal) error {
+	return nil
+}
+
+func (f *fakeTarget) Logs(_ context.Context, _ *Journal) string {
+	return "new version logs"
+}
+
+func (f *fakeTarget) Finish(_ context.Context, _ *Journal) error {
+	f.calls = append(f.calls, "finish")
+
+	return nil
+}
+
+func (f *fakeTarget) Restore(_ context.Context, journal *Journal) error {
+	f.calls = append(f.calls, "restore")
+	f.running = journal.State["previous"]
+
+	return nil
+}
+
+func (f *fakeTarget) StartPrevious(_ context.Context, _ *Journal) error {
+	f.calls = append(f.calls, "start-previous")
+
+	return nil
+}
+
+func (f *fakeTarget) Commit(_ context.Context, _ *Journal) error {
+	f.calls = append(f.calls, "commit")
+
+	return nil
+}
+
+// runUpdate выполняет обновление с фейковой платформой и возвращает итоговую фазу из журнала.
+func runUpdate(t *testing.T, target *fakeTarget, healthVersion func() string) *Journal {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":  "ok",
+			"version": healthVersion(),
+		})
+	}))
+	defer server.Close()
+
+	updatesDir := filepath.Join(target.root, UpdatesDirName)
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	u, err := New(Options{
+		UpdateID:   "20260930-120000",
+		UpdatesDir: updatesDir,
+		HealthURL:  server.URL,
+	}, target, logger)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	changed, err := setComposeImageTag(file, "docker.io/lanfix/sing-box-configurer", "v0.1.0")
-	if err != nil || !changed {
-		t.Fatalf("configurer: changed=%v err=%v", changed, err)
+	u.Run(context.Background())
+
+	journal, err := loadJournal(updatesDir, "20260930-120000")
+	if err != nil || journal == nil {
+		t.Fatalf("journal must be saved: %v", err)
 	}
 
-	changed, err = setComposeImageTag(file, "docker.io/lanfix/docker-controller", "v0.1.0")
-	if err != nil || !changed {
-		t.Fatalf("controller: changed=%v err=%v", changed, err)
+	return journal
+}
+
+// newFakeTarget создает платформу с данными в data/app.json.
+func newFakeTarget(t *testing.T) *fakeTarget {
+	t.Helper()
+
+	root := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(root, "data"), 0755); err != nil {
+		t.Fatal(err)
 	}
 
-	changed, err = setComposeImageTag(file, "docker.io/lanfix/docker-controller", "v0.1.0")
-	if err != nil || changed {
-		t.Fatalf("repeated update must be no-op: changed=%v err=%v", changed, err)
+	if err := os.WriteFile(filepath.Join(root, "data", "app.json"), []byte("original"), 0644); err != nil {
+		t.Fatal(err)
 	}
 
-	want := `services:
-  sing-box-configurer:
-    image: docker.io/lanfix/sing-box-configurer:v0.1.0
-  docker-controller:
-    image: "lanfix/docker-controller:v0.1.0"
-  sing-box:
-    image: ghcr.io/sagernet/sing-box:v1.14.0
-`
+	return &fakeTarget{
+		root:       root,
+		running:    "v0.1.0",
+		calls:      nil,
+		replaceErr: nil,
+	}
+}
 
-	got, _ := os.ReadFile(file)
+// setVersion подменяет версию updater на время теста.
+func setVersion(t *testing.T, value string) {
+	t.Helper()
 
-	if string(got) != want {
-		t.Errorf("unexpected compose file:\n%s", got)
+	previous := version.Version
+	version.Version = value
+
+	t.Cleanup(func() {
+		version.Version = previous
+	})
+}
+
+// TestRunSucceeded проверяет полный проход обновления.
+func TestRunSucceeded(t *testing.T) {
+	setVersion(t, "v0.2.0")
+
+	target := newFakeTarget(t)
+	journal := runUpdate(t, target, func() string {
+		return target.running
+	})
+
+	if journal.Phase != PhaseSucceeded || journal.FromVersion != "v0.1.0" || journal.ToVersion != "v0.2.0" {
+		t.Fatalf("unexpected journal: %+v", journal)
+	}
+
+	want := []string{"prepare", "download", "replace", "finish", "commit"}
+
+	if !slices.Equal(target.calls, want) {
+		t.Errorf("calls = %v, want %v", target.calls, want)
+	}
+
+	if len(journal.Backups) != 1 || journal.Backups[0].Path != "data/app.json" {
+		t.Errorf("backups = %+v", journal.Backups)
+	}
+}
+
+// TestRunRollback проверяет откат, если новая версия не отвечает на health-check.
+func TestRunRollback(t *testing.T) {
+	setVersion(t, "v0.2.0")
+
+	target := newFakeTarget(t)
+	target.replaceErr = errors.New("container exited")
+
+	journal := runUpdate(t, target, func() string {
+		return "v0.1.0"
+	})
+
+	if journal.Phase != PhaseRolledBack || journal.Error == "" {
+		t.Fatalf("unexpected journal: %+v", journal)
+	}
+
+	want := []string{"prepare", "download", "replace", "restore", "start-previous"}
+
+	if !slices.Equal(target.calls, want) {
+		t.Errorf("calls = %v, want %v", target.calls, want)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(target.root, "data", "app.json"))
+
+	if string(data) != "original" || target.running != "v0.1.0" {
+		t.Errorf("data = %q, running = %s", data, target.running)
+	}
+}
+
+// TestRunNotNewer проверяет, что обновление на ту же версию ничего не меняет.
+func TestRunNotNewer(t *testing.T) {
+	setVersion(t, "v0.1.0")
+
+	target := newFakeTarget(t)
+	journal := runUpdate(t, target, func() string {
+		return target.running
+	})
+
+	if journal.Phase != PhaseRolledBack || !slices.Equal(target.calls, []string{"prepare"}) {
+		t.Errorf("unexpected journal %+v, calls %v", journal, target.calls)
 	}
 }
 
@@ -131,20 +259,15 @@ func TestPruneUpdates(t *testing.T) {
 
 // TestBackupRestore проверяет, что восстановление пишет в тот же файл (inode не меняется).
 func TestBackupRestore(t *testing.T) {
-	deployDir := t.TempDir()
+	root := t.TempDir()
 	updateDir := t.TempDir()
-	paths := deployPaths{
-		hostDir:  "/host",
-		localDir: deployDir,
-	}
-
-	file := filepath.Join(deployDir, "app.json")
+	file := filepath.Join(root, "app.json")
 
 	if err := os.WriteFile(file, []byte("original"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	backups, err := backupFiles(paths, updateDir, []string{"app.json"})
+	backups, err := backupFiles(root, updateDir, []string{"app.json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +278,7 @@ func TestBackupRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err = restoreFiles(paths, updateDir, backups); err != nil {
+	if err = restoreFiles(root, updateDir, backups); err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,56 +294,20 @@ func TestBackupRestore(t *testing.T) {
 	}
 }
 
-// TestParseResult проверяет разбор итоговой строки job.
-func TestParseResult(t *testing.T) {
-	logs := `{"level":"INFO","msg":"self-update started"}
-not a json line
-{"level":"INFO","msg":"self-update finished","result":"rolled_back","error":"health check timeout"}
-`
-
-	result, message := parseResult(logs)
-
-	if result != "rolled_back" || message != "health check timeout" {
-		t.Errorf("parseResult = %q, %q", result, message)
-	}
-
-	if result, _ = parseResult("{}\n"); result != "" {
-		t.Errorf("empty logs must have no result, got %q", result)
-	}
-}
-
-// TestComposeFiles проверяет разбор лейбла со списком compose-файлов.
-func TestComposeFiles(t *testing.T) {
-	files := composeFiles(map[string]string{
-		composeConfigFilesLabel: "/opt/vpn/docker-compose.yaml, /opt/vpn/override.yaml",
-	})
-
-	if len(files) != 2 || files[0] != "/opt/vpn/docker-compose.yaml" || files[1] != "/opt/vpn/override.yaml" {
-		t.Errorf("composeFiles = %v", files)
-	}
-
-	if len(composeFiles(map[string]string{})) != 0 {
-		t.Error("no label must give no files")
-	}
-}
-
-// TestDirFiles проверяет, что смонтированный каталог бэкапится файлами без служебных подкаталогов.
-func TestDirFiles(t *testing.T) {
-	local := t.TempDir()
-	paths := deployPaths{
-		hostDir:  "/opt/vpn",
-		localDir: local,
-	}
+// TestExpandFiles проверяет, что каталог данных бэкапится файлами без служебных подкаталогов.
+func TestExpandFiles(t *testing.T) {
+	root := t.TempDir()
 
 	files := map[string]string{
 		"data/app.json":                    "{}",
 		"data/backups/sing-box-1.json":     "{}",
+		"data/.updates/x/journal.json":     "{}",
 		"sing-box/config.json":             "{}",
 		"sing-box/.updates/x/journal.json": "{}",
 	}
 
 	for rel, content := range files {
-		path := filepath.Join(local, filepath.FromSlash(rel))
+		path := filepath.Join(root, filepath.FromSlash(rel))
 
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			t.Fatal(err)
@@ -231,12 +318,10 @@ func TestDirFiles(t *testing.T) {
 		}
 	}
 
-	got := appendUnique(dirFiles(paths, "data"), dirFiles(paths, "sing-box")...)
-	got = appendUnique(got, "data/app.json")
-
+	got := expandFiles(root, []string{"data", "sing-box", "data/app.json", "missing.json"})
 	want := []string{"data/app.json", "sing-box/config.json"}
 
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("dirFiles = %v, want %v", got, want)
+	if !slices.Equal(got, want) {
+		t.Errorf("expandFiles = %v, want %v", got, want)
 	}
 }

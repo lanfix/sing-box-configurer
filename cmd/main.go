@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 
-	// Базы часовых поясов встроены в бинарник: в образе debian-slim их нет, а расписание задается в поясе.
+	// Базы часовых поясов встроены в бинарник: в образе их нет, а расписание задается в поясе.
 	_ "time/tzdata"
 
 	"github.com/lanfix/sing-box-configurer/cmd/config"
 	"github.com/lanfix/sing-box-configurer/internal/amnezia"
+	"github.com/lanfix/sing-box-configurer/internal/auth"
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
@@ -19,9 +22,11 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/inbounds"
 	"github.com/lanfix/sing-box-configurer/internal/migrations"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
+	"github.com/lanfix/sing-box-configurer/internal/platform"
+	"github.com/lanfix/sing-box-configurer/internal/platform/docker"
+	"github.com/lanfix/sing-box-configurer/internal/platform/systemd"
 	"github.com/lanfix/sing-box-configurer/internal/render"
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
-	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
@@ -30,27 +35,65 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
 	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
 	"github.com/lanfix/sing-box-configurer/internal/update"
+	"github.com/lanfix/sing-box-configurer/internal/updater"
 	"github.com/lanfix/sing-box-configurer/internal/version"
 	"github.com/lanfix/sing-box-configurer/view"
 )
 
 func main() {
-	configPath := flag.String("config", "config.json", "Path to configuration file")
+	configPath := flag.String("config", "config.json", "Path to configuration file (optional, defaults are used without it)")
+	showVersion := flag.Bool("version", false, "Print version and exit")
+
+	flag.Usage = usage
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version.Version)
+
+		return
+	}
 
 	cfg, err := config.Read(*configPath)
 	if err != nil {
 		log.Fatal(fmt.Errorf("cannot load configuration: %w", err))
 	}
 
-	log.Printf("Starting Sing-Box Configurer %s (config: %s)", version.Version, *configPath)
+	if args := flag.Args(); len(args) > 0 {
+		if err = runCommand(cfg, args); err != nil {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+			os.Exit(1)
+		}
 
-	if cfg.AppDataPath == "" {
-		log.Fatalf("Field app_data_path required in config")
+		return
 	}
+
+	serve(cfg, *configPath)
+}
+
+// usage выводит справку по запуску.
+func usage() {
+	output := flag.CommandLine.Output()
+
+	_, _ = fmt.Fprintf(output, "Usage:\n")
+	_, _ = fmt.Fprintf(output, "  sing-box-configurer [-config path]                     run the service\n")
+	_, _ = fmt.Fprintf(output, "  sing-box-configurer [-config path] auth set -username <login> [-password <password>]\n")
+	_, _ = fmt.Fprintf(output, "                                                         enable panel login (password is read from stdin if not set)\n")
+	_, _ = fmt.Fprintf(output, "  sing-box-configurer [-config path] auth reset          disable panel login\n")
+	_, _ = fmt.Fprintf(output, "  sing-box-configurer -version                           print version\n\n")
+
+	flag.PrintDefaults()
+}
+
+// serve запускает HTTP-сервер конфигуратора.
+func serve(cfg *config.AppConfig, configPath string) {
+	log.Printf("Starting Sing-Box Configurer %s (platform: %s, config: %s)", version.Version, cfg.Platform, configPath)
 
 	appData := appdata.NewFile(cfg.AppDataPath)
 	singBoxConfigProvider := singboxconfig.NewProvider(cfg.SingBoxConfigPath, cfg.BackupDir)
+
+	if err := os.MkdirAll(filepath.Dir(cfg.AppDataPath), 0755); err != nil {
+		log.Fatalf("Cannot create app data dir: %v", err)
+	}
 
 	// Миграции выполняются до загрузки данных менеджерами. При ошибке процесс завершается,
 	// а updater по отсутствию health-ответа откатывает обновление и восстанавливает бэкап.
@@ -61,6 +104,20 @@ func main() {
 
 	log.Printf("Data schema version: %d (migrated from %d, applied: %d)",
 		migrationResult.ToVersion, migrationResult.FromVersion, len(migrationResult.Applied))
+
+	host, err := newPlatform(cfg, configPath)
+	if err != nil {
+		log.Fatalf("Cannot initialize platform %s: %v", cfg.Platform, err)
+	}
+
+	authManager, err := auth.NewManager(appData)
+	if err != nil {
+		log.Fatal(fmt.Errorf("failed to initialize auth manager: %w", err))
+	}
+
+	if !authManager.Enabled() {
+		log.Printf("Warning: panel login is disabled, anyone with network access can manage sing-box (enable it in System → Settings)")
+	}
 
 	rulesManager, err := rules.NewManager(appData, cfg.SourceListsProxyUrl)
 	if err != nil {
@@ -97,8 +154,6 @@ func main() {
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize settings manager: %w", err))
 	}
-
-	dockerControllerProvider := dockercontroller.NewProvider(cfg.DockerControllerURL, cfg.DockerControllerAPIKey)
 
 	// Секрет Clash API берется из рабочего конфига sing-box: он меняется только при применении конфига.
 	clashAPI := singboxclashapi.NewClashAPI(cfg.ClashAPIBaseURL, func() string {
@@ -156,17 +211,25 @@ func main() {
 		}, nil
 	}
 
-	singBoxService := singbox.NewService(renderInput, singBoxConfigProvider, dockerControllerProvider, clashAPI)
+	singBoxService := singbox.NewService(renderInput, singBoxConfigProvider, host.SingBox, clashAPI)
 
-	// Плановая перезагрузка sing-box (раньше ее выполнял отдельный контейнер cron-scheduler).
+	// Новая инсталляция: sing-box запустится с конфигом по умолчанию, дальше конфиг применяется из интерфейса.
+	if created, err := singBoxService.EnsureConfig(); err != nil {
+		log.Printf("Warning: cannot write initial sing-box config: %v", err)
+	} else if created {
+		log.Printf("Initial sing-box config written to %s", cfg.SingBoxConfigPath)
+	}
+
+	// Плановая перезагрузка sing-box.
 	restartTask := scheduler.NewRestartTask(func() settings.Restart {
 		return settingsManager.Get().Restart
-	}, singBoxService.Restart)
+	}, func() error {
+		return singBoxService.Restart(context.Background())
+	})
 	restartTask.Start(context.Background())
 
-	updateService := update.NewService(dockerControllerProvider, update.NewRegistry(), cfg.ListenAddr)
-
 	h := handler.NewHandler(handler.Deps{
+		Auth:           authManager,
 		Rules:          rulesManager,
 		DNS:            dnsManager,
 		DNSRecords:     dnsRecordsManager,
@@ -179,12 +242,12 @@ func main() {
 		SingBox:        singBoxService,
 		ClashAPI:       clashAPI,
 		TrafficMonitor: trafficMonitor,
-		Update:         updateService,
+		Update:         update.NewService(host),
 	})
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /api/health", handler.Health(migrationResult))
+	mux.HandleFunc("GET /api/health", handler.Health(migrationResult, host.Name))
 	h.Register(mux)
 
 	// Неизвестные методы API — 404, а не страница интерфейса.
@@ -193,9 +256,46 @@ func main() {
 
 	log.Printf("Server started on %s (rule-sets for sing-box: %s)", cfg.ListenAddr, cfg.RuleSetBaseURL)
 
-	if err = http.ListenAndServe(cfg.ListenAddr, mux); err != nil {
+	if err = http.ListenAndServe(cfg.ListenAddr, authManager.Middleware(mux)); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// newPlatform создает платформу установки из конфигурации.
+func newPlatform(cfg *config.AppConfig, configPath string) (platform.Platform, error) {
+	switch cfg.Platform {
+	case platform.NameDocker:
+		return docker.New(docker.Options{
+			ListenPort: cfg.ListenPort(),
+		})
+
+	case platform.NameSystemd:
+		appDataPath, err := filepath.Abs(cfg.AppDataPath)
+		if err != nil {
+			return platform.Platform{}, err
+		}
+
+		// Перед обновлением сохраняются данные приложения, конфиг сервиса и рабочий конфиг sing-box.
+		backupPaths := []string{appDataPath}
+
+		for _, path := range []string{configPath, cfg.SingBoxConfigPath} {
+			if abs, err := filepath.Abs(path); err == nil {
+				backupPaths = append(backupPaths, abs)
+			}
+		}
+
+		return systemd.New(systemd.Options{
+			SingBoxUnit:    cfg.Systemd.SingBoxUnit,
+			SingBoxBinary:  cfg.Systemd.SingBoxBinary,
+			ConfigurerUnit: cfg.Systemd.ConfigurerUnit,
+			HealthURL:      cfg.LocalURL() + "/api/health",
+			UpdatesDir:     filepath.Join(filepath.Dir(appDataPath), updater.UpdatesDirName),
+			BackupPaths:    backupPaths,
+			Repository:     cfg.Systemd.ReleaseRepository,
+		}), nil
+	}
+
+	return platform.Platform{}, fmt.Errorf("unknown platform %q", cfg.Platform)
 }
 
 // outboundConfigs возвращает объекты sing-box outbound-ов, добавленных вручную.

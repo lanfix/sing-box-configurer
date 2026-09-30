@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import { icons } from '../icons'
 import { isNavGroup, navigation, type NavBadge, type NavGroup } from '../navigation'
+import { auth, logout } from '../stores/auth'
 import { configChanged } from '../stores/configStatus'
 import { alertLevel, alertsOf } from '../stores/subscriptionAlerts'
 import { updateAvailable, updates } from '../stores/updates'
 import SvgIcon from './SvgIcon.vue'
 
 const route = useRoute()
+const router = useRouter()
 
 // storageKey — ключ localStorage с раскрытыми группами меню.
 const storageKey = 'navOpenGroups'
@@ -84,6 +86,12 @@ function openActiveGroup(): void {
   }
 }
 
+// signOut выходит из панели и открывает страницу входа.
+async function signOut(): Promise<void> {
+  await logout()
+  await router.push({ name: 'login' })
+}
+
 watch(() => route.name, openActiveGroup)
 onMounted(openActiveGroup)
 </script>
@@ -148,5 +156,12 @@ onMounted(openActiveGroup)
         </RouterLink>
       </template>
     </nav>
+
+    <div v-if="auth.enabled && auth.authenticated" class="sidebar-footer">
+      <span class="sidebar-user" :title="auth.username">{{ auth.username }}</span>
+      <button type="button" class="icon-btn" title="Выйти" aria-label="Выйти" @click="signOut">
+        <SvgIcon :path="icons.logout" />
+      </button>
+    </div>
   </aside>
 </template>

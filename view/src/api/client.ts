@@ -1,5 +1,6 @@
 // HTTP-клиент API конфигуратора. Ошибки сервера приходят как {"error": "..."} или как текст.
 
+import { handleUnauthorized } from '../stores/auth'
 import { refreshConfigStatus } from '../stores/configStatus'
 
 export class ApiError extends Error {
@@ -37,6 +38,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   })
 
   if (!response.ok) {
+    // Сессия истекла или вход включили в другой вкладке — на страницу входа.
+    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+      handleUnauthorized()
+    }
+
     throw new ApiError(await errorMessage(response), response.status)
   }
 

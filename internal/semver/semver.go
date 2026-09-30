@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// pattern совпадает с регулярным выражением в release.sh.
+// pattern совпадает с регулярным выражением в scripts/build.sh.
 var pattern = regexp.MustCompile(`^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$`)
 
 // Version — разобранная версия.

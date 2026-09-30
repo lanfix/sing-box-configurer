@@ -18,37 +18,31 @@ const (
 	PhaseFailed      = "failed"
 )
 
-// ComponentState описывает замену одного контейнера.
-type ComponentState struct {
-	Component    string `json:"component"`
-	Name         string `json:"name"`
-	OldID        string `json:"old_id"`
-	OldImage     string `json:"old_image"`
-	NewImage     string `json:"new_image"`
-	RollbackName string `json:"rollback_name"`
-	NewID        string `json:"new_id,omitempty"`
-	Stopped      bool   `json:"stopped"`
-}
-
-// BackupFile описывает файл из папки деплоя, сохраненный перед обновлением.
+// BackupFile описывает файл, сохраненный перед обновлением.
 type BackupFile struct {
-	// Path — путь относительно папки деплоя.
+	// Path — путь относительно Target.Root.
 	Path string `json:"path"`
 }
 
 // Journal — журнал обновления. Сохраняется перед каждым действием, чтобы после падения
 // updater мог откатить изменения.
 type Journal struct {
-	ID          string           `json:"id"`
-	FromVersion string           `json:"from_version"`
-	ToVersion   string           `json:"to_version"`
-	Phase       string           `json:"phase"`
-	Step        string           `json:"step"`
-	Error       string           `json:"error,omitempty"`
-	Backups     []BackupFile     `json:"backups"`
-	Components  []ComponentState `json:"components"`
-	StartedAt   time.Time        `json:"started_at"`
-	FinishedAt  *time.Time       `json:"finished_at,omitempty"`
+	ID          string `json:"id"`
+	FromVersion string `json:"from_version"`
+	ToVersion   string `json:"to_version"`
+	Phase       string `json:"phase"`
+	Step        string `json:"step"`
+	Error       string `json:"error,omitempty"`
+
+	// Stopped — прежнюю версию могли остановить: при откате ее нужно вернуть.
+	Stopped bool `json:"stopped"`
+
+	// State — данные платформы для отката (контейнеры, пути бинарников).
+	State map[string]string `json:"state"`
+
+	Backups    []BackupFile `json:"backups"`
+	StartedAt  time.Time    `json:"started_at"`
+	FinishedAt *time.Time   `json:"finished_at,omitempty"`
 
 	path string
 }
@@ -79,6 +73,10 @@ func loadJournal(updatesDir, id string) (*Journal, error) {
 
 	journal.path = path
 
+	if journal.State == nil {
+		journal.State = map[string]string{}
+	}
+
 	return &journal, nil
 }
 
@@ -91,8 +89,9 @@ func newJournal(updatesDir, id string) *Journal {
 		Phase:       PhaseRunning,
 		Step:        "",
 		Error:       "",
+		Stopped:     false,
+		State:       map[string]string{},
 		Backups:     []BackupFile{},
-		Components:  []ComponentState{},
 		StartedAt:   time.Now().UTC(),
 		FinishedAt:  nil,
 		path:        journalPath(updatesDir, id),

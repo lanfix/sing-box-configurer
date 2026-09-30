@@ -3,15 +3,159 @@
 Веб-приложение на Go и Vue 3 для управления sing-box: правилами маршрутизации, группами, DNS, outbound-ами,
 inbound-ами и подписками.
 
+## Установка
+
+Конфигуратор ставится на Linux-сервер или роутер вместе с sing-box
+([sing-box-lx](https://github.com/Leadaxe/sing-box-lx) — сборка с поддержкой AmneziaWG). Есть два варианта:
+
+- **Docker** — sing-box и конфигуратор в контейнерах docker compose;
+- **systemd** — без Docker: оба работают службами systemd.
+
+Возможности одинаковые, включая обновление конфигуратора из интерфейса. После установки откройте
+`http://<адрес-сервера>:8080`, задайте логин и пароль в «Система → Настройки → Доступ к панели», настройте
+группы, DNS и серверы и примените конфиг на странице «Конфиг».
+
+**Требования**
+
+- Linux на amd64, arm64 или armv7, доступ root.
+- Свободный порт 53: sing-box принимает DNS-запросы на `0.0.0.0:53`. В Ubuntu и Debian его обычно занимает
+  systemd-resolved — отключите его DNS-заглушку:
+
+  ```bash
+  sudo mkdir -p /etc/systemd/resolved.conf.d && printf '[Resolve]\nDNSStubListener=no\n' | sudo tee /etc/systemd/resolved.conf.d/no-stub.conf && sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf && sudo systemctl restart systemd-resolved
+  ```
+
+- Свободный порт 8080 (панель) и 9090 (Clash API sing-box).
+
+### Docker
+
+Нужен Docker с плагином compose (`docker compose version`). Скопируйте блок целиком — он создаст
+`/opt/sing-box-configurer/docker-compose.yaml` и запустит контейнеры:
+
+```bash
+sudo mkdir -p /opt/sing-box-configurer && cd /opt/sing-box-configurer && sudo tee docker-compose.yaml > /dev/null <<'EOF'
+services:
+  sing-box-configurer:
+    image: docker.io/lanfix/sing-box-configurer:latest
+    container_name: sing-box-configurer
+    restart: always
+    ports:
+      - 8080:8080
+    # Clash API sing-box (сеть хоста) доступен конфигуратору по адресу host.docker.internal.
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      # app.json (все настройки) и резервные копии конфига sing-box.
+      - ./data:/app/data
+      # Рабочий конфиг sing-box: конфигуратор атомарно заменяет его при применении.
+      - ./sing-box:/etc/sing-box
+      # Управление контейнером sing-box и обновление конфигуратора.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  sing-box:
+    image: docker.io/lanfix/sing-box-lx:v1.14.1-lx.8
+    container_name: sing-box
+    restart: always
+    network_mode: host
+    command: -D /var/lib/sing-box -c /etc/sing-box/config.json run
+    # По этим лейблам конфигуратор находит контейнер sing-box.
+    labels:
+      - app=sing-box
+      - managed=true
+    depends_on:
+      - sing-box-configurer
+    volumes:
+      - ./sing-box:/etc/sing-box:ro
+      - sing-box:/var/lib/sing-box
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+
+volumes:
+  sing-box:
+EOF
+sudo docker compose up -d
+```
+
+При первом запуске конфигуратор записывает стартовый конфиг sing-box, и sing-box запускается с ним.
+Каталоги `data` и `sing-box` монтируются целиком: так файлы заменяются атомарно (временный файл и rename).
+
+Удаление: `cd /opt/sing-box-configurer && sudo docker compose down -v && cd / && sudo rm -rf /opt/sing-box-configurer`.
+
+### systemd (без Docker)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/install.sh | sudo bash
+```
+
+Скрипт [`install.sh`](install.sh) скачивает sing-box-lx и последний релиз конфигуратора с GitHub (архивы
+сверяются по `SHA256SUMS`), создает службы `sing-box` и `sing-box-configurer` и запускает их. Можно сразу
+закрыть панель паролем:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/install.sh | sudo ADMIN_USER=admin ADMIN_PASSWORD='надежный-пароль' bash
+```
+
+Другие параметры (переменные окружения): `VERSION` — версия конфигуратора, `SING_BOX_VERSION` — версия
+sing-box-lx, `SKIP_SING_BOX=1` — не ставить sing-box (он уже есть в `/usr/local/bin/sing-box`), `LISTEN_ADDR` —
+адрес панели. Повторный запуск обновляет бинарники и юниты, данные не трогает.
+
+| Путь | Что там |
+|---|---|
+| `/usr/local/bin/sing-box-configurer`, `/usr/local/bin/sing-box` | бинарники |
+| `/etc/sing-box-configurer/config.json` | конфиг конфигуратора |
+| `/var/lib/sing-box-configurer/` | `app.json`, резервные копии конфига sing-box, журналы обновлений |
+| `/etc/sing-box/config.json` | рабочий конфиг sing-box |
+| `/etc/systemd/system/sing-box.service`, `sing-box-configurer.service` | службы |
+
+Логи: `journalctl -u sing-box-configurer -f` и `journalctl -u sing-box -f`.
+
+Удаление:
+
+```bash
+sudo systemctl disable --now sing-box sing-box-configurer && sudo rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/sing-box-configurer.service /usr/local/bin/sing-box /usr/local/bin/sing-box-configurer && sudo rm -rf /etc/sing-box-configurer /var/lib/sing-box-configurer /etc/sing-box /var/lib/sing-box && sudo systemctl daemon-reload
+```
+
+## Доступ к панели
+
+Пока вход не включен, панелью и sing-box может управлять любой, у кого есть сетевой доступ к порту 8080.
+Логин и пароль задаются в «Система → Настройки → Доступ к панели»; чтобы изменить или выключить вход,
+нужен текущий пароль. Пароль хранится в `app.json` хэшем PBKDF2-SHA256, сессия — cookie на 30 дней, подписанная
+ключом из `app.json` (смена логина или пароля завершает все прежние сессии). После 5 неверных попыток за
+10 минут вход с этого адреса блокируется на 10 минут.
+
+Без входа доступны только страница входа, `/api/health` (проверка при обновлении) и `/api/ruleset/...`
+(rule-set-ы, которые забирает sing-box). Панель работает по HTTP — для доступа из интернета поставьте перед ней
+reverse proxy с HTTPS.
+
+Забыли пароль — выключите вход на сервере и перезапустите сервис:
+
+```bash
+# Docker
+sudo docker exec sing-box-configurer /app/sing-box-configurer auth reset && sudo docker restart sing-box-configurer
+# systemd
+sudo sing-box-configurer -config /etc/sing-box-configurer/config.json auth reset && sudo systemctl restart sing-box-configurer
+```
+
+Задать логин и пароль из консоли: `auth set -username admin` (пароль читается со стандартного ввода или
+передается флагом `-password`).
+
 ## Архитектура
 
 - **Точка правды — `app.json`.** Все настройки хранятся в нем. Конфиг sing-box не редактируется вручную:
   он рендерится из данных `app.json` и вшитого базового шаблона (`internal/render/base.json`).
 - **Рабочий конфиг меняется только атомарно.** На странице «Конфиг» видны итоговый конфиг и diff с рабочим.
-  При применении итоговый конфиг проверяется командой `sing-box check` внутри контейнера sing-box
-  (через exec docker-controller), рабочий конфиг сохраняется в резервную копию и заменяется новым,
-  sing-box перезапускается. Если sing-box не запустился, прежний конфиг восстанавливается. При случайном
-  перезапуске sing-box всегда поднимается с проверенным конфигом.
+  При применении итоговый конфиг проверяется командой `sing-box check`, рабочий конфиг сохраняется
+  в резервную копию и заменяется новым, sing-box перезапускается. Если sing-box не запустился, прежний конфиг
+  восстанавливается. При случайном перезапуске sing-box всегда поднимается с проверенным конфигом.
+- **Платформа установки** (`internal/platform`) — интерфейсы управления sing-box (check, перезапуск,
+  состояние, логи) и обновления конфигуратора. Реализации:
+  - `docker` — Docker API через смонтированный `docker.sock` (`internal/dockerapi`): `sing-box check` выполняется
+    через exec в контейнере sing-box (лейблы `app=sing-box`, `managed=true`), перезапуск — рестартом контейнера;
+  - `systemd` — `sing-box check` бинарником sing-box, `systemctl restart`, логи из journald.
+
+  Новый способ установки — еще одна реализация `platform.SingBox`, `platform.Updates` и `updater.Target`.
 - **Правила групп — remote rule-set-ы.** sing-box забирает их у конфигуратора (`/api/ruleset/...`)
   каждые 30 секунд, поэтому добавление правил и URL-источников не требует перезапуска sing-box.
 - **Интерфейс** (`view/`) — Vue 3 и vue-router: каждая страница загружается по требованию,
@@ -90,15 +234,16 @@ inbound-ами и подписками.
 - **Конфиг** — итоговый конфиг, diff с рабочим и применение. Бейдж в меню горит, если итоговый конфиг
   отличается от рабочего.
 - **Система**
-  - **Настройки** — уровень логов, токен Clash API, CORS, плановая перезагрузка и перезапуск sing-box.
+  - **Настройки** — доступ к панели (логин и пароль), уровень логов, токен Clash API, CORS, плановая
+    перезагрузка и перезапуск sing-box.
   - **Обновление** — доступные версии, список изменений и журнал последнего обновления.
 
 ### Плановая перезагрузка
 
-Конфигуратор сам перезапускает sing-box по расписанию через docker-controller (раньше для этого был
-отдельный контейнер cron-scheduler). Расписание задается в формате cron (минута, час, день месяца, месяц,
-день недели; поддерживаются `*`, списки, диапазоны, шаги и `@daily`/`@hourly`/`@weekly`) и часовом поясе
-IANA. По умолчанию — ежедневно в 06:00 UTC. Перезагрузка не выполняется одновременно с применением конфига.
+Конфигуратор сам перезапускает sing-box по расписанию (`docker restart` или `systemctl restart`). Расписание
+задается в формате cron (минута, час, день месяца, месяц, день недели; поддерживаются `*`, списки,
+диапазоны, шаги и `@daily`/`@hourly`/`@weekly`) и часовом поясе IANA. По умолчанию — ежедневно в 06:00 UTC.
+Перезагрузка не выполняется одновременно с применением конфига.
 
 ### Мимо туннеля (группа bypass)
 
@@ -117,75 +262,84 @@ tun-inbound-а и отсекаются в nftables, домены матчатс�
 Пока URL-источники группы не загружены после старта, эндпоинты rule-set-ов отвечают `503`: sing-box
 оставляет закэшированный набор, а не получает неполный.
 
-## Установка
-
-Пример деплоя — каталог `deploy/`:
-
-```
-deploy/
-  docker-compose.yaml
-  sing-box-configurer.json
-  docker-controller.json
-  data/                 # app.json и резервные копии конфига sing-box (data/backups)
-  sing-box/config.json  # рабочий конфиг sing-box (стартовый — рендер новой инсталляции)
-```
-
-Каталоги `data` и `sing-box` монтируются целиком: так конфигуратор заменяет файлы атомарно
-(через временный файл и rename). При монтировании отдельных файлов запись выполняется на месте.
-
-1. Сгенерируйте ключ docker-controller: `openssl rand -hex 32` и пропишите его в `docker-controller.json`
-   (`api_key`) и `sing-box-configurer.json` (`docker_controller_api_key`).
-2. Укажите в `sing-box-configurer.json` адрес Clash API sing-box (`clash_api_base_url`), доступный из
-   контейнера конфигуратора (sing-box работает в сети хоста, например `http://192.168.1.10:9090`).
-3. `docker compose up -d`, затем откройте `http://<хост>:8080`, настройте группы и DNS и примените конфиг.
-
-### Переход с v0.5.x
-
-Обновление через UI работает и со старыми монтированиями файлов. Чтобы запись конфигов стала атомарной,
-один раз перенесите файлы в каталоги:
-
-```bash
-mkdir -p data sing-box
-mv app.json data/app.json
-mv sing-box.json sing-box/config.json
-```
-
-В `docker-compose.yaml` замените тома и команду sing-box как в `deploy/docker-compose.yaml`
-(`./data:/app/data`, `./sing-box:/etc/sing-box`, `-c /etc/sing-box/config.json`), в
-`sing-box-configurer.json` задайте `"app_data_path": "/app/data/app.json"` и `"sing_box_config_path":
-"/etc/sing-box/config.json"`, затем `docker compose up -d`.
-
 ## Конфигурация
 
-`config.json` конфигуратора:
+Конфиг сервиса передается флагом `-config` (по умолчанию `config.json` в рабочем каталоге) и необязателен:
+без него и для незаданных полей действуют значения по умолчанию платформы. Пример для systemd:
 
 ```json
 {
-  "app_data_path": "/app/data/app.json",
+  "platform": "systemd",
+  "app_data_path": "/var/lib/sing-box-configurer/app.json",
   "listen_addr": ":8080",
-  "docker_controller_url": "http://docker-controller:8081",
-  "docker_controller_api_key": "",
   "source_lists_proxy_url": "",
   "sing_box_config_path": "/etc/sing-box/config.json",
   "clash_api_base_url": "http://127.0.0.1:9090",
   "clash_api_secret": "",
   "rule_set_base_url": "",
-  "backup_dir": ""
+  "backup_dir": "",
+  "systemd": {
+    "sing_box_unit": "sing-box",
+    "sing_box_binary": "/usr/local/bin/sing-box",
+    "configurer_unit": "sing-box-configurer",
+    "release_repository": "lanfix/sing-box-configurer"
+  }
 }
 ```
 
-- **app_data_path** — файл данных приложения (точка правды).
-- **listen_addr** — адрес веб-интерфейса и API.
-- **docker_controller_url**, **docker_controller_api_key** — docker-controller: перезапуск sing-box,
-  `sing-box check` перед применением конфига и обновления.
+- **platform** — `docker` или `systemd`. По умолчанию определяется сам: `docker`, если сервис запущен
+  в контейнере.
+- **app_data_path** — файл данных приложения (точка правды). По умолчанию `/app/data/app.json` в docker
+  и `/var/lib/sing-box-configurer/app.json` в systemd.
+- **listen_addr** — адрес веб-интерфейса и API (`:8080`).
 - **source_lists_proxy_url** — прокси для загрузки URL-источников (необязательно).
-- **sing_box_config_path** — рабочий конфиг sing-box.
-- **clash_api_base_url** — адрес Clash API sing-box. Токен конфигуратор берет из рабочего конфига,
+- **sing_box_config_path** — рабочий конфиг sing-box (`/etc/sing-box/config.json`).
+- **clash_api_base_url** — адрес Clash API sing-box: `http://host.docker.internal:9090` в docker (sing-box
+  работает в сети хоста), `http://127.0.0.1:9090` в systemd. Токен конфигуратор берет из рабочего конфига,
   **clash_api_secret** нужен, только если в рабочем конфиге токена нет.
 - **rule_set_base_url** — адрес, по которому sing-box забирает rule-set-ы. По умолчанию
-  `http://127.0.0.1:<порт listen_addr>` (sing-box работает в сети хоста).
+  `http://127.0.0.1:<порт listen_addr>`.
 - **backup_dir** — каталог резервных копий конфига sing-box (хранятся 10 последних). По умолчанию
   `backups` рядом с `app_data_path`.
+- **systemd** — службы sing-box и конфигуратора, бинарник sing-box для `sing-box check` и репозиторий
+  GitHub, из релизов которого загружаются обновления.
+
+## Обновления
+
+Версия приложения равна тегу релиза. Обновление запускается на странице «Система → Обновление» и выполняется
+атомарно: либо новая версия запускается и проходит проверку, либо всё возвращается в исходное состояние.
+sing-box во время обновления не перезапускается и продолжает работать; недоступен только веб-интерфейс.
+
+1. Конфигуратор запускает updater **целевой** версии, поэтому логика обновления всегда соответствует версии,
+   на которую выполняется обновление:
+   - docker — одноразовый контейнер `sing-box-configurer-updater` из образа новой версии (бинарник
+     `/app/updater`) с доступом к `docker.sock` и папке деплоя (working_dir проекта compose);
+   - systemd — архив релиза с GitHub (проверяется по `SHA256SUMS`), updater из него запускается
+     transient-службой `sing-box-configurer-updater` (`systemd-run`) и переживает перезапуск конфигуратора.
+2. Updater сохраняет бэкап данных в `.updates/<id>/backup/` (docker — смонтированные в конфигуратор файлы
+   и compose-файл, systemd — `app.json`, конфиг сервиса и рабочий конфиг sing-box), затем заменяет версию:
+   - docker — старый контейнер останавливается и переименовывается (не удаляется), новый создается с теми же
+     томами, портами, сетями и лейблами; после проверки новый тег прописывается в `docker-compose.yaml`;
+   - systemd — прежний бинарник сохраняется, новый атомарно встает на его место, служба перезапускается.
+3. Updater ждет `/api/health` новой версии: сервер отвечает только после успешных миграций данных.
+   При любой ошибке новая версия убирается, файлы восстанавливаются из бэкапа, прежняя версия запускается.
+   Причина и последние строки логов новой версии показываются в UI.
+4. Каждый шаг записывается в журнал `.updates/<id>/journal.json`. Если updater упадет, его перезапустят,
+   и он откатит незавершенное обновление. Хранятся последние 5 папок `.updates`.
+
+Общий ход обновления — `internal/updater`, шаги платформ — `updater.Target` в `internal/platform/docker`
+и `internal/platform/systemd`.
+
+### Миграции данных
+
+Версия схемы данных хранится в `app.json` (`schema_version`). Миграции описаны в
+`internal/migrations/registry.go`, выполняются при старте до загрузки данных и только вперед
+(откат — восстановление бэкапа). Новая инсталляция сразу получает последнюю версию схемы, а данные по
+умолчанию (группы, DNS-серверы, urltest `auto`, настройки) создают менеджеры при первом запуске.
+
+Прежние миграции удалены: список начинается с версии схемы 6 (v0.9.0), новая миграция добавляется в конец
+со следующим номером. Данные старше версии 6 и новее, чем знает версия приложения, сервис не запускает —
+это защищает от запуска на неподходящих данных.
 
 ## Разработка
 
@@ -193,75 +347,46 @@ mv sing-box.json sing-box/config.json
 cd view && npm ci && npm run build   # сборка интерфейса в view/dist (встраивается в бинарник)
 go build -o sing-box-configurer ./cmd
 cd view && npm run dev               # интерфейс с горячей перезагрузкой, API проксируется на :8080
+docker build -t sing-box-configurer .  # образ из исходников
 ```
 
 Без сборки интерфейса бинарник собирается, но вместо интерфейса отдает заглушку.
 
-## Обновления
-
-Версия приложения равна тегу docker-образа (`docker.io/lanfix/sing-box-configurer:vX.Y.Z`).
-Обновление запускается на странице «Система → Обновление» и выполняется атомарно: либо новая версия
-запускается и проходит проверку, либо всё возвращается в исходное состояние.
-
-### Как это работает
-
-1. Конфигуратор через docker-controller запускает одноразовый контейнер `sing-box-configurer-updater`
-   из образа **целевой** версии (бинарник `/app/updater`). Логика обновления всегда соответствует
-   версии, на которую выполняется обновление.
-2. Updater работает в сети compose-проекта и управляет контейнерами **только через API docker-controller**
-   (доступа к `docker.sock` у него нет, смонтирована лишь папка деплоя):
-   - скачивает образ новой версии;
-   - при необходимости сначала обновляет docker-controller до версии, которую требует новый релиз
-     (контроллер обновляет себя сам — см. ниже);
-   - сохраняет бэкап смонтированных в конфигуратор файлов и каталогов, а также compose-файла в `.updates/<id>/backup/`;
-   - через контроллер заменяет контейнер конфигуратора: старый останавливается и переименовывается
-     (не удаляется), новый создается с теми же томами, портами, сетями и лейблами;
-   - ждет `/api/health` новой версии: сервер отвечает только после успешных миграций данных;
-   - прописывает новые теги образов в `docker-compose.yaml`;
-   - удаляет старые контейнеры, хранит последние 5 папок `.updates`.
-3. При любой ошибке updater удаляет новые контейнеры, восстанавливает файлы из бэкапа и запускает
-   старые контейнеры. Причина и последние строки логов новой версии показываются в UI.
-4. Каждый шаг записывается в журнал `.updates/<id>/journal.json`. Если updater упадет, docker
-   перезапустит его, и он откатит незавершенное обновление.
-
-**Обновление docker-controller.** Контроллер не может пересоздать себя через собственный API, поэтому
-по запросу `POST /api/self-update` он запускает job из нового образа контроллера (`docker-controller self-update`).
-Job заменяет контейнер контроллера, ждет ответа новой версии и при ошибке сам возвращает прежний контейнер.
-Контроллер не хранит состояния, а его новые версии совместимы со старыми версиями конфигуратора, поэтому при
-откате конфигуратора контроллер остается обновленным.
-
-sing-box во время обновления не перезапускается и продолжает работать; недоступен только веб-интерфейс.
-
-### Миграции данных
-
-Версия схемы данных хранится в `app.json` (`schema_version`). Миграции описаны в
-`internal/migrations/registry.go`, выполняются при старте до загрузки данных и только вперед
-(откат — восстановление бэкапа). Новая миграция добавляется в конец списка со следующим номером;
-старые миграции не удаляются и не меняются. Если данные новее, чем знает версия приложения,
-сервис не запускается — это защищает от запуска старой версии на мигрированных данных.
-
 ### Релиз
 
+Релиз собирает GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)) по тегу:
+
 ```bash
-./release.sh v1.2.3          # сборка образа (buildah или docker)
-./release.sh v1.2.3 --push   # сборка и публикация
+git tag v1.2.3 && git push origin v1.2.3
 ```
 
-Скрипт проверяет формат semver и отсутствие тега в Docker Hub, передает версию в бинарники
-и лейблы образа. Изменения релиза берутся из секции `## v1.2.3` файла `CHANGELOG.md`.
-Если релиз требует новой версии docker-controller, поднимите `ControllerVersion` в
-`internal/updater/updater.go` — updater обновит контроллер первым.
+1. Интерфейс и бинарники `sing-box-configurer` и `updater` собираются один раз
+   ([`scripts/build.sh`](scripts/build.sh)) для linux/amd64, linux/arm64 и linux/arm/v7.
+2. Docker-образ `docker.io/lanfix/sing-box-configurer:v1.2.3` (и `latest` для релизов без суффикса)
+   собирается из **этих же** бинарников: стадия `binaries` Dockerfile подменяется через
+   `--build-context binaries=dist`.
+3. Архивы `sing-box-configurer_v1.2.3_linux_<arch>.tar.gz` и `SHA256SUMS` ([`scripts/package.sh`](scripts/package.sh))
+   публикуются в GitHub Release.
+
+Изменения релиза берутся из секции `## v1.2.3` файла `CHANGELOG.md` ([`scripts/changelog.sh`](scripts/changelog.sh))
+и попадают в текст GitHub Release и лейбл образа `io.lanfix.changelog`. Нужны секреты репозитория
+`DOCKERHUB_USERNAME` и `DOCKERHUB_TOKEN`. Проверки (vet, тесты, сборка) на каждый push —
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## API
 
 Все изменения сохраняются в `app.json` и сразу попадают в итоговый конфиг; рабочий конфиг sing-box
-меняется только через `POST /api/config/apply`. Ошибки возвращаются как `{"error": "..."}`.
+меняется только через `POST /api/config/apply`. Ошибки возвращаются как `{"error": "..."}`. Если вход включен,
+методы без сессии отвечают `401` (кроме помеченных как публичные).
 
 | Метод | Путь | Описание |
 |---|---|---|
-| GET | `/api/health` | Версия приложения и схемы данных (для updater) |
-| GET | `/api/ruleset/domain?group=`, `/api/ruleset/ip?group=`, `/api/ruleset/group?group=` | Rule-set группы: домены, IP или все значения (ETag, 304, 503 до загрузки источников) |
-| GET | `/api/ruleset/bypass` | Rule-set группы bypass |
+| GET | `/api/health` | Версия приложения, платформа и версия схемы данных (для updater, публичный) |
+| GET | `/api/auth/status` | `{"enabled", "authenticated", "username"}` (публичный) |
+| POST | `/api/auth/login`, `/api/auth/logout` | Вход (`{"username", "password"}`, 429 — много попыток) и выход (публичные) |
+| GET/POST | `/api/auth/settings` | Вход в панель: `{"enabled", "username", "password", "current_password"}` |
+| GET | `/api/ruleset/domain?group=`, `/api/ruleset/ip?group=`, `/api/ruleset/group?group=` | Rule-set группы: домены, IP или все значения (ETag, 304, 503 до загрузки источников; публичный) |
+| GET | `/api/ruleset/bypass` | Rule-set группы bypass (публичный) |
 | GET/POST | `/api/rules`, `/api/rules/add`, `/api/rules/add-bulk`, `/api/rules/edit`, `/api/rules/delete`, `/api/apply` | Правила |
 | GET/POST | `/api/groups`, `/api/groups/add`, `/api/groups/edit`, `/api/groups/delete` | Группы (системные — с `"system": true`) |
 | GET/POST | `/api/url-sources`, `.../add`, `.../edit`, `.../delete`, `.../refresh`, `.../apply`, `.../validate`, `/api/url-sources/rules?id=` | URL-источники |
@@ -282,4 +407,4 @@ sing-box во время обновления не перезапускаетс�
 | GET | `/api/topology` | Карта трафика рабочего конфига: `{"nodes", "edges", "warnings"}` |
 | GET | `/api/topology/connections` | Соединения Clash API, привязанные к карте (inbound, строка маршрутизатора, цепочка outbound-ов) |
 | GET | `/api/topology/trace?query=<домен или IP>&inbound=<тег>` | Путь соединения: сработавшее правило, совпавшие правила групп, DNS-сервер, цепочка outbound-ов |
-| GET/POST | `/api/update/check`, `/api/update/start`, `/api/update/status` | Обновления |
+| GET/POST | `/api/update/check`, `/api/update/start`, `/api/update/status` | Обновления (в ответе check — также `platform`) |

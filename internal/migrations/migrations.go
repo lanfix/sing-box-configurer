@@ -17,12 +17,17 @@ import (
 // schemaVersionKey — поле app.json с версией схемы данных.
 const schemaVersionKey = "schema_version"
 
-// ErrNewerSchema возвращается, если данные созданы более новой версией приложения.
-var ErrNewerSchema = errors.New("data schema is newer than supported by this version")
+var (
+	// ErrNewerSchema возвращается, если данные созданы более новой версией приложения.
+	ErrNewerSchema = errors.New("data schema is newer than supported by this version")
+
+	// ErrOldSchema возвращается, если данные старше версии, с которой начинается список миграций.
+	ErrOldSchema = errors.New("data schema is too old: update to v0.9.0 first")
+)
 
 // Migration описывает одну миграцию.
 type Migration struct {
-	// Version — версия схемы после применения миграции. Версии идут подряд с 1.
+	// Version — версия схемы после применения миграции. Версии идут подряд с baseVersion+1.
 	Version int
 
 	// Name — краткое описание для логов.
@@ -79,21 +84,21 @@ type Result struct {
 
 // LatestVersion возвращает версию схемы, которую поддерживает эта версия приложения.
 func LatestVersion() int {
-	return latestVersion(registry)
+	return latestVersion(baseVersion, registry)
 }
 
 // Run применяет недостающие миграции из реестра.
 func Run(appData *appdata.File, singBoxStore SingBoxConfigStore) (*Result, error) {
-	return run(appData, singBoxStore, registry)
+	return run(appData, singBoxStore, baseVersion, registry)
 }
 
-// run применяет миграции из списка list.
-func run(appData *appdata.File, singBoxStore SingBoxConfigStore, list []Migration) (*Result, error) {
-	if err := validate(list); err != nil {
+// run применяет миграции из списка list, который начинается с версии base+1.
+func run(appData *appdata.File, singBoxStore SingBoxConfigStore, base int, list []Migration) (*Result, error) {
+	if err := validate(base, list); err != nil {
 		return nil, err
 	}
 
-	latest := latestVersion(list)
+	latest := latestVersion(base, list)
 
 	fields, err := appData.ReadRaw()
 	if err != nil && !errors.Is(err, appdata.ErrNotExist) {
@@ -124,6 +129,10 @@ func run(appData *appdata.File, singBoxStore SingBoxConfigStore, list []Migratio
 
 	if current > latest {
 		return nil, fmt.Errorf("%w: data version %d, supported %d", ErrNewerSchema, current, latest)
+	}
+
+	if current < base {
+		return nil, fmt.Errorf("%w: data version %d, minimal %d", ErrOldSchema, current, base)
 	}
 
 	result := &Result{
@@ -187,11 +196,11 @@ func writeSchemaVersion(appData *appdata.File, version int) error {
 	return nil
 }
 
-// validate проверяет, что версии миграций идут подряд с 1.
-func validate(list []Migration) error {
+// validate проверяет, что версии миграций идут подряд с base+1.
+func validate(base int, list []Migration) error {
 	for i, migration := range list {
-		if migration.Version != i+1 {
-			return fmt.Errorf("migration #%d has version %d, expected %d", i, migration.Version, i+1)
+		if migration.Version != base+i+1 {
+			return fmt.Errorf("migration #%d has version %d, expected %d", i, migration.Version, base+i+1)
 		}
 
 		if migration.Up == nil {
@@ -202,7 +211,7 @@ func validate(list []Migration) error {
 	return nil
 }
 
-// latestVersion возвращает версию последней миграции списка.
-func latestVersion(list []Migration) int {
-	return len(list)
+// latestVersion возвращает версию последней миграции списка, который начинается с версии base+1.
+func latestVersion(base int, list []Migration) int {
+	return base + len(list)
 }

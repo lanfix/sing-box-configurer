@@ -2,13 +2,23 @@
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
+import { auth, loadAuthStatus, onUnauthorized, safeRedirect } from './stores/auth'
+
 declare module 'vue-router' {
   interface RouteMeta {
     title: string
+    // public — страница доступна без входа.
+    public?: boolean
   }
 }
 
 const routes: RouteRecordRaw[] = [
+  {
+    path: '/login',
+    name: 'login',
+    component: () => import('./pages/LoginPage.vue'),
+    meta: { title: 'Вход', public: true },
+  },
   {
     path: '/',
     name: 'overview',
@@ -131,4 +141,32 @@ export const router = createRouter({
 
 router.afterEach((to) => {
   document.title = to.meta.title ? `${to.meta.title} — Sing-Box Конфигуратор` : 'Sing-Box Конфигуратор'
+})
+
+// Пока вход не выполнен, страницы панели закрыты: роутер ведет на страницу входа и возвращает обратно.
+router.beforeEach(async (to) => {
+  if (!auth.loaded) {
+    await loadAuthStatus()
+  }
+
+  const locked = auth.enabled && !auth.authenticated
+
+  if (to.meta.public) {
+    return to.name === 'login' && !locked ? safeRedirect(to.query.redirect) : true
+  }
+
+  if (locked) {
+    return { name: 'login', query: to.fullPath === '/' ? {} : { redirect: to.fullPath } }
+  }
+
+  return true
+})
+
+// Ответ 401 от API — сессия истекла: на страницу входа с возвратом на текущую страницу.
+onUnauthorized(() => {
+  const current = router.currentRoute.value
+
+  if (!current.meta.public) {
+    void router.push({ name: 'login', query: { redirect: current.fullPath } })
+  }
 })

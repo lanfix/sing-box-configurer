@@ -1,57 +1,41 @@
-// Package update проверяет наличие новых версий и запускает обновление через updater-job.
+// Package update проверяет наличие новых версий и запускает обновление средствами платформы установки.
 package update
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
-	"net"
-	"os"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
+	"github.com/lanfix/sing-box-configurer/internal/platform"
 	"github.com/lanfix/sing-box-configurer/internal/semver"
 	"github.com/lanfix/sing-box-configurer/internal/version"
 )
 
 const (
-	// UpdaterContainerName — фиксированное имя job-контейнера: Docker не даст запустить два обновления сразу.
-	UpdaterContainerName = "sing-box-configurer-updater"
-
-	// updaterLabel помечает job-контейнеры обновления.
-	updaterLabel = "io.lanfix.updater"
-
-	// Лейблы docker compose.
-	composeServiceLabel    = "com.docker.compose.service"
-	composeProjectLabel    = "com.docker.compose.project"
-	composeWorkingDirLabel = "com.docker.compose.project.working_dir"
-
-	// Имя сервиса docker-controller в compose-файле.
-	controllerServiceName = "docker-controller"
-
 	// Как долго кэшировать результат проверки обновлений.
 	checkCacheTTL = time.Hour
 
 	// Сколько последних релизов показывать со списком изменений.
 	maxChangelogReleases = 10
-
-	// Репозиторий образа конфигуратора в Docker Hub.
-	defaultRepository = "lanfix/sing-box-configurer"
 )
 
 // CheckResult — результат проверки обновлений.
 type CheckResult struct {
-	CurrentVersion string    `json:"current_version"`
-	LatestVersion  string    `json:"latest_version"`
-	Available      []Release `json:"available"`
-	CheckedAt      time.Time `json:"checked_at"`
-	Error          string    `json:"error,omitempty"`
+	CurrentVersion string             `json:"current_version"`
+	LatestVersion  string             `json:"latest_version"`
+	Available      []platform.Release `json:"available"`
+	CheckedAt      time.Time          `json:"checked_at"`
+	Error          string             `json:"error,omitempty"`
+
+	// Platform — способ установки (docker, systemd).
+	Platform string `json:"platform"`
+
 	// Unsupported — почему обновление через интерфейс недоступно (например, локальная сборка). Это не ошибка:
 	// версии для справки все равно проверяются, но Available остается пустым.
 	Unsupported string `json:"unsupported,omitempty"`
@@ -83,27 +67,20 @@ type Status struct {
 
 // Service управляет проверкой и запуском обновлений.
 type Service struct {
-	controller *dockercontroller.Provider
-	registry   *Registry
-	listenPort string
+	platform string
+	updates  platform.Updates
 
 	mu        sync.Mutex
 	lastCheck *CheckResult
 }
 
-// NewService создает сервис обновлений. listenAddr — адрес HTTP-сервера конфигуратора (нужен порт для health-check).
-func NewService(controller *dockercontroller.Provider, registry *Registry, listenAddr string) *Service {
-	_, port, err := net.SplitHostPort(listenAddr)
-	if err != nil || port == "" {
-		port = "8080"
-	}
-
+// NewService создает сервис обновлений для платформы установки.
+func NewService(p platform.Platform) *Service {
 	return &Service{
-		controller: controller,
-		registry:   registry,
-		listenPort: port,
-		mu:         sync.Mutex{},
-		lastCheck:  nil,
+		platform:  p.Name,
+		updates:   p.Updates,
+		mu:        sync.Mutex{},
+		lastCheck: nil,
 	}
 }
 
@@ -119,25 +96,23 @@ func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 	result := &CheckResult{
 		CurrentVersion: version.Version,
 		LatestVersion:  "",
-		Available:      []Release{},
+		Available:      []platform.Release{},
 		CheckedAt:      time.Now(),
 		Error:          "",
-		Unsupported:    "",
+		Platform:       s.platform,
+		Unsupported:    s.updates.Unsupported(ctx),
 	}
 
 	s.lastCheck = result
 
-	repository, localImage := s.repository(ctx)
-	result.Unsupported = unsupportedReason(localImage)
-
-	releases, err := s.registry.Releases(ctx, repository)
+	releases, err := s.updates.Releases(ctx)
 	if err != nil {
 		result.Error = err.Error()
 
 		return result
 	}
 
-	// Локальная сборка обновляется пересборкой образа: показываем только последний релиз для справки.
+	// Обновление через интерфейс недоступно: показываем только последний релиз для справки.
 	if result.Unsupported != "" {
 		for _, release := range releases {
 			if result.LatestVersion == "" || semver.Compare(release.Version, result.LatestVersion) > 0 {
@@ -155,7 +130,7 @@ func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 	}
 
 	// Новые версии первыми.
-	slices.SortFunc(result.Available, func(a, b Release) int {
+	slices.SortFunc(result.Available, func(a, b platform.Release) int {
 		return semver.Compare(b.Version, a.Version)
 	})
 
@@ -164,7 +139,7 @@ func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 			break
 		}
 
-		changelog, err := s.registry.Changelog(ctx, repository, result.Available[i].Version)
+		changelog, err := s.updates.Changelog(ctx, result.Available[i].Version)
 		if err != nil {
 			log.Printf("Cannot get changelog of %s: %v", result.Available[i].Version, err)
 
@@ -191,71 +166,12 @@ func (s *Service) Start(ctx context.Context, target string) (*Status, error) {
 		return nil, fmt.Errorf("version %q is not newer than current %s", target, version.Version)
 	}
 
-	self, err := s.self(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if _, local := dockerHubRepository(self.Image); local {
-		return nil, errors.New(unsupportedReason(self.Image))
-	}
-
-	workingDir := self.Labels[composeWorkingDirLabel]
-	if workingDir == "" {
-		return nil, fmt.Errorf("container %s is not managed by docker compose", self.Name)
-	}
-
-	if len(self.Networks) == 0 {
-		return nil, fmt.Errorf("container %s has no networks", self.Name)
-	}
-
-	controllerName, err := s.controllerName(ctx, self.Labels[composeProjectLabel])
-	if err != nil {
-		return nil, err
-	}
-
-	if err = s.removeFinishedUpdater(ctx); err != nil {
-		return nil, err
-	}
-
-	repository, _, _ := strings.Cut(self.Image, ":")
-	if strings.Count(self.Image, ":") > 1 || strings.Contains(repository, "@") {
-		return nil, fmt.Errorf("unsupported image reference %q", self.Image)
-	}
-
 	updateID := time.Now().UTC().Format("20060102-150405")
 
-	job, err := s.controller.RunContainer(ctx, dockercontroller.RunRequest{
-		Image: repository + ":" + target,
-		Name:  UpdaterContainerName,
-		Cmd:   []string{"/app/updater"},
-		Env: []string{
-			"UPDATE_ID=" + updateID,
-			"CONFIGURER_CONTAINER=" + self.Name,
-			"CONTROLLER_CONTAINER=" + controllerName,
-			fmt.Sprintf("CONFIGURER_HEALTH_URL=http://%s:%s/api/health", self.Name, s.listenPort),
-			"CONTROLLER_URL=" + s.controller.BaseURL(),
-			"CONTROLLER_API_KEY=" + s.controller.APIKey(),
-		},
-		Labels: map[string]string{
-			updaterLabel:             "true",
-			updaterLabel + ".id":     updateID,
-			updaterLabel + ".target": target,
-		},
-		// Updater работает с Docker только через API контроллера — ему нужна лишь папка деплоя.
-		Binds: []string{
-			workingDir + ":/deploy",
-		},
-		Network:       self.Networks[0],
-		RestartPolicy: "on-failure",
-		MaxRetries:    3,
-		Pull:          true,
-	})
+	startedAt, err := s.updates.Start(ctx, updateID, target)
 	if err != nil {
-		return nil, fmt.Errorf("cannot start updater: %w", err)
+		return nil, err
 	}
-
-	log.Printf("Update %s to %s started in container %s", updateID, target, job.Name)
 
 	return &Status{
 		Exists:      true,
@@ -267,62 +183,42 @@ func (s *Service) Start(ctx context.Context, target string) (*Status, error) {
 		ToVersion:   target,
 		Error:       "",
 		Steps:       []StatusStep{},
-		StartedAt:   job.StartedAt,
+		StartedAt:   startedAt.Format(time.RFC3339Nano),
 		FinishedAt:  "",
 	}, nil
 }
 
-// Status возвращает состояние последнего обновления по job-контейнеру и его логам.
+// Status возвращает состояние последнего обновления по процессу updater и его логам.
 func (s *Service) Status(ctx context.Context) (*Status, error) {
-	containers, err := s.controller.ListContainers(ctx, dockercontroller.ContainerFilter{
-		ID:   "",
-		Name: "",
-		Labels: map[string]string{
-			updaterLabel: "true",
-		},
-	})
+	job, err := s.updates.Job(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	status := &Status{
-		Exists:      false,
-		Running:     false,
-		UpdateID:    "",
-		Target:      "",
+		Exists:      job.Exists,
+		Running:     job.Running,
+		UpdateID:    job.UpdateID,
+		Target:      job.Target,
 		Result:      "",
 		FromVersion: "",
 		ToVersion:   "",
 		Error:       "",
 		Steps:       []StatusStep{},
-		StartedAt:   "",
-		FinishedAt:  "",
+		StartedAt:   job.StartedAt,
+		FinishedAt:  job.FinishedAt,
 	}
 
-	if len(containers) == 0 {
+	if !job.Exists {
 		return status, nil
 	}
 
-	job := containers[0]
-
-	status.Exists = true
-	status.Running = job.Running || job.State == "restarting"
-	status.UpdateID = job.Labels[updaterLabel+".id"]
-	status.Target = job.Labels[updaterLabel+".target"]
-	status.StartedAt = job.StartedAt
-	status.FinishedAt = job.FinishedAt
-
-	logs, err := s.controller.ContainerLogs(ctx, job.ID, "all")
-	if err != nil {
-		return nil, err
-	}
-
-	parseUpdaterLogs(logs, status)
+	parseUpdaterLogs(job.Logs, status)
 
 	// Updater завершился без итоговой строки — он упал и исчерпал перезапуски.
 	if !status.Running && status.Result == "" {
 		status.Result = "failed"
-		status.Error = fmt.Sprintf("updater exited with code %d without result; last logs:\n%s", job.ExitCode, lastLines(logs, 20))
+		status.Error = fmt.Sprintf("updater exited with code %d without result; last logs:\n%s", job.ExitCode, lastLines(job.Logs, 20))
 	}
 
 	return status, nil
@@ -366,117 +262,6 @@ func parseUpdaterLogs(logs string, status *Status) {
 			Error:   line.Error,
 		})
 	}
-}
-
-// self находит контейнер конфигуратора. Hostname контейнера по умолчанию — его короткий ID.
-func (s *Service) self(ctx context.Context) (*dockercontroller.Container, error) {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return nil, fmt.Errorf("cannot get hostname: %w", err)
-	}
-
-	containers, err := s.controller.ListContainers(ctx, dockercontroller.ContainerFilter{
-		ID:     hostname,
-		Name:   "",
-		Labels: nil,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	if len(containers) != 1 {
-		return nil, fmt.Errorf("cannot find own container by hostname %q (is the service running in docker without custom hostname?)", hostname)
-	}
-
-	return &containers[0], nil
-}
-
-// controllerName находит контейнер docker-controller в том же compose-проекте.
-func (s *Service) controllerName(ctx context.Context, project string) (string, error) {
-	containers, err := s.controller.ListContainers(ctx, dockercontroller.ContainerFilter{
-		ID:   "",
-		Name: "",
-		Labels: map[string]string{
-			composeProjectLabel: project,
-			composeServiceLabel: controllerServiceName,
-		},
-	})
-	if err != nil {
-		return "", err
-	}
-
-	if len(containers) != 1 {
-		return "", fmt.Errorf("cannot find %s container in compose project %q", controllerServiceName, project)
-	}
-
-	return containers[0].Name, nil
-}
-
-// removeFinishedUpdater удаляет завершенный job-контейнер прошлого обновления.
-func (s *Service) removeFinishedUpdater(ctx context.Context) error {
-	containers, err := s.controller.ListContainers(ctx, dockercontroller.ContainerFilter{
-		ID:   "",
-		Name: "",
-		Labels: map[string]string{
-			updaterLabel: "true",
-		},
-	})
-	if err != nil {
-		return err
-	}
-
-	for _, job := range containers {
-		if job.Running || job.State == "restarting" {
-			return errors.New("update is already in progress")
-		}
-
-		if err = s.controller.DeleteContainer(ctx, job.ID); err != nil {
-			return fmt.Errorf("cannot remove previous updater: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// repository возвращает репозиторий образа в Docker Hub (например lanfix/sing-box-configurer) и имя образа,
-// если он собран локально (docker compose build) — тогда используется репозиторий по умолчанию.
-// Если свой контейнер найти нельзя (docker-controller недоступен), тоже используется репозиторий по умолчанию.
-func (s *Service) repository(ctx context.Context) (string, string) {
-	self, err := s.self(ctx)
-	if err != nil {
-		log.Printf("Cannot detect own image, using default repository: %v", err)
-
-		return defaultRepository, ""
-	}
-
-	if repository, local := dockerHubRepository(self.Image); !local {
-		return repository, ""
-	}
-
-	return defaultRepository, self.Image
-}
-
-// dockerHubRepository возвращает репозиторий образа в Docker Hub. local — образ собран локально
-// (например, deploy-sing-box-configurer после docker compose build) и в Docker Hub его нет.
-func dockerHubRepository(image string) (string, bool) {
-	repository, _, _ := strings.Cut(image, ":")
-	repository = strings.TrimPrefix(repository, "docker.io/")
-
-	return repository, strings.Count(repository, "/") != 1
-}
-
-// unsupportedReason возвращает причину, по которой обновление через интерфейс недоступно, или пустую строку.
-// localImage — имя локально собранного образа.
-func unsupportedReason(localImage string) string {
-	if localImage != "" {
-		return fmt.Sprintf("Конфигуратор запущен из локально собранного образа %s. Чтобы обновиться, пересоберите его: docker compose up -d --build.", localImage)
-	}
-
-	if !semver.IsValid(version.Version) {
-		return fmt.Sprintf("Сборка %s не является релизом: обновление через интерфейс недоступно, пересоберите образ из новой версии кода.", version.Version)
-	}
-
-	return ""
 }
 
 // lastLines возвращает последние n строк текста.

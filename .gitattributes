@@ -1,0 +1,3 @@
+# Скрипты выполняются в Linux (сборка образа, CI, установка): переводы строк только LF.
+*.sh text eol=lf
+Dockerfile text eol=lf

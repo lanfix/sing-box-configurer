@@ -1,15 +1,18 @@
-// Package updater обновляет sing-box-configurer и docker-controller.
+// Package updater обновляет sing-box-configurer.
 //
-// Updater запускается как одноразовый контейнер (job) из образа целевой версии конфигуратора,
-// поэтому логика обновления всегда соответствует версии, на которую выполняется обновление.
-// С Docker updater работает только через API docker-controller. Каждое действие записывается
-// в журнал; при ошибке или после падения updater откатывает контейнер и восстанавливает файлы из бэкапа.
+// Updater — отдельный процесс из новой версии конфигуратора (job-контейнер в docker, transient unit
+// в systemd), поэтому логика обновления всегда соответствует версии, на которую выполняется обновление.
+// Общий ход обновления (журнал, бэкап файлов, проверка новой версии, откат) описан здесь, а действия,
+// зависящие от способа установки, выполняет Target платформы. Каждое действие записывается в журнал;
+// при ошибке или после падения updater возвращает прежнюю версию и восстанавливает файлы из бэкапа.
 package updater
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,112 +20,129 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lanfix/sing-box-configurer/internal/repository/dockercontroller"
 	"github.com/lanfix/sing-box-configurer/internal/semver"
 	"github.com/lanfix/sing-box-configurer/internal/version"
 )
 
-// Версии, которые требует эта версия конфигуратора.
-const (
-	// ControllerVersion — версия docker-controller, с которой работает эта версия конфигуратора.
-	// При изменении API контроллера версию нужно поднять: updater обновит контроллер первым.
-	// Новые версии контроллера должны оставаться совместимыми со старыми версиями конфигуратора:
-	// при откате конфигуратора контроллер не откатывается.
-	ControllerVersion = "v0.0.3"
-
-	// MinUpgradeFrom — минимальная версия, с которой можно обновиться на эту. Пустая — без ограничений.
-	MinUpgradeFrom = ""
-)
-
-// ComponentConfigurer — название компонента конфигуратора в журнале.
-const ComponentConfigurer = "sing-box-configurer"
+// MinUpgradeFrom — минимальная версия, с которой можно обновиться на эту. Пустая — без ограничений.
+const MinUpgradeFrom = ""
 
 // Шаги обновления (пишутся в журнал и логи).
 const (
-	stepPrepare    = "prepare"
-	stepPull       = "pull"
-	stepController = "update-controller"
-	stepBackup     = "backup"
-	stepConfigurer = "update-configurer"
-	stepCompose    = "update-compose"
-	stepCommit     = "commit"
-	stepRollback   = "rollback"
-)
-
-// Лейблы docker compose, по которым находится папка деплоя.
-const (
-	composeWorkingDirLabel  = "com.docker.compose.project.working_dir"
-	composeConfigFilesLabel = "com.docker.compose.project.config_files"
+	StepPrepare  = "prepare"
+	StepDownload = "download"
+	StepBackup   = "backup"
+	StepReplace  = "update-configurer"
+	StepFinish   = "finish"
+	StepCommit   = "commit"
+	StepRollback = "rollback"
 )
 
 const (
-	// LocalDeployDir — точка монтирования папки деплоя в контейнере updater.
-	LocalDeployDir = "/deploy"
-
-	// UpdatesDirName — папка с журналами и бэкапами обновлений внутри папки деплоя.
+	// UpdatesDirName — папка с журналами и бэкапами обновлений.
 	UpdatesDirName = ".updates"
+
+	// LogFileName — копия JSON-лога updater в папке обновления.
+	LogFileName = "updater.log"
 
 	// Сколько папок обновлений хранить.
 	keepUpdates = 5
 
-	configurerHealthTimeout = 2 * time.Minute
-	controllerUpdateTimeout = 3 * time.Minute
+	healthTimeout = 2 * time.Minute
+	pollInterval  = 2 * time.Second
+
+	maxFailureLogsLength = 4000
 )
 
-// Options — параметры запуска updater (передаются конфигуратором через переменные окружения).
+// Target — установленный конфигуратор, который заменяется новой версией. Реализуется платформой.
+// Данные для отката Target хранит в journal.State: журнал сохраняется после каждого шага.
+type Target interface {
+	// Root возвращает каталог, относительно которого заданы пути файлов для бэкапа.
+	Root() string
+
+	// Prepare проверяет возможность обновления, записывает в journal.FromVersion текущую версию
+	// и возвращает файлы и каталоги данных для бэкапа (пути относительно Root).
+	Prepare(ctx context.Context, journal *Journal) ([]string, error)
+
+	// Download загружает новую версию.
+	Download(ctx context.Context, journal *Journal) error
+
+	// Replace останавливает текущую версию и запускает новую.
+	Replace(ctx context.Context, journal *Journal) error
+
+	// Alive возвращает ошибку, если новая версия завершилась или перезапускается после падения.
+	Alive(ctx context.Context, journal *Journal) error
+
+	// Logs возвращает последние строки логов новой версии для текста ошибки.
+	Logs(ctx context.Context, journal *Journal) string
+
+	// Finish выполняется после успешной проверки новой версии (например, правит compose-файл).
+	Finish(ctx context.Context, journal *Journal) error
+
+	// Restore возвращает прежнюю версию на место, не запуская ее.
+	Restore(ctx context.Context, journal *Journal) error
+
+	// StartPrevious запускает прежнюю версию после восстановления файлов.
+	StartPrevious(ctx context.Context, journal *Journal) error
+
+	// Commit удаляет прежнюю версию, сохраненную для отката.
+	Commit(ctx context.Context, journal *Journal) error
+}
+
+// Options — параметры обновления.
 type Options struct {
-	UpdateID            string
-	ConfigurerContainer string
-	ControllerContainer string
-	ConfigurerHealthURL string
-	ControllerURL       string
-	ControllerAPIKey    string
+	UpdateID string
+
+	// UpdatesDir — папка журналов и бэкапов обновлений.
+	UpdatesDir string
+
+	// HealthURL — /api/health новой версии конфигуратора.
+	HealthURL string
 }
 
 // Updater выполняет обновление.
 type Updater struct {
-	opts       Options
-	controller *dockercontroller.Provider
-	http       *http.Client
-	log        *slog.Logger
-	journal    *Journal
-	paths      deployPaths
+	opts    Options
+	target  Target
+	http    *http.Client
+	log     *slog.Logger
+	journal *Journal
 }
 
 // New создает updater.
-func New(opts Options, logger *slog.Logger) (*Updater, error) {
-	if opts.UpdateID == "" || strings.ContainsAny(opts.UpdateID, `/\.`) {
-		return nil, fmt.Errorf("invalid update id %q", opts.UpdateID)
+func New(opts Options, target Target, logger *slog.Logger) (*Updater, error) {
+	if err := ValidateID(opts.UpdateID); err != nil {
+		return nil, err
 	}
 
-	if opts.ConfigurerContainer == "" || opts.ConfigurerHealthURL == "" || opts.ControllerURL == "" {
-		return nil, fmt.Errorf("configurer container, health url and controller url are required")
+	if opts.UpdatesDir == "" || opts.HealthURL == "" {
+		return nil, errors.New("updates dir and health url are required")
 	}
 
 	return &Updater{
-		opts:       opts,
-		controller: dockercontroller.NewProvider(opts.ControllerURL, opts.ControllerAPIKey),
+		opts:   opts,
+		target: target,
 		http: &http.Client{
 			Timeout: 3 * time.Second,
 		},
 		log:     logger,
 		journal: nil,
-		paths: deployPaths{
-			hostDir:  "",
-			localDir: LocalDeployDir,
-		},
 	}, nil
 }
 
-// updatesDir возвращает папку журналов обновлений.
-func (u *Updater) updatesDir() string {
-	return filepath.Join(LocalDeployDir, UpdatesDirName)
+// ValidateID проверяет ID обновления: он становится именем папки.
+func ValidateID(id string) error {
+	if id == "" || strings.ContainsAny(id, `/\.`) {
+		return fmt.Errorf("invalid update id %q", id)
+	}
+
+	return nil
 }
 
 // Run выполняет обновление. Если журнал с таким ID уже есть (updater перезапустился после падения),
 // незавершенное обновление откатывается, а завершенное — только повторно сообщает результат.
 func (u *Updater) Run(ctx context.Context) {
-	journal, err := loadJournal(u.updatesDir(), u.opts.UpdateID)
+	journal, err := loadJournal(u.opts.UpdatesDir, u.opts.UpdateID)
 	if err != nil {
 		u.result(PhaseFailed, err)
 
@@ -137,9 +157,9 @@ func (u *Updater) Run(ctx context.Context) {
 			u.log.Info("update already finished", "step", journal.Step)
 			u.result(journal.Phase, errorFromText(journal.Error))
 
-		case journal.Step == stepCommit:
+		case journal.Step == StepCommit:
 			// Новая версия уже прошла проверку — завершаем фиксацию.
-			u.log.Warn("updater restarted during commit, finishing commit", "step", stepCommit)
+			u.log.Warn("updater restarted during commit, finishing commit", "step", StepCommit)
 			u.finish(u.commit(ctx))
 
 		default:
@@ -150,7 +170,7 @@ func (u *Updater) Run(ctx context.Context) {
 		return
 	}
 
-	u.journal = newJournal(u.updatesDir(), u.opts.UpdateID)
+	u.journal = newJournal(u.opts.UpdatesDir, u.opts.UpdateID)
 
 	if err = u.update(ctx); err != nil {
 		u.rollbackAndReport(ctx, err)
@@ -163,194 +183,140 @@ func (u *Updater) Run(ctx context.Context) {
 
 // update выполняет обновление до фиксации.
 func (u *Updater) update(ctx context.Context) error {
-	if err := u.prepare(ctx); err != nil {
-		return err
-	}
-
-	configurer := u.component(ComponentConfigurer)
-
-	u.setStep(stepPull, "pulling image "+configurer.NewImage)
-
-	if err := u.controller.PullImage(ctx, configurer.NewImage); err != nil {
-		return err
-	}
-
-	if err := u.updateController(ctx); err != nil {
-		return fmt.Errorf("docker-controller update failed: %w", err)
-	}
-
-	u.setStep(stepBackup, "backing up data files")
-
-	if err := u.backup(ctx, configurer); err != nil {
-		return err
-	}
-
-	u.setStep(stepConfigurer, fmt.Sprintf("updating sing-box-configurer %s -> %s", u.journal.FromVersion, u.journal.ToVersion))
-
-	if err := u.replace(ctx, configurer); err != nil {
-		return fmt.Errorf("sing-box-configurer update failed: %w", err)
-	}
-
-	u.setStep(stepCompose, "updating image tag in compose file")
-
-	return u.updateCompose(configurer.NewImage)
-}
-
-// prepare проверяет возможность обновления и планирует замену конфигуратора.
-func (u *Updater) prepare(ctx context.Context) error {
-	u.setStep(stepPrepare, "checking current state")
-
-	info, err := u.controller.GetContainer(ctx, u.opts.ConfigurerContainer)
+	files, err := u.prepare(ctx)
 	if err != nil {
 		return err
 	}
 
-	repository, currentVersion := splitImage(info.Image)
-	target := version.Version
+	u.setStep(StepDownload, "downloading "+u.journal.ToVersion)
 
-	u.journal.FromVersion = currentVersion
-	u.journal.ToVersion = target
-
-	if !semver.IsValid(target) {
-		return fmt.Errorf("updater version %q is not a release version", target)
-	}
-
-	if semver.Compare(target, currentVersion) <= 0 {
-		return fmt.Errorf("target version %s is not newer than current %s", target, currentVersion)
-	}
-
-	if MinUpgradeFrom != "" && semver.Compare(currentVersion, MinUpgradeFrom) < 0 {
-		return fmt.Errorf("upgrade to %s requires version %s or newer, current is %s", target, MinUpgradeFrom, currentVersion)
-	}
-
-	workingDir := info.Labels[composeWorkingDirLabel]
-	if workingDir == "" {
-		return fmt.Errorf("container %s is not managed by docker compose (no %s label)", info.Name, composeWorkingDirLabel)
-	}
-
-	u.paths.hostDir = workingDir
-
-	if _, err = os.Stat(LocalDeployDir); err != nil {
-		return fmt.Errorf("deploy dir is not mounted to %s: %w", LocalDeployDir, err)
-	}
-
-	u.journal.Components = append(u.journal.Components, ComponentState{
-		Component:    ComponentConfigurer,
-		Name:         info.Name,
-		OldID:        info.ID,
-		OldImage:     info.Image,
-		NewImage:     repository + ":" + target,
-		RollbackName: fmt.Sprintf("%s-rollback-%s", info.Name, u.opts.UpdateID),
-		NewID:        "",
-		Stopped:      false,
-	})
-
-	return u.journal.Save()
-}
-
-// component возвращает состояние компонента из журнала.
-func (u *Updater) component(name string) *ComponentState {
-	for i := range u.journal.Components {
-		if u.journal.Components[i].Component == name {
-			return &u.journal.Components[i]
-		}
-	}
-
-	return nil
-}
-
-// backup сохраняет файлы, смонтированные в конфигуратор, и compose-файлы.
-func (u *Updater) backup(ctx context.Context, configurer *ComponentState) error {
-	info, err := u.controller.GetContainer(ctx, configurer.OldID)
-	if err != nil {
+	if err = u.target.Download(ctx, u.journal); err != nil {
 		return err
 	}
 
-	hostPaths := make([]string, 0, len(info.Mounts))
+	u.setStep(StepBackup, "backing up data files")
 
-	for _, mount := range info.Mounts {
-		if mount.Type == "bind" {
-			hostPaths = append(hostPaths, mount.Source)
-		}
-	}
-
-	hostPaths = append(hostPaths, composeFiles(info.Labels)...)
-
-	files := make([]string, 0, len(hostPaths))
-
-	for _, hostPath := range hostPaths {
-		rel, ok := u.paths.relative(hostPath)
-		if !ok {
-			continue
-		}
-
-		stat, err := os.Stat(u.paths.local(rel))
-		if err != nil {
-			continue
-		}
-
-		// Смонтированный каталог (например, data с app.json) бэкапится файлами.
-		if stat.IsDir() {
-			files = appendUnique(files, dirFiles(u.paths, rel)...)
-
-			continue
-		}
-
-		if stat.Mode().IsRegular() {
-			files = appendUnique(files, rel)
-		}
-	}
-
-	backups, err := backupFiles(u.paths, u.journal.Dir(), files)
-	if err != nil {
+	if err = u.backup(files); err != nil {
 		return err
 	}
 
-	u.journal.Backups = backups
-	u.log.Info("files backed up", "step", stepBackup, "files", files)
+	u.setStep(StepReplace, fmt.Sprintf("updating sing-box-configurer %s -> %s", u.journal.FromVersion, u.journal.ToVersion))
 
-	return u.journal.Save()
-}
-
-// replace заменяет контейнер конфигуратора новой версией и ждет ее готовности.
-func (u *Updater) replace(ctx context.Context, state *ComponentState) error {
-	// Флаг ставится до замены: при откате по нему понятно, что контейнер могли остановить.
-	state.Stopped = true
-
-	if err := u.journal.Save(); err != nil {
-		return err
-	}
-
-	result, err := u.controller.ReplaceContainer(ctx, state.Name, state.NewImage, state.RollbackName)
-	if err != nil {
-		return err
-	}
-
-	state.NewID = result.NewID
+	// Флаг ставится до замены: при откате по нему понятно, что прежнюю версию могли остановить.
+	u.journal.Stopped = true
 
 	if err = u.journal.Save(); err != nil {
 		return err
 	}
 
-	u.log.Info("container recreated, waiting for health", "step", stepConfigurer, "container", state.Name, "image", state.NewImage)
+	replaceErr := u.target.Replace(ctx, u.journal)
 
-	if err = u.waitHealthy(ctx, result.NewID, configurerHealthTimeout, u.configurerHealthy); err != nil {
+	// Журнал сохраняется и при ошибке: в State могут быть данные, нужные для отката.
+	if err = u.journal.Save(); err != nil {
+		return errors.Join(replaceErr, err)
+	}
+
+	if replaceErr != nil {
+		return fmt.Errorf("sing-box-configurer update failed: %w", replaceErr)
+	}
+
+	u.log.Info("new version started, waiting for health", "step", StepReplace)
+
+	if err = u.waitHealthy(ctx); err != nil {
+		return fmt.Errorf("sing-box-configurer update failed: %w", err)
+	}
+
+	u.log.Info("new version is healthy", "step", StepReplace)
+	u.setStep(StepFinish, "finishing installation")
+
+	if err = u.target.Finish(ctx, u.journal); err != nil {
 		return err
 	}
 
-	u.log.Info("container is healthy", "step", stepConfigurer, "container", state.Name)
-
-	return nil
+	return u.journal.Save()
 }
 
-// configurerHealthy проверяет, что новая версия конфигуратора запустилась (миграции прошли).
+// prepare проверяет возможность обновления и возвращает файлы для бэкапа.
+func (u *Updater) prepare(ctx context.Context) ([]string, error) {
+	u.setStep(StepPrepare, "checking current state")
+
+	u.journal.ToVersion = version.Version
+
+	files, err := u.target.Prepare(ctx, u.journal)
+
+	// Версии сохраняются и при ошибке — они попадают в итог обновления.
+	if saveErr := u.journal.Save(); saveErr != nil && err == nil {
+		err = saveErr
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	target, current := u.journal.ToVersion, u.journal.FromVersion
+
+	if !semver.IsValid(target) {
+		return nil, fmt.Errorf("updater version %q is not a release version", target)
+	}
+
+	if semver.Compare(target, current) <= 0 {
+		return nil, fmt.Errorf("target version %s is not newer than current %s", target, current)
+	}
+
+	if MinUpgradeFrom != "" && semver.Compare(current, MinUpgradeFrom) < 0 {
+		return nil, fmt.Errorf("upgrade to %s requires version %s or newer, current is %s", target, MinUpgradeFrom, current)
+	}
+
+	return files, nil
+}
+
+// backup сохраняет файлы и каталоги данных в папку обновления.
+func (u *Updater) backup(paths []string) error {
+	files := expandFiles(u.target.Root(), paths)
+
+	backups, err := backupFiles(u.target.Root(), u.journal.Dir(), files)
+	if err != nil {
+		return err
+	}
+
+	u.journal.Backups = backups
+	u.log.Info("files backed up", "step", StepBackup, "files", files)
+
+	return u.journal.Save()
+}
+
+// waitHealthy ждет, пока новая версия ответит на /api/health. Если она упала или ушла в цикл
+// перезапусков, ожидание прерывается, а в ошибку добавляются последние строки ее логов.
+func (u *Updater) waitHealthy(ctx context.Context) error {
+	deadline := time.Now().Add(healthTimeout)
+
+	var lastErr error
+
+	for time.Now().Before(deadline) {
+		if err := u.target.Alive(ctx, u.journal); err != nil {
+			return fmt.Errorf("%w%s", err, u.logsSuffix(ctx))
+		}
+
+		if lastErr = u.configurerHealthy(ctx); lastErr == nil {
+			return nil
+		}
+
+		if err := sleep(ctx, pollInterval); err != nil {
+			return err
+		}
+	}
+
+	return fmt.Errorf("health check timeout after %s: %v%s", healthTimeout, lastErr, u.logsSuffix(ctx))
+}
+
+// configurerHealthy проверяет, что запустилась новая версия конфигуратора (миграции прошли).
 func (u *Updater) configurerHealthy(ctx context.Context) error {
 	var health struct {
 		Status  string `json:"status"`
 		Version string `json:"version"`
 	}
 
-	if err := getJSON(ctx, u.http, u.opts.ConfigurerHealthURL, &health); err != nil {
+	if err := getJSON(ctx, u.http, u.opts.HealthURL, &health); err != nil {
 		return err
 	}
 
@@ -361,50 +327,30 @@ func (u *Updater) configurerHealthy(ctx context.Context) error {
 	return nil
 }
 
-// updateCompose прописывает новый тег образа в compose-файлы, чтобы docker compose up не откатил версию.
-func (u *Updater) updateCompose(image string) error {
-	configurer := u.component(ComponentConfigurer)
+// logsSuffix возвращает последние строки логов новой версии для текста ошибки.
+func (u *Updater) logsSuffix(ctx context.Context) string {
+	logs := strings.TrimSpace(u.target.Logs(ctx, u.journal))
+	if logs == "" {
+		return ""
+	}
 
-	info, err := u.controller.GetContainer(context.Background(), configurer.Name)
-	if err != nil {
+	if len(logs) > maxFailureLogsLength {
+		logs = "..." + logs[len(logs)-maxFailureLogsLength:]
+	}
+
+	return "\nlogs:\n" + logs
+}
+
+// commit удаляет прежнюю версию и старые бэкапы. После начала фиксации откат не выполняется.
+func (u *Updater) commit(ctx context.Context) error {
+	u.setStep(StepCommit, "removing previous version")
+
+	if err := u.target.Commit(ctx, u.journal); err != nil {
 		return err
 	}
 
-	repository, tag := splitImage(image)
-
-	for _, file := range composeFiles(info.Labels) {
-		rel, ok := u.paths.relative(file)
-		if !ok {
-			u.log.Warn("compose file is outside deploy dir, skipping", "step", u.journal.Step, "file", file)
-
-			continue
-		}
-
-		changed, err := setComposeImageTag(u.paths.local(rel), repository, tag)
-		if err != nil {
-			return err
-		}
-
-		if changed {
-			u.log.Info("compose file updated", "step", u.journal.Step, "file", rel, "image", image)
-		}
-	}
-
-	return nil
-}
-
-// commit удаляет старый контейнер и старые бэкапы. После начала фиксации откат не выполняется.
-func (u *Updater) commit(ctx context.Context) error {
-	u.setStep(stepCommit, "removing previous container")
-
-	for _, component := range u.journal.Components {
-		if err := u.controller.CommitContainer(ctx, component.Name, component.RollbackName); err != nil {
-			return err
-		}
-	}
-
-	if err := pruneUpdates(u.updatesDir(), u.opts.UpdateID, keepUpdates); err != nil {
-		u.log.Warn("cannot prune old updates", "step", stepCommit, "error", err.Error())
+	if err := pruneUpdates(u.opts.UpdatesDir, u.opts.UpdateID, keepUpdates); err != nil {
+		u.log.Warn("cannot prune old updates", "step", StepCommit, "error", err.Error())
 	}
 
 	return nil
@@ -413,8 +359,8 @@ func (u *Updater) commit(ctx context.Context) error {
 // finish записывает итог успешного обновления.
 func (u *Updater) finish(commitErr error) {
 	if commitErr != nil {
-		// Новая версия работает, но старый контейнер не удалился — это не повод откатываться.
-		u.log.Warn("update succeeded, but cleanup failed", "step", stepCommit, "error", commitErr.Error())
+		// Новая версия работает, но прежняя не удалилась — это не повод откатываться.
+		u.log.Warn("update succeeded, but cleanup failed", "step", StepCommit, "error", commitErr.Error())
 	}
 
 	if err := u.journal.Finish(PhaseSucceeded, nil); err != nil {
@@ -445,37 +391,35 @@ func (u *Updater) rollbackAndReport(ctx context.Context, cause error) {
 	u.result(PhaseRolledBack, cause)
 }
 
-// rollback возвращает исходный контейнер конфигуратора и восстанавливает файлы.
+// rollback возвращает прежнюю версию и восстанавливает файлы.
 func (u *Updater) rollback(ctx context.Context) error {
 	u.journal.Phase = PhaseRollingBack
-	u.setStep(stepRollback, "restoring previous state")
+	u.setStep(StepRollback, "restoring previous state")
 
-	configurer := u.component(ComponentConfigurer)
-
-	// Конфигуратор не останавливался — он продолжает работать, откатывать нечего.
+	// Прежняя версия не останавливалась — она продолжает работать, откатывать нечего.
 	// Файлы не восстанавливаем: работающий сервис мог менять данные после снятия бэкапа.
-	if configurer == nil || !configurer.Stopped {
+	if !u.journal.Stopped {
 		return nil
 	}
 
 	var errs []error
 
-	if err := u.controller.RestoreContainer(ctx, configurer.Name, configurer.OldID, configurer.RollbackName); err != nil {
+	if err := u.target.Restore(ctx, u.journal); err != nil {
 		errs = append(errs, err)
 	}
 
 	if len(u.journal.Backups) > 0 {
-		if err := restoreFiles(u.paths, u.journal.Dir(), u.journal.Backups); err != nil {
+		if err := restoreFiles(u.target.Root(), u.journal.Dir(), u.journal.Backups); err != nil {
 			errs = append(errs, err)
 		} else {
-			u.log.Info("files restored from backup", "step", stepRollback)
+			u.log.Info("files restored from backup", "step", StepRollback)
 		}
 	}
 
-	if err := u.controller.StartContainer(ctx, configurer.Name); err != nil {
+	if err := u.target.StartPrevious(ctx, u.journal); err != nil {
 		errs = append(errs, err)
 	} else {
-		u.log.Info("previous container started", "step", stepRollback, "container", configurer.Name, "image", configurer.OldImage)
+		u.log.Info("previous version started", "step", StepRollback, "version", u.journal.FromVersion)
 	}
 
 	return errors.Join(errs...)
@@ -507,29 +451,53 @@ func (u *Updater) result(phase string, err error) {
 	u.log.Info("update finished", attrs...)
 }
 
-// composeFiles возвращает пути compose-файлов проекта на хосте из лейблов контейнера.
-func composeFiles(labels map[string]string) []string {
-	result := make([]string, 0)
-
-	for _, file := range strings.Split(labels[composeConfigFilesLabel], ",") {
-		if file = strings.TrimSpace(file); file != "" {
-			result = append(result, file)
-		}
+// OpenLog открывает копию лога updater в папке обновления (дописывает: updater может перезапускаться).
+func OpenLog(updatesDir, id string) (*os.File, error) {
+	if err := ValidateID(id); err != nil {
+		return nil, err
 	}
 
-	return result
+	dir := filepath.Join(updatesDir, id)
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("cannot create update dir: %w", err)
+	}
+
+	return os.OpenFile(filepath.Join(dir, LogFileName), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 }
 
-// splitImage разделяет образ на репозиторий и тег.
-func splitImage(ref string) (string, string) {
-	slash := strings.LastIndex(ref, "/")
-	colon := strings.LastIndex(ref, ":")
-
-	if colon > slash {
-		return ref[:colon], ref[colon+1:]
+// getJSON выполняет GET-запрос и раскладывает JSON-ответ в v.
+func getJSON(ctx context.Context, client *http.Client, url string, v any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
 	}
 
-	return ref, "latest"
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s returned %d", url, resp.StatusCode)
+	}
+
+	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(v)
+}
+
+// sleep ждет d или отмены контекста.
+func sleep(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+
+	case <-time.After(d):
+		return nil
+	}
 }
 
 // errorFromText восстанавливает ошибку из журнала.

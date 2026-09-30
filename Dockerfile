@@ -1,4 +1,10 @@
-FROM docker.io/library/node:24-alpine AS view
+# Образ sing-box-configurer.
+#
+# Локально образ собирается из исходников (docker build . или docker compose build). В релизе
+# (.github/workflows/release.yml) стадия binaries подменяется бинарниками, собранными scripts/build.sh
+# (--build-context binaries=dist), поэтому в образе и в архивах релиза GitHub одни и те же файлы.
+
+FROM --platform=$BUILDPLATFORM docker.io/library/node:24-alpine AS view
 
 WORKDIR /opt/view
 
@@ -9,42 +15,42 @@ COPY view/ ./
 RUN npm run build
 
 
-FROM docker.io/library/golang:1.26.4-alpine AS builder
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.4-alpine AS builder
 
 ARG VERSION=dev
+ARG TARGETPLATFORM
 
-RUN apk add --no-cache git ca-certificates tzdata
-
-WORKDIR /opt
+WORKDIR /opt/src
 
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
 COPY . .
-COPY --from=view /opt/view/dist /opt/view/dist
+COPY --from=view /opt/view/dist ./view/dist
 
-RUN for app in sing-box-configurer:cmd updater:cmd/updater; do \
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags="-w -s -extldflags '-static' -X github.com/lanfix/sing-box-configurer/internal/version.Version=${VERSION}" \
-            -o "/opt/${app%%:*}" "/opt/${app#*:}" || exit 1; \
-    done
+RUN DIST=/opt/dist sh scripts/build.sh "$VERSION" "$TARGETPLATFORM"
 
 
-FROM docker.io/library/debian:bookworm-slim
+# Бинарники по каталогам платформ: /linux_amd64, /linux_arm64, /linux_armv7.
+FROM scratch AS binaries
+
+COPY --from=builder /opt/dist/ /
+
+
+FROM docker.io/library/alpine:3.22
 
 ARG VERSION=dev
 ARG CHANGELOG=""
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
 
 LABEL org.opencontainers.image.title="sing-box-configurer" \
       org.opencontainers.image.version="${VERSION}" \
       io.lanfix.changelog="${CHANGELOG}"
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
-COPY --from=builder --chmod=755 /opt/sing-box-configurer /opt/updater /app/
+COPY --from=binaries --chmod=755 /${TARGETOS}_${TARGETARCH}${TARGETVARIANT}/ /app/
 
 CMD ["/app/sing-box-configurer"]

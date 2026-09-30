@@ -1,4 +1,4 @@
-package update
+package docker
 
 import (
 	"context"
@@ -10,18 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lanfix/sing-box-configurer/internal/platform"
 	"github.com/lanfix/sing-box-configurer/internal/semver"
 )
 
-// Лейбл образа со списком изменений релиза (заполняется release.sh из CHANGELOG.md).
+// Лейбл образа со списком изменений релиза (заполняется при сборке из CHANGELOG.md).
 const changelogLabel = "io.lanfix.changelog"
-
-// Release — опубликованная версия образа.
-type Release struct {
-	Version     string    `json:"version"`
-	PublishedAt time.Time `json:"published_at"`
-	Changelog   string    `json:"changelog"`
-}
 
 // Registry читает теги и лейблы образов из Docker Hub.
 type Registry struct {
@@ -38,9 +32,9 @@ func NewRegistry() *Registry {
 }
 
 // Releases возвращает релизные версии (semver без pre-release) репозитория вида lanfix/sing-box-configurer.
-func (r *Registry) Releases(ctx context.Context, repository string) ([]Release, error) {
+func (r *Registry) Releases(ctx context.Context, repository string) ([]platform.Release, error) {
 	next := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/tags?page_size=100", repository)
-	result := make([]Release, 0)
+	result := make([]platform.Release, 0)
 
 	// Ограничиваем число страниц, чтобы не зациклиться на некорректном ответе.
 	for page := 0; next != "" && page < 10; page++ {
@@ -62,7 +56,7 @@ func (r *Registry) Releases(ctx context.Context, repository string) ([]Release, 
 				continue
 			}
 
-			result = append(result, Release{
+			result = append(result, platform.Release{
 				Version:     tag.Name,
 				PublishedAt: tag.LastUpdated,
 				Changelog:   "",
