@@ -7,7 +7,7 @@
 #
 # Для каждого каталога $DIST/<os>_<arch> создается $DIST/release/sing-box-configurer_VERSION_<os>_<arch>.tar.gz
 # с бинарниками sing-box-configurer и updater. Имена архивов ожидает обновление systemd-инсталляций
-# (internal/platform/systemd) и install.sh.
+# (internal/platform/systemd) и install-systemd.sh.
 
 set -eu
 

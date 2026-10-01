@@ -7,133 +7,28 @@ inbound-ами и подписками.
 
 ## Установка
 
-Конфигуратор ставится на Linux-сервер или роутер вместе с sing-box
-([sing-box-lx](https://github.com/Leadaxe/sing-box-lx) — сборка с поддержкой AmneziaWG). Есть два варианта:
+Конфигуратор ставится на Linux-сервер или роутер (amd64, arm64, armv7) вместе с sing-box
+([sing-box-lx](https://github.com/Leadaxe/sing-box-lx) — сборка с поддержкой AmneziaWG) одной командой.
+Есть два варианта с одинаковыми возможностями, включая обновление конфигуратора из интерфейса:
 
-- **Docker** — sing-box и конфигуратор в контейнерах docker compose;
-- **systemd** — без Docker: оба работают службами systemd.
-
-Возможности одинаковые, включая обновление конфигуратора из интерфейса. После установки откройте
-`http://<адрес-сервера>:8080`, задайте логин и пароль в «Система → Безопасность → Доступ к панели», настройте
-группы, DNS и серверы и примените конфиг на странице «Конфиг».
-
-**Требования**
-
-- Linux на amd64, arm64 или armv7, доступ root.
-- Свободный порт 53: sing-box принимает DNS-запросы на `0.0.0.0:53`. В Ubuntu и Debian его обычно занимает
-  systemd-resolved — отключите его DNS-заглушку:
+- **[Docker](docs/install-docker.md)** — sing-box и конфигуратор в контейнерах docker compose:
 
   ```bash
-  sudo mkdir -p /etc/systemd/resolved.conf.d && printf '[Resolve]\nDNSStubListener=no\n' | sudo tee /etc/systemd/resolved.conf.d/no-stub.conf && sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf && sudo systemctl restart systemd-resolved
+  curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/install-docker.sh | sudo bash
   ```
 
-  После этого сам сервер резолвит имена через DNS провайдера, а не через sing-box. Если вы направили DNS сервера
-  на sing-box (`nameserver 127.0.0.1` в `/etc/resolv.conf`), добавьте запасной сервер: иначе, пока sing-box
-  остановлен, сервер не резолвит имена и не скачает образы и обновления.
+- **[systemd](docs/install-systemd.md)** — без Docker, оба работают службами systemd:
 
   ```bash
-  sudo rm -f /etc/resolv.conf && printf 'nameserver 127.0.0.1\nnameserver 1.1.1.1\noptions timeout:1 attempts:1\n' | sudo tee /etc/resolv.conf
+  curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/install-systemd.sh | sudo bash
   ```
 
-- Свободный порт 8080 (панель), 9090 (Clash API sing-box) и 9091 (служебный inbound для загрузки источников).
+Параметры скриптов (логин и пароль панели, порт, версии), требования, расположение файлов, обновление
+и удаление — в документации по ссылкам. sing-box принимает DNS-запросы на порту 53: если его занимает
+DNS-заглушка systemd-resolved, скрипты ее отключают.
 
-### Docker
-
-Нужен Docker с плагином compose (`docker compose version`). Скопируйте блок целиком — он создаст
-`/opt/sing-box-configurer/docker-compose.yaml` и запустит контейнеры:
-
-```bash
-sudo mkdir -p /opt/sing-box-configurer && cd /opt/sing-box-configurer && sudo tee docker-compose.yaml > /dev/null <<'EOF'
-services:
-  sing-box-configurer:
-    image: docker.io/lanfix/sing-box-configurer:latest
-    container_name: sing-box-configurer
-    restart: always
-    ports:
-      - 8080:8080
-    # Clash API sing-box (сеть хоста) доступен конфигуратору по адресу host.docker.internal.
-    extra_hosts:
-      - host.docker.internal:host-gateway
-    volumes:
-      # app.json (все настройки) и резервные копии конфига sing-box.
-      - ./data:/app/data
-      # Рабочий конфиг sing-box: конфигуратор атомарно заменяет его при применении.
-      - ./sing-box:/etc/sing-box
-      # Управление контейнером sing-box и обновление конфигуратора.
-      - /var/run/docker.sock:/var/run/docker.sock
-
-  sing-box:
-    image: docker.io/lanfix/sing-box-lx:v1.14.1-lx.8
-    container_name: sing-box
-    restart: always
-    network_mode: host
-    command: -D /var/lib/sing-box -c /etc/sing-box/config.json run
-    # По этим лейблам конфигуратор находит контейнер sing-box.
-    labels:
-      - app=sing-box
-      - managed=true
-    depends_on:
-      - sing-box-configurer
-    volumes:
-      - ./sing-box:/etc/sing-box:ro
-      - sing-box:/var/lib/sing-box
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun
-
-volumes:
-  sing-box:
-EOF
-sudo docker compose up -d
-```
-
-При первом запуске конфигуратор записывает стартовый конфиг sing-box, и sing-box запускается с ним.
-Каталоги `data` и `sing-box` монтируются целиком: так файлы заменяются атомарно (временный файл и rename).
-
-Обновляйте конфигуратор из интерфейса. Если меняете `docker-compose.yaml` вручную, не останавливайте
-весь проект (`docker compose down`): пока sing-box выключен, хост может остаться без DNS и VPN и не скачает образы.
-Загрузите образы заранее и пересоздайте только изменившиеся контейнеры:
-
-```bash
-sudo docker compose pull && sudo docker compose up -d --remove-orphans
-```
-
-Удаление: `cd /opt/sing-box-configurer && sudo docker compose down -v && cd / && sudo rm -rf /opt/sing-box-configurer`.
-
-### systemd (без Docker)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/install.sh | sudo bash
-```
-
-Скрипт [`install.sh`](install.sh) скачивает sing-box-lx и последний релиз конфигуратора с GitHub (архивы
-сверяются по `SHA256SUMS`), создает службы `sing-box` и `sing-box-configurer` и запускает их. Можно сразу
-закрыть панель паролем:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/install.sh | sudo ADMIN_USER=admin ADMIN_PASSWORD='надежный-пароль' bash
-```
-
-Другие параметры (переменные окружения): `VERSION` — версия конфигуратора, `SING_BOX_VERSION` — версия
-sing-box-lx, `SKIP_SING_BOX=1` — не ставить sing-box (он уже есть в `/usr/local/bin/sing-box`), `LISTEN_ADDR` —
-адрес панели. Повторный запуск обновляет бинарники и юниты, данные не трогает.
-
-| Путь | Что там |
-|---|---|
-| `/usr/local/bin/sing-box-configurer`, `/usr/local/bin/sing-box` | бинарники |
-| `/etc/sing-box-configurer/config.json` | конфиг конфигуратора |
-| `/var/lib/sing-box-configurer/` | `app.json`, резервные копии конфига sing-box, журналы обновлений |
-| `/etc/sing-box/config.json` | рабочий конфиг sing-box |
-| `/etc/systemd/system/sing-box.service`, `sing-box-configurer.service` | службы |
-
-Логи: `journalctl -u sing-box-configurer -f` и `journalctl -u sing-box -f`.
-
-Удаление:
-
-```bash
-sudo systemctl disable --now sing-box sing-box-configurer && sudo rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/sing-box-configurer.service /usr/local/bin/sing-box /usr/local/bin/sing-box-configurer && sudo rm -rf /etc/sing-box-configurer /var/lib/sing-box-configurer /etc/sing-box /var/lib/sing-box && sudo systemctl daemon-reload
-```
+После установки откройте `http://<адрес-сервера>:8080`, задайте логин и пароль в «Система → Безопасность →
+Доступ к панели», настройте группы, DNS и серверы и примените конфиг на странице «Конфиг».
 
 ## Доступ к панели
 
@@ -280,8 +175,10 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
 - **Конфиг** — итоговый конфиг, diff с рабочим и применение. Бейдж в меню горит, если итоговый конфиг
   отличается от рабочего.
 - **Система**
-  - **Настройки** — доступ к панели (логин и пароль), уровень логов, токен Clash API, CORS, плановая
+  - **Настройки** — уровень логов, токен Clash API, CORS, применение обновлений подписок Happ, плановая
     перезагрузка и перезапуск sing-box.
+  - **Безопасность** — вход по логину и паролю, разрешенные доменные имена панели и описание защиты
+    от запросов с других сайтов.
   - **Обновление** — доступные версии, список изменений и журнал последнего обновления.
 
 ### Плановая перезагрузка
@@ -429,7 +326,8 @@ git tag v1.2.3 && git push origin v1.2.3
 Все изменения сохраняются в `app.json` и сразу попадают в итоговый конфиг; рабочий конфиг sing-box
 меняется через `POST /api/config/apply`, а также при обновлении подписок Happ, если включено их применение
 (переносятся только изменившиеся серверы). Ошибки возвращаются как `{"error": "..."}`. Если вход включен,
-методы без сессии отвечают `401` (кроме помеченных как публичные).
+методы без сессии отвечают `401` (кроме помеченных как публичные). Запросы со страниц других сайтов
+и по доменному имени не из списка разрешенных отклоняются с `403` (см. [Защита от чужих сайтов](#защита-от-чужих-сайтов)).
 
 | Метод | Путь | Описание |
 |---|---|---|
@@ -457,6 +355,7 @@ git tag v1.2.3 && git push origin v1.2.3
 | POST | `/api/control/reload` | Перезапустить sing-box с рабочим конфигом |
 | GET/POST | `/api/happ/profiles`, `.../add`, `.../refresh`, `.../delete` | Подписки Happ |
 | GET/POST | `/api/amnezia/profiles`, `.../add`, `.../refresh`, `.../country`, `.../delete` | Конфигурации Amnezia |
+| GET | `/api/subscriptions/alerts` | Подписки Happ и Amnezia, которые заканчиваются (срок или трафик), — для точки в меню |
 | GET/POST | `/api/clash/overview`, `/api/clash/proxies`, `/api/clash/proxies/select`, `/api/clash/proxies/delay`, `/api/clash/group/delay` | Clash API |
 | GET | `/api/topology` | Карта трафика рабочего конфига: `{"nodes", "edges", "warnings"}` |
 | GET | `/api/topology/connections` | Соединения Clash API, привязанные к карте (inbound, строка маршрутизатора, цепочка outbound-ов) |
