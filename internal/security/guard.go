@@ -22,6 +22,9 @@ const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 
 	"img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; " +
 	"form-action 'self'; frame-ancestors 'none'"
 
+// healthPath — проверка работоспособности для updater.
+const healthPath = "/api/health"
+
 // Guard — защита панели от запросов с чужих сайтов.
 type Guard struct {
 	policy func() settings.Security
@@ -77,7 +80,9 @@ func (g *Guard) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setHeaders(w.Header())
 
-		if !g.HostAllowed(g.policy(), r.Host) {
+		// /api/health проверяется без адреса: updater в docker обращается к новой версии по имени контейнера,
+		// а сам метод публичный и отдает только версию.
+		if !isHealth(r) && !g.HostAllowed(g.policy(), r.Host) {
 			deny(w, r, fmt.Sprintf("Панель открыта по адресу %s, которого нет среди разрешенных доменов. "+
 				"Откройте панель по IP-адресу и добавьте домен в «Система → Безопасность» или выключите проверку "+
 				"адреса командой sing-box-configurer security reset.", settings.Hostname(r.Host)))
@@ -147,6 +152,12 @@ func isAPI(r *http.Request) bool {
 	}
 
 	return false
+}
+
+// isHealth проверяет, что запрос к /api/health: и раскодированный, и экранированный пути, по которым
+// маршрутизирует ServeMux, должны вести к нему.
+func isHealth(r *http.Request) bool {
+	return path.Clean("/"+r.URL.Path) == healthPath && path.Clean("/"+r.URL.EscapedPath()) == healthPath
 }
 
 // deny отклоняет запрос: API получает ошибку в JSON, интерфейс — страницу с пояснением.

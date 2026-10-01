@@ -100,6 +100,27 @@ func TestHostCheck(t *testing.T) {
 		}
 	}
 
+	// Updater в docker проверяет новую версию по имени контейнера: /api/health доступен по любому адресу,
+	// остальные методы — нет, в том числе через .. и %2F.
+	health := map[string]int{
+		"/api/health":                 http.StatusOK,
+		"/api/health/../config":       http.StatusForbidden,
+		"/api/health/..%2Fconfig":     http.StatusForbidden,
+		"/api/health%2F..%2Fsettings": http.StatusForbidden,
+	}
+
+	for target, want := range health {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r.Host = "sing-box-configurer:8080"
+
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+
+		if w.Code != want {
+			t.Errorf("%s by container name: code = %d, want %d", target, w.Code, want)
+		}
+	}
+
 	// Проверка выключена — любой адрес.
 	security.CheckHost = false
 
