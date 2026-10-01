@@ -1030,6 +1030,15 @@
     margin-top: 10px;
 }
 
+/* Список встроенных защит на странице «Безопасность» */
+.security-list {
+    margin: 0;
+    padding-left: 18px;
+    color: #c9d1d9;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
 /* Адрес и порт в одной строке: порт узкий */
 .dns-address-grid,
 .inbound-address-grid {

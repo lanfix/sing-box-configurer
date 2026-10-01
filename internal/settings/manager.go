@@ -1,5 +1,5 @@
-// Package settings хранит в app.json общие настройки sing-box: уровень логов, доступ к Clash API
-// и плановую перезагрузку.
+// Package settings хранит в app.json общие настройки: уровень логов sing-box, доступ к Clash API,
+// плановую перезагрузку, применение подписок Happ и защиту панели.
 package settings
 
 import (
@@ -45,7 +45,14 @@ type SourcesProxy struct {
 	Password string `json:"password"`
 }
 
-// Settings — общие настройки sing-box.
+// Happ — применение обновлений подписок Happ.
+type Happ struct {
+	// AutoApply — обновленные серверы подписок сразу переносятся в рабочий конфиг sing-box. Остальные
+	// неприменённые изменения при этом не применяются.
+	AutoApply bool `json:"auto_apply"`
+}
+
+// Settings — общие настройки.
 type Settings struct {
 	LogLevel string   `json:"log_level"`
 	ClashAPI ClashAPI `json:"clash_api"`
@@ -53,11 +60,30 @@ type Settings struct {
 
 	// SourcesProxy генерируется при первом запуске.
 	SourcesProxy SourcesProxy `json:"sources_proxy"`
+
+	Happ     Happ     `json:"happ"`
+	Security Security `json:"security"`
 }
 
 // appDataSection описывает раздел app.json, которым владеет менеджер.
 type appDataSection struct {
 	Settings *Settings `json:"settings"`
+}
+
+// presenceSection показывает, какие разделы настроек уже сохранены: у разделов, которых нет в app.json
+// (данные прежних версий), включаемые по умолчанию флаги иначе прочитались бы как false.
+type presenceSection struct {
+	Settings *struct {
+		Happ     *Happ     `json:"happ"`
+		Security *Security `json:"security"`
+	} `json:"settings"`
+}
+
+// DefaultHapp возвращает настройки подписок Happ по умолчанию: обновления применяются сразу.
+func DefaultHapp() Happ {
+	return Happ{
+		AutoApply: true,
+	}
 }
 
 // DefaultRestart возвращает расписание перезагрузки по умолчанию: ежедневно в 06:00 UTC,
@@ -82,6 +108,8 @@ func Default() Settings {
 		SourcesProxy: SourcesProxy{
 			Password: "",
 		},
+		Happ:     DefaultHapp(),
+		Security: DefaultSecurity(),
 	}
 }
 
@@ -124,6 +152,27 @@ func NewManager(appData *appdata.File) (*Manager, error) {
 
 	if section.Settings != nil {
 		m.data = *section.Settings
+	}
+
+	var presence presenceSection
+
+	if err := appData.Read(&presence); err != nil && !errors.Is(err, appdata.ErrNotExist) {
+		return nil, fmt.Errorf("cannot read settings: %w", err)
+	}
+
+	if presence.Settings == nil || presence.Settings.Happ == nil {
+		m.data.Happ = DefaultHapp()
+		changed = true
+	}
+
+	if presence.Settings == nil || presence.Settings.Security == nil {
+		m.data.Security = DefaultSecurity()
+		changed = true
+	}
+
+	if m.data.Security.AllowedHosts == nil {
+		m.data.Security.AllowedHosts = []string{}
+		changed = true
 	}
 
 	if m.data.LogLevel == "" {
@@ -178,8 +227,34 @@ func (m *Manager) Get() Settings {
 
 	result := m.data
 	result.ClashAPI.AllowOrigins = slices.Clone(m.data.ClashAPI.AllowOrigins)
+	result.Security.AllowedHosts = slices.Clone(m.data.Security.AllowedHosts)
 
 	return result
+}
+
+// UpdateHapp меняет настройки применения подписок Happ. Действуют сразу.
+func (m *Manager) UpdateHapp(happ Happ) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.data.Happ = happ
+
+	return m.save()
+}
+
+// UpdateSecurity меняет защиту панели. Действует сразу, без применения конфига.
+func (m *Manager) UpdateSecurity(security Security) error {
+	normalized, err := security.Normalize()
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.data.Security = normalized
+
+	return m.save()
 }
 
 // Update меняет уровень логов и список CORS-origin-ов Clash API.

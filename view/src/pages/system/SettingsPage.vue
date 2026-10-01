@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Системные настройки: доступ к панели, параметры sing-box, Clash API и плановая перезагрузка.
+// Системные настройки: параметры sing-box, Clash API, подписки Happ и плановая перезагрузка.
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import { get, post } from '../../api/client'
@@ -14,7 +14,6 @@ import { useLeaveGuard, useSavedState } from '../../composables/useSavedState'
 import { icons } from '../../icons'
 import { confirmAction } from '../../stores/confirm'
 import { showError, showMessage } from '../../stores/toast'
-import PanelAccessCard from './PanelAccessCard.vue'
 
 interface RestartStatus {
   enabled: boolean
@@ -59,7 +58,12 @@ const secret = ref('')
 const showSecret = ref(false)
 const savingGeneral = ref(false)
 const savingRestart = ref(false)
+const savingHapp = ref(false)
 const restarting = ref(false)
+
+const happ = reactive({
+  auto_apply: true,
+})
 
 const general = reactive({
   log_level: 'warn',
@@ -79,8 +83,9 @@ const customSchedule = ref(false)
 
 const generalState = useSavedState(general)
 const restartState = useSavedState(restart)
+const happState = useSavedState(happ)
 
-useLeaveGuard(() => generalState.dirty.value || restartState.dirty.value)
+useLeaveGuard(() => generalState.dirty.value || restartState.dirty.value || happState.dirty.value)
 
 // presetValue — выбранный пресет расписания или пункт «свое расписание».
 const presetValue = computed({
@@ -103,6 +108,12 @@ async function loadGeneral(): Promise<void> {
     general.log_level = data.log_level
     general.allow_origins = [...data.clash_api.allow_origins]
     generalState.markSaved()
+
+    // Несохраненный переключатель подписок не сбрасывается при сохранении соседней карточки.
+    if (!happState.dirty.value) {
+      happ.auto_apply = data.happ.auto_apply
+      happState.markSaved()
+    }
   } catch (error) {
     showError(error, 'Ошибка загрузки настроек')
   }
@@ -151,6 +162,21 @@ async function saveRestart(): Promise<void> {
     showError(error)
   } finally {
     savingRestart.value = false
+  }
+}
+
+// saveHapp сохраняет применение обновлений подписок Happ: действует сразу.
+async function saveHapp(): Promise<void> {
+  savingHapp.value = true
+
+  try {
+    await post('/api/settings/happ', happ)
+    showMessage('Настройки подписок сохранены')
+    happState.markSaved()
+  } catch (error) {
+    showError(error)
+  } finally {
+    savingHapp.value = false
   }
 }
 
@@ -252,8 +278,6 @@ onMounted(() => {
   </Teleport>
 
   <div class="page-narrow">
-    <PanelAccessCard />
-
     <form class="settings-card" @submit.prevent="saveGeneral">
       <div class="settings-card-head">
         <div class="settings-card-title">sing-box и Clash API</div>
@@ -300,6 +324,28 @@ onMounted(() => {
       </SettingRow>
 
       <SaveBar :dirty="generalState.dirty.value" :saving="savingGeneral" @reset="generalState.reset" />
+    </form>
+
+    <form class="settings-card" @submit.prevent="saveHapp">
+      <div class="settings-card-head">
+        <div class="settings-card-title">Подписки Happ</div>
+        <p class="settings-card-description">
+          Подписки обновляются в фоне с интервалом, который задает сервер подписки (не чаще раза в 10 минут),
+          и по кнопке «Обновить». Настройка действует сразу после сохранения.
+        </p>
+      </div>
+
+      <SettingRow title="Применять обновления сразу" class="is-top">
+        <template #description>
+          Изменившиеся серверы подписок переносятся и в итоговый, и в работающий конфиг — sing-box перезапускается.
+          Другие неприменённые изменения при этом не применяются и ждут
+          <RouterLink :to="{ name: 'config' }">применения</RouterLink>. Если выключено, обновленные серверы попадают
+          только в итоговый конфиг.
+        </template>
+        <ToggleSwitch v-model="happ.auto_apply" :label="happ.auto_apply ? 'Включено' : 'Выключено'" />
+      </SettingRow>
+
+      <SaveBar :dirty="happState.dirty.value" :saving="savingHapp" @reset="happState.reset" />
     </form>
 
     <form class="settings-card" @submit.prevent="saveRestart">

@@ -16,6 +16,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
 	"github.com/lanfix/sing-box-configurer/internal/scheduler"
+	"github.com/lanfix/sing-box-configurer/internal/security"
 	"github.com/lanfix/sing-box-configurer/internal/settings"
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
 	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
@@ -28,6 +29,7 @@ const maxRequestBody = 8 << 20
 // Deps — зависимости обработчиков.
 type Deps struct {
 	Auth           *auth.Manager
+	Security       *security.Guard
 	Rules          *rules.Manager
 	DNS            *dnsconfig.Manager
 	DNSRecords     *dnsrecords.Manager
@@ -46,6 +48,7 @@ type Deps struct {
 // Handler обрабатывает запросы API.
 type Handler struct {
 	auth              *auth.Manager
+	guard             *security.Guard
 	rulesManager      *rules.Manager
 	dnsManager        *dnsconfig.Manager
 	dnsRecordsManager *dnsrecords.Manager
@@ -65,6 +68,7 @@ type Handler struct {
 func NewHandler(deps Deps) *Handler {
 	return &Handler{
 		auth:              deps.Auth,
+		guard:             deps.Security,
 		rulesManager:      deps.Rules,
 		dnsManager:        deps.DNS,
 		dnsRecordsManager: deps.DNSRecords,
@@ -151,6 +155,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/settings/regenerate-secret", h.RegenerateClashSecret)
 	mux.HandleFunc("GET /api/settings/restart", h.GetRestartStatus)
 	mux.HandleFunc("POST /api/settings/restart", h.UpdateRestart)
+	mux.HandleFunc("POST /api/settings/happ", h.UpdateHappSettings)
+
+	mux.HandleFunc("GET /api/security", h.GetSecurity)
+	mux.HandleFunc("POST /api/security", h.UpdateSecurity)
 
 	mux.HandleFunc("GET /api/config", h.GetConfig)
 	mux.HandleFunc("GET /api/config/status", h.GetConfigStatus)

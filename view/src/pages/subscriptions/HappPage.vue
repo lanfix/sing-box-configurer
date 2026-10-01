@@ -10,7 +10,7 @@ import { icons } from '../../icons'
 import { confirmAction } from '../../stores/confirm'
 import { refreshSubscriptionAlerts } from '../../stores/subscriptionAlerts'
 import { showError, showMessage } from '../../stores/toast'
-import { dayLevel, daysLeft, formatAgo, formatBytesRu, formatDate, pluralDays } from '../../utils/format'
+import { dayLevel, daysLeft, formatAgo, formatBytesRu, formatDate, pluralDays, safeURL } from '../../utils/format'
 
 const profiles = ref<HappProfile[]>([])
 const installationID = ref('—')
@@ -200,13 +200,13 @@ function proxyCount(profile: HappProfile): number {
             <span>{{ profile.last_error ? 'Ошибка обновления' : 'Серверы в итоговом конфиге' }}</span>
             <span class="happ-sep">·</span>
             <span :title="profile.url">обновлено {{ formatAgo(profile.last_update) }}</span>
-            <template v-if="profile.info?.support_url">
+            <template v-if="safeURL(profile.info?.support_url)">
               <span class="happ-sep">·</span>
-              <a :href="profile.info.support_url" target="_blank" rel="noopener">Поддержка</a>
+              <a :href="safeURL(profile.info?.support_url)" target="_blank" rel="noopener noreferrer">Поддержка</a>
             </template>
-            <template v-if="profile.info?.web_page_url">
+            <template v-if="safeURL(profile.info?.web_page_url)">
               <span class="happ-sep">·</span>
-              <a :href="profile.info.web_page_url" target="_blank" rel="noopener">Кабинет</a>
+              <a :href="safeURL(profile.info?.web_page_url)" target="_blank" rel="noopener noreferrer">Кабинет</a>
             </template>
           </div>
         </div>

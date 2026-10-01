@@ -116,6 +116,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Настройки' },
   },
   {
+    path: '/system/security',
+    name: 'system-security',
+    component: () => import('./pages/system/SecurityPage.vue'),
+    meta: { title: 'Безопасность' },
+  },
+  {
     path: '/system/update',
     name: 'system-update',
     component: () => import('./pages/system/UpdatePage.vue'),

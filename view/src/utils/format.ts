@@ -131,3 +131,19 @@ export function ruleTypeLabel(type: string): string {
 
   return labels[type] ?? type
 }
+
+// safeURL возвращает ссылку, только если это адрес http или https. Ссылки от внешних серверов (например,
+// подписок) в :href без проверки выполнили бы javascript: в панели.
+export function safeURL(value?: string): string {
+  if (!value) {
+    return ''
+  }
+
+  try {
+    const url = new URL(value)
+
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : ''
+  } catch {
+    return ''
+  }
+}

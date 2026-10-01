@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -33,6 +34,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
 	"github.com/lanfix/sing-box-configurer/internal/scheduler"
+	"github.com/lanfix/sing-box-configurer/internal/security"
 	"github.com/lanfix/sing-box-configurer/internal/settings"
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
 	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
@@ -81,6 +83,7 @@ func usage() {
 	_, _ = fmt.Fprintf(output, "  sing-box-configurer [-config path] auth set -username <login> [-password <password>]\n")
 	_, _ = fmt.Fprintf(output, "                                                         enable panel login (password is read from stdin if not set)\n")
 	_, _ = fmt.Fprintf(output, "  sing-box-configurer [-config path] auth reset          disable panel login\n")
+	_, _ = fmt.Fprintf(output, "  sing-box-configurer [-config path] security reset      disable panel host check (domain names)\n")
 	_, _ = fmt.Fprintf(output, "  sing-box-configurer -version                           print version\n\n")
 
 	flag.PrintDefaults()
@@ -118,7 +121,7 @@ func serve(cfg *config.AppConfig, configPath string) {
 	}
 
 	if !authManager.Enabled() {
-		log.Printf("Warning: panel login is disabled, anyone with network access can manage sing-box (enable it in System → Settings)")
+		log.Printf("Warning: panel login is disabled, anyone with network access can manage sing-box (enable it in System → Security)")
 	}
 
 	settingsManager, err := settings.NewManager(appData)
@@ -192,7 +195,6 @@ func serve(cfg *config.AppConfig, configPath string) {
 	log.Printf("Happ installation id: %s", happStore.InstallationID())
 
 	happManager := happ.NewManager(happStore, happ.NewClient())
-	happManager.Start(context.Background())
 
 	amneziaGateway, err := amnezia.NewGatewayClient(amnezia.DefaultGatewayURL)
 	if err != nil {
@@ -241,6 +243,28 @@ func serve(cfg *config.AppConfig, configPath string) {
 		log.Printf("Initial sing-box config written to %s", cfg.SingBoxConfigPath)
 	}
 
+	// Обновленные серверы подписок Happ сразу переносятся в работающий sing-box, если это включено в настройках.
+	// Остальные неприменённые изменения при этом не применяются.
+	happManager.SetUpdateListener(func(ctx context.Context, previous []outbound.Subscription) (string, error) {
+		if !settingsManager.Get().Happ.AutoApply {
+			return "", nil
+		}
+
+		result, err := singBoxService.ApplySubscriptionUpdate(ctx, previous)
+		if errors.Is(err, singbox.ErrNoChanges) {
+			return "", nil
+		}
+
+		if err != nil {
+			return "", err
+		}
+
+		log.Printf("Happ: %s (backup: %s)", result.Message, result.Backup)
+
+		return result.Message, nil
+	})
+	happManager.Start(context.Background())
+
 	// Плановая перезагрузка sing-box.
 	restartTask := scheduler.NewRestartTask(func() settings.Restart {
 		return settingsManager.Get().Restart
@@ -249,8 +273,14 @@ func serve(cfg *config.AppConfig, configPath string) {
 	})
 	restartTask.Start(context.Background())
 
+	// Адреса из конфига сервиса, по которым к конфигуратору обращаются sing-box и сам сервис, разрешены всегда.
+	guard := security.NewGuard(func() settings.Security {
+		return settingsManager.Get().Security
+	}, ruleSetHosts(cfg))
+
 	h := handler.NewHandler(handler.Deps{
 		Auth:           authManager,
+		Security:       guard,
 		Rules:          rulesManager,
 		DNS:            dnsManager,
 		DNSRecords:     dnsRecordsManager,
@@ -281,7 +311,7 @@ func serve(cfg *config.AppConfig, configPath string) {
 	// замер задержек группы и трассировка могут отвечать долго.
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           handler.Protect(authManager.Middleware(mux)),
+		Handler:           guard.Handler(authManager.Middleware(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
@@ -337,4 +367,18 @@ func outboundConfigs(items []outbound.Item) []map[string]any {
 	}
 
 	return configs
+}
+
+// ruleSetHosts возвращает имена хостов из адресов конфигуратора в конфиге сервиса: по ним sing-box забирает
+// rule-set-ы, поэтому защита адреса панели их пропускает.
+func ruleSetHosts(cfg *config.AppConfig) []string {
+	hosts := make([]string, 0, 2)
+
+	for _, value := range []string{cfg.RuleSetBaseURL, cfg.LocalURL()} {
+		if parsed, err := url.Parse(value); err == nil && parsed.Hostname() != "" {
+			hosts = append(hosts, parsed.Hostname())
+		}
+	}
+
+	return hosts
 }

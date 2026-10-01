@@ -39,11 +39,36 @@ func (h *Handler) AddHappProfile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RefreshHappProfile заново загружает подписку профиля.
+// RefreshHappProfile заново загружает подписку профиля. Если серверы изменились и включено применение
+// обновлений, они сразу переносятся в работающий sing-box — итог добавляется к сообщению.
 func (h *Handler) RefreshHappProfile(w http.ResponseWriter, r *http.Request) {
-	h.happProfileAction(w, r, func(id string) (any, error) {
-		return h.happManager.Refresh(r.Context(), id)
-	}, "Подписка обновлена")
+	var req struct {
+		ID string `json:"id"`
+	}
+
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	profile, applied, err := h.happManager.Refresh(r.Context(), req.ID)
+	if err != nil {
+		log.Printf("Error refreshing happ profile: %v", err)
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	message := "Подписка обновлена"
+
+	if applied != "" {
+		message += ". " + applied
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"profile": profile,
+		"message": message,
+	})
 }
 
 // DeleteHappProfile удаляет профиль.

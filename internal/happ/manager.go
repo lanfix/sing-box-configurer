@@ -2,6 +2,7 @@ package happ
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -19,6 +20,11 @@ const (
 	// Интервал обновления подписки, если сервер его не прислал.
 	defaultUpdateInterval = 3 * time.Hour
 
+	// Границы интервала обновления, который присылает сервер подписки: чаще 10 минут подписка
+	// не обновляется, а слишком большое значение переполнило бы time.Duration.
+	minUpdateInterval = 10 * time.Minute
+	maxUpdateInterval = 30 * 24 * time.Hour
+
 	// Как часто фоновый процесс проверяет, пора ли обновлять профили.
 	backgroundCheckInterval = 5 * time.Minute
 
@@ -26,11 +32,16 @@ const (
 	fetchTimeout = 30 * time.Second
 )
 
+// UpdateListener получает прежнее состояние подписок профилей, серверы которых изменились при обновлении,
+// и возвращает итог переноса изменений в рабочий конфиг sing-box (пустая строка — не переносились).
+type UpdateListener func(ctx context.Context, previous []outbound.Subscription) (string, error)
+
 // Manager управляет профилями Happ: загрузкой и обновлением подписок. Серверы профилей попадают
 // в конфиг sing-box при рендере.
 type Manager struct {
-	store  *Store
-	client *Client
+	store    *Store
+	client   *Client
+	listener UpdateListener
 
 	// Сериализует операции над профилями, чтобы фоновое обновление не пересекалось с действиями из UI.
 	mu sync.Mutex
@@ -39,10 +50,16 @@ type Manager struct {
 // NewManager создает менеджер профилей Happ.
 func NewManager(store *Store, client *Client) *Manager {
 	return &Manager{
-		store:  store,
-		client: client,
-		mu:     sync.Mutex{},
+		store:    store,
+		client:   client,
+		listener: nil,
+		mu:       sync.Mutex{},
 	}
+}
+
+// SetUpdateListener задает обработчик изменений серверов при обновлении подписок. Вызывается до Start.
+func (m *Manager) SetUpdateListener(listener UpdateListener) {
+	m.listener = listener
 }
 
 // InstallationID возвращает ID инсталляции (HWID), под которым сервис представляется серверам подписок.
@@ -61,21 +78,26 @@ func (m *Manager) Subscriptions() []outbound.Subscription {
 	subscriptions := make([]outbound.Subscription, 0, len(profiles))
 
 	for _, profile := range profiles {
-		outbounds := make([]map[string]any, 0, len(profile.Servers))
-
-		for _, server := range profile.Servers {
-			outbounds = append(outbounds, jsonmap.Clone(server.Outbound))
-		}
-
-		subscriptions = append(subscriptions, outbound.Subscription{
-			Source:      outbound.SourceHapp,
-			ProfileID:   profile.ID,
-			ProfileName: profile.Name,
-			Outbounds:   outbounds,
-		})
+		subscriptions = append(subscriptions, subscriptionOf(profile))
 	}
 
 	return subscriptions
+}
+
+// subscriptionOf возвращает outbound-ы серверов профиля.
+func subscriptionOf(profile Profile) outbound.Subscription {
+	outbounds := make([]map[string]any, 0, len(profile.Servers))
+
+	for _, server := range profile.Servers {
+		outbounds = append(outbounds, jsonmap.Clone(server.Outbound))
+	}
+
+	return outbound.Subscription{
+		Source:      outbound.SourceHapp,
+		ProfileID:   profile.ID,
+		ProfileName: profile.Name,
+		Outbounds:   outbounds,
+	}
 }
 
 // Add загружает подписку и сохраняет профиль.
@@ -134,12 +156,23 @@ func (m *Manager) Add(ctx context.Context, name, subscriptionURL string) (*Profi
 	return &profile, nil
 }
 
-// Refresh заново загружает подписку профиля.
-func (m *Manager) Refresh(ctx context.Context, id string) (*Profile, error) {
+// Refresh заново загружает подписку профиля. Возвращает профиль и итог переноса изменившихся серверов
+// в рабочий конфиг sing-box (пустая строка — не переносились).
+func (m *Manager) Refresh(ctx context.Context, id string) (*Profile, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return m.refreshLocked(ctx, id)
+	before, ok := m.store.Get(id)
+	if !ok {
+		return nil, "", fmt.Errorf("profile not found")
+	}
+
+	profile, err := m.refreshLocked(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return profile, m.notifyLocked(ctx, []Profile{before}), nil
 }
 
 // Delete удаляет профиль.
@@ -173,23 +206,89 @@ func (m *Manager) Start(ctx context.Context) {
 	}()
 }
 
-// refreshDue обновляет профили, у которых истек интервал обновления.
+// refreshDue обновляет профили, у которых истек интервал обновления. Изменения серверов всех обновленных
+// профилей переносятся в рабочий конфиг за один раз: sing-box перезапускается не больше одного раза.
 func (m *Manager) refreshDue(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	refreshed := make([]Profile, 0)
+
 	for _, profile := range m.store.List() {
-		interval := defaultUpdateInterval
-
-		if profile.Info != nil && profile.Info.UpdateInterval > 0 {
-			interval = time.Duration(profile.Info.UpdateInterval) * time.Hour
-		}
-
-		if time.Since(profile.LastUpdate) < interval {
+		if time.Since(profile.LastUpdate) < updateInterval(profile) {
 			continue
 		}
 
-		if _, err := m.Refresh(ctx, profile.ID); err != nil {
+		if _, err := m.refreshLocked(ctx, profile.ID); err != nil {
 			log.Printf("happ: cannot refresh profile %q: %v", profile.Name, err)
+
+			continue
+		}
+
+		refreshed = append(refreshed, profile)
+	}
+
+	if message := m.notifyLocked(ctx, refreshed); message != "" {
+		log.Printf("happ: %s", message)
+	}
+}
+
+// updateInterval возвращает интервал обновления профиля: присланный сервером подписки в пределах
+// minUpdateInterval..maxUpdateInterval или defaultUpdateInterval.
+func updateInterval(profile Profile) time.Duration {
+	if profile.Info == nil || profile.Info.UpdateInterval <= 0 {
+		return defaultUpdateInterval
+	}
+
+	hours := min(profile.Info.UpdateInterval, int(maxUpdateInterval/time.Hour))
+
+	return max(time.Duration(hours)*time.Hour, minUpdateInterval)
+}
+
+// notifyLocked передает обработчику прежнее состояние профилей before, серверы которых изменились,
+// и возвращает итог для пользователя. Вызывается под блокировкой.
+func (m *Manager) notifyLocked(ctx context.Context, before []Profile) string {
+	if m.listener == nil {
+		return ""
+	}
+
+	previous := make([]outbound.Subscription, 0, len(before))
+
+	for _, profile := range before {
+		if current, ok := m.store.Get(profile.ID); ok && !sameServers(profile.Servers, current.Servers) {
+			previous = append(previous, subscriptionOf(profile))
 		}
 	}
+
+	if len(previous) == 0 {
+		return ""
+	}
+
+	message, err := m.listener(ctx, previous)
+	if err != nil {
+		log.Printf("happ: cannot apply updated servers to sing-box: %v", err)
+
+		return "Изменения серверов не перенесены в работающий sing-box: " + err.Error()
+	}
+
+	return message
+}
+
+// sameServers сравнивает outbound-ы серверов двух состояний профиля.
+func sameServers(a, b []Server) bool {
+	outbounds := func(servers []Server) string {
+		list := make([]map[string]any, 0, len(servers))
+
+		for _, server := range servers {
+			list = append(list, server.Outbound)
+		}
+
+		raw, _ := json.Marshal(list)
+
+		return string(raw)
+	}
+
+	return outbounds(a) == outbounds(b)
 }
 
 // refreshLocked загружает подписку и обновляет профиль. Ошибка сохраняется в профиле.

@@ -66,6 +66,14 @@ func NewStore(appData *appdata.File) (*Store, error) {
 		s.data.Profiles = []Profile{}
 	}
 
+	// Ссылки профилей, сохраненные прежними версиями без проверки.
+	for i := range s.data.Profiles {
+		if info := s.data.Profiles[i].Info; info != nil {
+			info.SupportURL = SafeURL(info.SupportURL)
+			info.WebPageURL = SafeURL(info.WebPageURL)
+		}
+	}
+
 	if s.data.InstallationID == "" {
 		// Happ на iOS передает HWID в виде UUID в верхнем регистре.
 		s.data.InstallationID = strings.ToUpper(uuid.NewString())

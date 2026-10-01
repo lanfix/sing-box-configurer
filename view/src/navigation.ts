@@ -79,6 +79,7 @@ export const navigation: NavEntry[] = [
     badge: 'update',
     children: [
       { route: 'system-settings', title: 'Настройки' },
+      { route: 'system-security', title: 'Безопасность' },
       { route: 'system-update', title: 'Обновление', badge: 'update' },
     ],
   },

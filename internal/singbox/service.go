@@ -222,7 +222,13 @@ func (s *Service) Apply(ctx context.Context) (*ApplyResult, error) {
 		return nil, ErrNoChanges
 	}
 
-	if err = s.check(ctx, rendered); err != nil {
+	return s.applyLocked(ctx, rendered, warnings)
+}
+
+// applyLocked проверяет конфиг data, атомарно записывает его в рабочий и перезапускает sing-box. Если sing-box
+// не запустился, восстанавливается прежний конфиг. Вызывается под блокировкой s.mu.
+func (s *Service) applyLocked(ctx context.Context, data []byte, warnings []string) (*ApplyResult, error) {
+	if err := s.check(ctx, data); err != nil {
 		return nil, err
 	}
 
@@ -235,7 +241,7 @@ func (s *Service) Apply(ctx context.Context) (*ApplyResult, error) {
 		return nil, err
 	}
 
-	if err = s.provider.Write(rendered); err != nil {
+	if err = s.provider.Write(data); err != nil {
 		return nil, err
 	}
 

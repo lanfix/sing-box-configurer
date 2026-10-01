@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -99,8 +100,8 @@ func parseProfileInfo(header http.Header) ProfileInfo {
 	info := ProfileInfo{
 		Title:          decodeHeaderValue(header.Get("Profile-Title")),
 		Announce:       decodeHeaderValue(header.Get("Announce")),
-		SupportURL:     header.Get("Support-Url"),
-		WebPageURL:     header.Get("Profile-Web-Page-Url"),
+		SupportURL:     SafeURL(header.Get("Support-Url")),
+		WebPageURL:     SafeURL(header.Get("Profile-Web-Page-Url")),
 		Upload:         0,
 		Download:       0,
 		Total:          0,
@@ -142,6 +143,17 @@ func parseProfileInfo(header http.Header) ProfileInfo {
 	}
 
 	return info
+}
+
+// SafeURL возвращает url, только если это ссылка http или https. Ссылки приходят от сервера подписки
+// и показываются в интерфейсе: javascript: или data: в них выполнили бы чужой код в панели (XSS).
+func SafeURL(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return ""
+	}
+
+	return parsed.String()
 }
 
 // decodeHeaderValue декодирует значения заголовков в формате "base64:...".

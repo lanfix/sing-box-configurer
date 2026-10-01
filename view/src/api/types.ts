@@ -172,6 +172,19 @@ export interface Settings {
     secret: string
     allow_origins: string[]
   }
+  happ: {
+    auto_apply: boolean
+  }
+}
+
+// SecuritySettings — защита панели от запросов с чужих сайтов.
+export interface SecuritySettings {
+  check_host: boolean
+  allowed_hosts: string[]
+  // extra_hosts — адреса из конфига сервиса, разрешенные всегда.
+  extra_hosts: string[]
+  current_host: string
+  current_allowed: boolean
 }
 
 export interface ConfigState {
