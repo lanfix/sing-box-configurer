@@ -169,12 +169,17 @@ func TestBuild(t *testing.T) {
 	})
 
 	for _, id := range []string{
-		InboundID("tun-in"), InboundID("mixed-proxy"), RouterID, DNSRouterID, RejectID,
+		InboundID("tun-in"), InboundID("mixed-proxy"), RouterID, DNSRouterID, OutboundID("block"),
 		OutboundID("select-default"), OutboundID("auto"), OutboundID("direct"), DNSServerID("cloudflare"),
 	} {
 		if findNode(graph, id) == nil {
 			t.Errorf("node %s not found", id)
 		}
+	}
+
+	// Отклонение по правилу и outbound block — один узел.
+	if findNode(graph, RejectID) != nil || findNode(graph, OutboundID("block")).Label != RejectLabel {
+		t.Error("reject action must be merged into block outbound")
 	}
 
 	selector := findNode(graph, OutboundID("select-default"))

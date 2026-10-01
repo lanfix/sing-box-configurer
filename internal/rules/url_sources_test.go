@@ -114,7 +114,7 @@ func TestRowHandler(t *testing.T) {
 			name: "single IPv6",
 			row:  "2001:db8::1",
 			expected: RuleSet{
-				CidrList:       []string{"2001:db8::1/32"},
+				CidrList:       []string{"2001:db8::1/128"},
 				Domains:        []string{},
 				DomainSuffixes: []string{},
 			},

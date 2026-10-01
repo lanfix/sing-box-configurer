@@ -224,8 +224,13 @@ func parseWireGuard(raw json.RawMessage, profileName, host, protocol string, obf
 		return Item{}, nil, fmt.Errorf("в конфиге нет ключей или адреса клиента")
 	}
 
+	// Адрес без маски — один адрес клиента: /32 для IPv4, /128 для IPv6.
 	if !strings.Contains(address, "/") {
-		address += "/32"
+		if strings.Contains(address, ":") {
+			address += "/128"
+		} else {
+			address += "/32"
+		}
 	}
 
 	server := coalesce(stringValue(last["hostName"]), host)

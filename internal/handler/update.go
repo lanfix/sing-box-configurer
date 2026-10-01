@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 )
@@ -29,9 +28,7 @@ func (h *Handler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 		Version string `json:"version"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid request body")
-
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 

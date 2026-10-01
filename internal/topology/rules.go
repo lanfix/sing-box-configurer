@@ -75,6 +75,7 @@ func parseRouteRules(config map[string]any, groups map[string]GroupInfo) []parse
 	route, _ := config["route"].(map[string]any)
 	list := objects(route["rules"])
 	result := make([]parsedRule, 0, len(list)+1)
+	reject := rejectTarget(config)
 
 	for i, raw := range list {
 		action := jsonmap.String(raw, "action")
@@ -101,7 +102,7 @@ func parseRouteRules(config map[string]any, groups map[string]GroupInfo) []parse
 			}
 
 		case "reject":
-			row.Target = RejectID
+			row.Target = reject
 
 		case "bypass":
 			row.Target = BypassID
@@ -150,6 +151,18 @@ func parseRouteRules(config map[string]any, groups map[string]GroupInfo) []parse
 		row:    finalRow,
 		tokens: nil,
 	})
+}
+
+// rejectTarget возвращает узел, в который ведут правила reject: outbound типа block, если он есть в конфиге,
+// иначе отдельный узел действия. Так отклонение по правилу и выбор block в группе сходятся в один узел.
+func rejectTarget(config map[string]any) string {
+	for _, item := range objects(config["outbounds"]) {
+		if tag := jsonmap.String(item, "tag"); tag != "" && jsonmap.String(item, "type") == "block" {
+			return OutboundID(tag)
+		}
+	}
+
+	return RejectID
 }
 
 // parseDNSRules разбирает dns.rules и добавляет строку final.

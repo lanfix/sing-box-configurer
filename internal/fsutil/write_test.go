@@ -3,6 +3,7 @@ package fsutil
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -33,7 +34,7 @@ func TestWriteFileAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Errorf("perm = %v, want 0600", info.Mode().Perm())
 	}
 

@@ -120,8 +120,14 @@ func (f *File) writeLocked(fields map[string]json.RawMessage) error {
 		return fmt.Errorf("cannot marshal app data: %w", err)
 	}
 
+	// В файле хранятся хэш пароля, ключ подписи сессий и ключи прокси: читать его может только владелец.
+	// Права файлов, созданных прежними версиями (0644), ужесточаются до записи: запись их сохраняет.
+	if info, statErr := os.Stat(f.path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
+		_ = os.Chmod(f.path, info.Mode().Perm()&^0o077)
+	}
+
 	// При монтировании файла отдельным bind mount-ом запись выполняется на месте, иначе — атомарно.
-	if err = fsutil.WriteFileAtomic(f.path, append(result, '\n'), 0644); err != nil {
+	if err = fsutil.WriteFileAtomic(f.path, append(result, '\n'), 0600); err != nil {
 		return fmt.Errorf("cannot write app data: %w", err)
 	}
 

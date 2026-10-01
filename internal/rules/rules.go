@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
 )
@@ -329,6 +332,10 @@ func (rm *Manager) AddRule(rule Rule) error {
 		return fmt.Errorf("группа %s не существует", rule.Group)
 	}
 
+	if err := validateRuleValue(rule); err != nil {
+		return err
+	}
+
 	// Проверяем конфликты с существующими правилами.
 	if err := rm.validateRuleConflicts(rule); err != nil {
 		return err
@@ -385,8 +392,9 @@ func (rm *Manager) AddRuleBulk(
 
 		result.Total++
 
+		// ID вида «время-номер» совпадали бы у двух массовых добавлений в одну секунду.
 		rule := Rule{
-			ID:          fmt.Sprintf("%s-%d", time.Now().Format("20060102150405"), result.Total),
+			ID:          uuid.NewString(),
 			Type:        ruleType,
 			Value:       line,
 			Description: description,
@@ -395,7 +403,12 @@ func (rm *Manager) AddRuleBulk(
 			CreatedAt:   time.Now(),
 		}
 
-		if err := rm.validateRuleConflicts(rule); err != nil {
+		err := validateRuleValue(rule)
+		if err == nil {
+			err = rm.validateRuleConflicts(rule)
+		}
+
+		if err != nil {
 			result.Failed++
 			result.FailedValues = append(result.FailedValues, BulkAddFailure{
 				Value: line,
@@ -802,6 +815,24 @@ func (rm *Manager) groupExists(name string) bool {
 	}
 
 	return false
+}
+
+// validateRuleValue проверяет значение правил ip и cidr: адрес или подсеть, как их разбирает sing-box.
+// Неверное значение попало бы в rule-set группы, и sing-box не смог бы его загрузить.
+func validateRuleValue(rule Rule) error {
+	if rule.Type != "ip" && rule.Type != "cidr" {
+		return nil
+	}
+
+	if _, err := netip.ParsePrefix(rule.Value); err == nil {
+		return nil
+	}
+
+	if _, err := netip.ParseAddr(rule.Value); err == nil {
+		return nil
+	}
+
+	return fmt.Errorf("%s не является IP-адресом или подсетью", rule.Value)
 }
 
 // validateRuleConflicts проверяет конфликты правил domain и domain_suffix глобально.

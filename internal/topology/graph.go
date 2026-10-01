@@ -46,6 +46,9 @@ const (
 
 	// DNSFinalRow — строка DNS-маршрутизатора с сервером по умолчанию (dns.final).
 	DNSFinalRow = "dfinal"
+
+	// RejectLabel — подпись узла отклонения: действия reject или outbound-а типа block.
+	RejectLabel = "Отклонить"
 )
 
 // Graph — карта трафика.
@@ -307,6 +310,9 @@ func (b *builder) addOutbounds(config map[string]any) {
 		}
 
 		switch itemType {
+		case "block":
+			node.Label = RejectLabel
+
 		case "selector", "urltest":
 			node.Kind = KindSelector
 
@@ -402,10 +408,11 @@ func (b *builder) addDNS(config map[string]any) {
 	b.addNode(router)
 }
 
-// addActions добавляет узлы действий reject и bypass, если на них ссылается хотя бы одна связь.
+// addActions добавляет узлы действий reject и bypass, если на них ссылается хотя бы одна связь. Правила reject
+// ведут в outbound типа block, если он есть, поэтому узел reject появляется только без него.
 func (b *builder) addActions() {
 	actions := []Node{
-		newNode(RejectID, KindAction, "", "reject", "Отклонить", "reject"),
+		newNode(RejectID, KindAction, "", "reject", RejectLabel, "reject"),
 		newNode(BypassID, KindAction, "", "bypass", "Мимо sing-box", "bypass"),
 	}
 

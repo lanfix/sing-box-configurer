@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -19,6 +20,19 @@ import (
 
 // ruleTypes — допустимые типы правил.
 var ruleTypes = []string{"domain", "domain_suffix", "ip", "cidr"}
+
+// maxSourceInterval — наибольший интервал обновления URL-источника, мин (год).
+const maxSourceInterval = 365 * 24 * 60
+
+// validateSourceURL проверяет, что ссылка URL-источника — адрес http или https.
+func validateSourceURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return errors.New("URL-источник должен быть ссылкой http:// или https://")
+	}
+
+	return nil
+}
 
 // GetRules возвращает правила и количество неприменённых изменений.
 func (h *Handler) GetRules(w http.ResponseWriter, _ *http.Request) {
@@ -370,8 +384,21 @@ func (h *Handler) AddURLSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateSourceURL(req.URL); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
 	if req.Interval <= 0 {
 		req.Interval = 60
+	}
+
+	// Слишком большой интервал переполнил бы time.Duration, и источник загружался бы без пауз.
+	if req.Interval > maxSourceInterval {
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Интервал обновления не может быть больше %d минут", maxSourceInterval))
+
+		return
 	}
 
 	source := rules.URLSource{
@@ -491,6 +518,12 @@ func (h *Handler) ValidateURLSource(w http.ResponseWriter, r *http.Request) {
 
 	if strings.TrimSpace(req.URL) == "" {
 		writeJSONError(w, http.StatusBadRequest, "Нужен URL")
+
+		return
+	}
+
+	if err := validateSourceURL(req.URL); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 
 		return
 	}

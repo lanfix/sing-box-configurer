@@ -155,7 +155,8 @@ EOF
 
 if [[ -n "${ADMIN_USER:-}" && -n "${ADMIN_PASSWORD:-}" ]]; then
     log "Enabling panel login for $ADMIN_USER"
-    "$BIN_DIR/sing-box-configurer" -config "$CONFIG_DIR/config.json" auth set -username "$ADMIN_USER" -password "$ADMIN_PASSWORD" >/dev/null
+    # Пароль передается через stdin: аргументы командной строки видны всем пользователям в списке процессов.
+    printf '%s\n' "$ADMIN_PASSWORD" | "$BIN_DIR/sing-box-configurer" -config "$CONFIG_DIR/config.json" auth set -username "$ADMIN_USER" >/dev/null
 fi
 
 systemctl daemon-reload

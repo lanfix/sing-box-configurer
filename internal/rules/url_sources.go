@@ -5,13 +5,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
 )
+
+// maxSourceSize ограничивает размер списка URL-источника.
+const maxSourceSize = 64 << 20
 
 var (
 	// ErrURLSourceNotFound — источник с таким ID не найден.
@@ -122,7 +127,7 @@ func (rm *Manager) ApplyURLSources() error {
 
 		if !source.Applied {
 			source.Applied = true
-			go rm.startURLSourceUpdates(*source)
+			rm.startURLSourceUpdates(*source)
 		}
 
 		newSources = append(newSources, *source)
@@ -165,28 +170,49 @@ func (rm *Manager) StartAllURLSourceUpdates() {
 
 	for _, source := range sources {
 		if source.Applied && !source.Deleted {
-			go rm.startURLSourceUpdates(source)
+			rm.startURLSourceUpdates(source)
 		}
 	}
 }
 
-// startURLSourceUpdates периодически загружает список источника. После неудачной загрузки следующая попытка
-// выполняется раньше интервала (от минуты с удвоением): например, источник с detour через VPN загрузится,
-// как только поднимется sing-box.
+// startURLSourceUpdates запускает периодическую загрузку списка источника. Функция отмены регистрируется
+// до запуска горутины: иначе источник, удаленный сразу после применения, загружался бы бесконечно.
 func (rm *Manager) startURLSourceUpdates(source URLSource) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	rm.cancelFuncsMu.Lock()
+
+	if previous, ok := rm.cancelFuncs[source.ID]; ok {
+		previous()
+	}
+
 	rm.cancelFuncs[source.ID] = cancel
 	rm.cancelFuncsMu.Unlock()
 
+	go rm.runURLSourceUpdates(ctx, source)
+}
+
+// runURLSourceUpdates периодически загружает список источника, пока не отменен ctx. После неудачной загрузки
+// следующая попытка выполняется раньше интервала (от минуты с удвоением): например, источник с detour через
+// VPN загрузится, как только поднимется sing-box.
+func (rm *Manager) runURLSourceUpdates(ctx context.Context, source URLSource) {
 	interval := time.Duration(source.Interval) * time.Minute
+
+	if interval <= 0 {
+		interval = time.Hour
+	}
+
 	retry := time.Minute
 
 	for {
 		wait := interval
 
-		if err := rm.fetchRulesFromSource(source.ID); err != nil && retry < interval {
+		err := rm.fetchRulesFromSource(source.ID)
+		if errors.Is(err, ErrURLSourceNotFound) {
+			return
+		}
+
+		if err != nil && retry < interval {
 			wait = retry
 			retry *= 2
 		} else if err == nil {
@@ -403,10 +429,13 @@ func (rm *Manager) scanAndHandleRowsFromURL(url, detour string, f func(row strin
 		proxy = http.ProxyURL(proxyURL)
 	}
 
+	// Транспорт создается на каждую загрузку, поэтому keep-alive выключен: иначе простаивающие соединения
+	// (IdleConnTimeout по умолчанию не задан) копились бы с каждым обновлением источника.
 	client := &http.Client{
 		Timeout: 20 * time.Second,
 		Transport: &http.Transport{
-			Proxy: proxy,
+			Proxy:             proxy,
+			DisableKeepAlives: true,
 		},
 	}
 
@@ -427,7 +456,12 @@ func (rm *Manager) scanAndHandleRowsFromURL(url, detour string, f func(row strin
 		return fmt.Errorf("status code is %d", resp.StatusCode)
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
+	body := &io.LimitedReader{
+		R: resp.Body,
+		N: maxSourceSize + 1,
+	}
+
+	scanner := bufio.NewScanner(body)
 
 	for scanner.Scan() {
 		row := strings.TrimSpace(scanner.Text())
@@ -439,6 +473,11 @@ func (rm *Manager) scanAndHandleRowsFromURL(url, detour string, f func(row strin
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("cannot scan rows: %v", err)
+	}
+
+	// Список целиком хранится в памяти: слишком большой ответ отклоняется, а не обрезается молча.
+	if body.N <= 0 {
+		return fmt.Errorf("список больше %d МиБ", maxSourceSize>>20)
 	}
 
 	return nil
@@ -478,9 +517,10 @@ func rowHandler(row string, rs *RuleSet) error {
 		return nil
 	}
 
-	// Обработка одиночного IP адреса.
-	if ip := net.ParseIP(row); ip != nil {
-		rs.CidrList = append(rs.CidrList, row+"/32")
+	// Обработка одиночного IP адреса: /32 для IPv4, /128 для IPv6.
+	if addr, err := netip.ParseAddr(row); err == nil {
+		addr = addr.WithZone("")
+		rs.CidrList = append(rs.CidrList, netip.PrefixFrom(addr, addr.BitLen()).String())
 
 		return nil
 	}

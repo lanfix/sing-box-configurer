@@ -243,6 +243,7 @@ func TestMiddleware(t *testing.T) {
 		"/api/health/../settings/x":  http.StatusUnauthorized,
 		"/api/ruleset/bypass?x=1":    http.StatusOK,
 		"/api/clash/proxies?token=1": http.StatusUnauthorized,
+		"/api/config/..%2F..%2Fx":    http.StatusUnauthorized,
 	}
 
 	for path, want := range cases {

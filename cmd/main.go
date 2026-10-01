@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	// Базы часовых поясов встроены в бинарник: в образе их нет, а расписание задается в поясе.
 	_ "time/tzdata"
@@ -276,7 +277,16 @@ func serve(cfg *config.AppConfig, configPath string) {
 
 	log.Printf("Server started on %s (rule-sets for sing-box: %s)", cfg.ListenAddr, cfg.RuleSetBaseURL)
 
-	if err = http.ListenAndServe(cfg.ListenAddr, authManager.Middleware(mux)); err != nil {
+	// Таймауты не дают медленным клиентам держать соединения бесконечно (slowloris). WriteTimeout не задан:
+	// замер задержек группы и трассировка могут отвечать долго.
+	server := &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           handler.Protect(authManager.Middleware(mux)),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+
+	if err = server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }

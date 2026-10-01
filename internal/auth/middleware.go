@@ -23,9 +23,11 @@ var (
 func (m *Manager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Путь очищается так же, как это сделает ServeMux: /api/ruleset/../config — это /api/config.
-		urlPath := path.Clean("/" + r.URL.Path)
+		// ServeMux сопоставляет экранированный путь, поэтому проверяются оба варианта: %2F внутри
+		// сегмента (/api/x/..%2F..%2Fy) не должен уводить проверку на путь вне /api/.
+		paths := []string{path.Clean("/" + r.URL.Path), path.Clean("/" + r.URL.EscapedPath())}
 
-		if !strings.HasPrefix(urlPath, "/api/") || isPublic(urlPath) || m.Authenticated(r) {
+		if !slices.ContainsFunc(paths, isProtected) || m.Authenticated(r) {
 			next.ServeHTTP(w, r)
 
 			return
@@ -76,6 +78,11 @@ func ClientIP(r *http.Request) string {
 	}
 
 	return host
+}
+
+// isProtected проверяет, что путь — метод API, закрытый входом.
+func isProtected(path string) bool {
+	return strings.HasPrefix(path, "/api/") && !isPublic(path)
 }
 
 // isPublic проверяет, что метод API доступен без входа.
