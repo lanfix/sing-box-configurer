@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 
-import { get, post } from '../../api/client'
-import type { OutboundSource, OutboundView } from '../../api/types'
+import { get, post, postQuiet } from '../../api/client'
+import type { OutboundSource, OutboundView, SpeedTestResult, SpeedTestSettings, SpeedTestState } from '../../api/types'
 import ModalDialog from '../../components/ModalDialog.vue'
 import SvgIcon from '../../components/SvgIcon.vue'
 import FormField from '../../components/ui/FormField.vue'
@@ -10,6 +10,7 @@ import IconButton from '../../components/ui/IconButton.vue'
 import { icons } from '../../icons'
 import { confirmAction } from '../../stores/confirm'
 import { showError, showMessage } from '../../stores/toast'
+import { formatAgo, formatBitrate, formatBytesRu } from '../../utils/format'
 
 const JsonEditor = defineAsyncComponent(() => import('../../components/JsonEditor.vue'))
 
@@ -43,7 +44,128 @@ const sourceLabels: Record<ServerSource, string> = {
 }
 
 // shareSchemes — поддерживаемые схемы share-ссылок.
-const shareSchemes = ['vless', 'hysteria2', 'hy2', 'trojan', 'wireguard', 'wg']
+const shareSchemes = ['vless', 'vmess', 'ss', 'hysteria2', 'hy2', 'trojan', 'wireguard', 'wg']
+
+// Тест скорости: настройки, результаты по тегам, идущий замер и очередь «проверить все».
+const speedSettings = ref<SpeedTestSettings | null>(null)
+const speedResults = ref<Record<string, SpeedTestResult>>({})
+const speedServer = ref('')
+const speedRunning = ref('')
+const speedQueue = ref<string[]>([])
+const speedStopping = ref(false)
+
+// canSpeedTest — через block трафик не идет, замерять нечего.
+function canSpeedTest(outbound: OutboundView): boolean {
+  return outbound.tag !== 'block'
+}
+
+// loadSpeedTest загружает серверы теста и последние результаты.
+async function loadSpeedTest(): Promise<void> {
+  try {
+    const data = await get<SpeedTestState>('/api/speedtest')
+
+    speedSettings.value = data.settings
+    speedResults.value = data.results ?? {}
+    speedRunning.value = data.running ?? ''
+  } catch {
+    // Тест скорости — дополнительная функция: страница работает и без него.
+  }
+}
+
+// runSpeedTest замеряет скорость через outbound tag. Возвращает false, если замер не начался.
+async function runSpeedTest(tag: string): Promise<boolean> {
+  speedRunning.value = tag
+
+  try {
+    const result = await postQuiet<SpeedTestResult>('/api/speedtest/run', { tag, server: speedServer.value })
+
+    speedResults.value = { ...speedResults.value, [tag]: result }
+
+    return true
+  } catch (error) {
+    showError(error, `Тест скорости ${tag}`)
+
+    return false
+  } finally {
+    speedRunning.value = ''
+  }
+}
+
+// runSpeedTestAll замеряет по очереди все показанные outbound-ы.
+async function runSpeedTestAll(): Promise<void> {
+  const tags = filtered.value.filter(canSpeedTest).map((outbound) => outbound.tag)
+  const seconds = tags.length * (speedSettings.value?.duration ?? 10)
+
+  const confirmed = await confirmAction({
+    title: `Замерить скорость ${tags.length} outbound-ов?`,
+    message: `Замеры идут по очереди и займут не меньше ${Math.ceil(seconds / 60)} мин. Каждый скачивает тестовый файл `
+      + `${speedSettings.value?.duration ?? 10} с — на быстром канале это сотни мегабайт трафика на outbound.`,
+    confirmText: 'Начать',
+  })
+
+  if (!confirmed) {
+    return
+  }
+
+  speedQueue.value = tags
+  speedStopping.value = false
+
+  while (speedQueue.value.length && !speedStopping.value) {
+    const [tag, ...rest] = speedQueue.value
+
+    speedQueue.value = rest
+
+    if (!(await runSpeedTest(tag))) {
+      break
+    }
+  }
+
+  speedQueue.value = []
+  speedStopping.value = false
+}
+
+// streamsWord склоняет слово «поток».
+function streamsWord(count: number): string {
+  if (count % 10 === 1 && count % 100 !== 11) {
+    return 'поток'
+  }
+
+  return count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? 'потока' : 'потоков'
+}
+
+// speedLevel возвращает класс цвета скорости.
+function speedLevel(result: SpeedTestResult): string {
+  const mbps = (result.download * 8) / 1e6
+
+  if (mbps >= 50) {
+    return 'd-good'
+  }
+
+  if (mbps >= 15) {
+    return 'd-ok'
+  }
+
+  return mbps >= 5 ? 'd-slow' : 'd-bad'
+}
+
+// speedTitle возвращает подробности замера для подсказки.
+function speedTitle(result: SpeedTestResult): string {
+  const lines: string[] = []
+
+  if (result.server) {
+    lines.push(`Сервер: ${result.server}`)
+    lines.push(`Скачано ${formatBytesRu(result.bytes)} за ${(result.duration_ms / 1000).toFixed(1)} с`)
+    lines.push(`Отклик (до первого байта): ${result.latency_ms} мс`)
+  }
+
+  for (const attempt of result.attempts ?? []) {
+    lines.push(`${attempt.server}: ${attempt.error}`)
+  }
+
+  lines.push(`Замер: ${formatAgo(result.tested_at)}`)
+
+  return lines.join('\n')
+}
 
 // shareProblem — ссылка не похожа на поддерживаемую share-ссылку.
 const shareProblem = computed(() => {
@@ -174,7 +296,10 @@ async function remove(outbound: OutboundView): Promise<void> {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadSpeedTest()
+})
 </script>
 
 <template>
@@ -200,7 +325,7 @@ onMounted(load)
             v-model="shareURL"
             class="form-input is-mono"
             type="text"
-            placeholder="vless://... или hysteria2://..."
+            placeholder="vless://..., ss://... или vmess://..."
             autocomplete="off"
             spellcheck="false"
             required
@@ -211,8 +336,8 @@ onMounted(load)
           </button>
         </div>
         <template #hint>
-          Поддерживаются <code>vless://</code>, <code>hysteria2://</code>, <code>trojan://</code> и
-          <code>wireguard://</code>. Другие серверы можно
+          Поддерживаются <code>vless://</code>, <code>vmess://</code>, <code>ss://</code>, <code>hysteria2://</code>,
+          <code>trojan://</code> и <code>wireguard://</code>. Другие серверы можно
           <button type="button" class="link-button" @click="openEditor()">добавить JSON-ом</button>.
         </template>
       </FormField>
@@ -232,8 +357,39 @@ onMounted(load)
         <option v-for="(label, source) in sourceLabels" :key="source" :value="source">{{ label }}</option>
       </select>
     </FormField>
-    <span class="table-count">{{ filtered.length }} из {{ outbounds.length }}</span>
+    <FormField v-if="speedSettings" label="Сервер теста скорости" input-id="speedServer">
+      <select id="speedServer" v-model="speedServer" class="form-select" :disabled="Boolean(speedRunning)">
+        <option value="">Первый доступный</option>
+        <option v-for="server in speedSettings.servers" :key="server.url" :value="server.url">{{ server.name }}</option>
+      </select>
+    </FormField>
+    <span class="table-count">
+      {{ filtered.length }} из {{ outbounds.length }}
+      <template v-if="speedSettings">
+        <button
+          v-if="speedQueue.length === 0"
+          type="button"
+          class="btn btn-secondary btn-sm"
+          :disabled="Boolean(speedRunning) || filtered.length === 0"
+          title="Замерить скорость всех показанных outbound-ов по очереди"
+          @click="runSpeedTestAll"
+        >
+          <SvgIcon class="btn-icon" :path="icons.speedometer" />
+          Замерить все
+        </button>
+        <button v-else type="button" class="btn btn-secondary btn-sm" :disabled="speedStopping" @click="speedStopping = true">
+          {{ speedStopping ? 'Остановка...' : `Остановить (осталось ${speedQueue.length})` }}
+        </button>
+      </template>
+    </span>
   </div>
+
+  <p v-if="speedSettings" class="card-hint speed-hint">
+    Тест скорости скачивает файл через outbound {{ speedSettings.duration }} с в {{ speedSettings.streams }}
+    {{ streamsWord(speedSettings.streams) }}. Если тестовый сервер недоступен через outbound (заблокирован
+    в стране роутера или выхода), берется следующий по списку. Серверы настраиваются в
+    <RouterLink :to="{ name: 'system-settings' }">настройках</RouterLink>.
+  </p>
 
   <div class="data-table">
     <table class="table">
@@ -243,15 +399,16 @@ onMounted(load)
           <th>Протокол</th>
           <th>Адрес</th>
           <th>Источник</th>
+          <th v-if="speedSettings">Скорость</th>
           <th class="col-actions"></th>
         </tr>
       </thead>
       <tbody>
         <tr v-if="loaded && outbounds.length === 0">
-          <td colspan="5" class="empty-state">Outbound-ов нет.</td>
+          <td :colspan="speedSettings ? 6 : 5" class="empty-state">Outbound-ов нет.</td>
         </tr>
         <tr v-else-if="loaded && filtered.length === 0">
-          <td colspan="5" class="empty-state">Ничего не найдено.</td>
+          <td :colspan="speedSettings ? 6 : 5" class="empty-state">Ничего не найдено.</td>
         </tr>
         <tr v-for="outbound in filtered" :key="`${outbound.source}:${outbound.tag}`">
           <td><span class="cell-main">{{ outbound.tag }}</span></td>
@@ -263,6 +420,35 @@ onMounted(load)
           <td>
             <span class="badge badge-source">{{ sourceLabels[outbound.source as ServerSource] }}</span>
             <div v-if="outbound.source_name" class="cell-sub">{{ outbound.source_name }}</div>
+          </td>
+          <td v-if="speedSettings" class="speed-cell">
+            <div v-if="canSpeedTest(outbound)" class="speed-result">
+              <IconButton
+                icon="speedometer"
+                :title="speedRunning === outbound.tag ? 'Идет замер...' : 'Замерить скорость'"
+                :disabled="Boolean(speedRunning) || speedQueue.length > 0"
+                :class="{ 'is-spinning': speedRunning === outbound.tag }"
+                @click="runSpeedTest(outbound.tag)"
+              />
+              <span v-if="speedRunning === outbound.tag" class="muted">Замер...</span>
+              <template v-else-if="speedResults[outbound.tag]">
+                <span
+                  v-if="!speedResults[outbound.tag].error"
+                  class="speed-value"
+                  :title="speedTitle(speedResults[outbound.tag])"
+                >
+                  <span class="proxy-delay" :class="speedLevel(speedResults[outbound.tag])">{{ formatBitrate(speedResults[outbound.tag].download) }}</span>
+                  <span class="cell-sub">
+                    {{ speedResults[outbound.tag].latency_ms }} мс · {{ speedResults[outbound.tag].server }}
+                    <span v-if="speedResults[outbound.tag].warning" class="field-warning" :title="speedResults[outbound.tag].warning"> · мало данных</span>
+                  </span>
+                </span>
+                <span v-else class="speed-error" :title="`${speedResults[outbound.tag].error}\n\n${speedTitle(speedResults[outbound.tag])}`">
+                  <RouterLink v-if="speedResults[outbound.tag].error?.includes('примените конфиг')" :to="{ name: 'config' }">Примените конфиг</RouterLink>
+                  <template v-else>{{ speedResults[outbound.tag].error }}</template>
+                </span>
+              </template>
+            </div>
           </td>
           <td class="actions-cell">
             <div v-if="outbound.source === 'manual'" class="row-actions">

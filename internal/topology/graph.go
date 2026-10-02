@@ -10,6 +10,7 @@ import (
 
 	"github.com/lanfix/sing-box-configurer/internal/jsonmap"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
+	"github.com/lanfix/sing-box-configurer/internal/render"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
 )
 
@@ -228,11 +229,11 @@ func (b *builder) addEdge(edge Edge) {
 	b.graph.Edges = append(b.graph.Edges, edge)
 }
 
-// addInbounds добавляет inbound-ы и их связи с маршрутизатором.
+// addInbounds добавляет inbound-ы и их связи с маршрутизатором. Служебный inbound конфигуратора не показывается.
 func (b *builder) addInbounds(config map[string]any) {
 	for _, inbound := range objects(config["inbounds"]) {
 		tag := jsonmap.String(inbound, "tag")
-		if tag == "" {
+		if tag == "" || tag == render.SourcesProxyTag {
 			continue
 		}
 

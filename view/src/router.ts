@@ -32,6 +32,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Прокси-группы' },
   },
   {
+    path: '/connections',
+    name: 'connections',
+    component: () => import('./pages/ConnectionsPage.vue'),
+    meta: { title: 'Соединения' },
+  },
+  {
     path: '/rules/groups',
     name: 'groups',
     component: () => import('./pages/rules/GroupsPage.vue'),
@@ -120,6 +126,18 @@ const routes: RouteRecordRaw[] = [
     name: 'system-security',
     component: () => import('./pages/system/SecurityPage.vue'),
     meta: { title: 'Безопасность' },
+  },
+  {
+    path: '/system/logs',
+    name: 'system-logs',
+    component: () => import('./pages/system/LogsPage.vue'),
+    meta: { title: 'Логи' },
+  },
+  {
+    path: '/system/backup',
+    name: 'system-backup',
+    component: () => import('./pages/system/BackupPage.vue'),
+    meta: { title: 'Перенос данных' },
   },
   {
     path: '/system/update',

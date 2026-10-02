@@ -14,8 +14,19 @@ const (
 	NameSystemd = "systemd"
 )
 
-// ErrNotRunning возвращается, если sing-box не запущен и действие выполнить нельзя.
-var ErrNotRunning = errors.New("sing-box is not running")
+// Источники журналов (Logs.Read).
+const (
+	LogSourceSingBox    = "sing-box"
+	LogSourceConfigurer = "configurer"
+)
+
+var (
+	// ErrNotRunning возвращается, если sing-box не запущен и действие выполнить нельзя.
+	ErrNotRunning = errors.New("sing-box is not running")
+
+	// ErrUnknownLogSource возвращается для неизвестного источника журнала.
+	ErrUnknownLogSource = errors.New("unknown log source")
+)
 
 // Platform — среда, в которой установлены sing-box и конфигуратор.
 type Platform struct {
@@ -24,6 +35,13 @@ type Platform struct {
 
 	SingBox SingBox
 	Updates Updates
+	Logs    Logs
+}
+
+// Logs читает журналы sing-box и конфигуратора: логи контейнеров в docker, journald в systemd.
+type Logs interface {
+	// Read возвращает последние lines строк журнала source (LogSourceSingBox или LogSourceConfigurer).
+	Read(ctx context.Context, source string, lines int) (string, error)
 }
 
 // SingBox управляет процессом sing-box.

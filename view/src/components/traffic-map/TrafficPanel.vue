@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Боковая панель карты: сведения о выбранном узле, строке или связи, живые соединения и разбор трассировки.
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 import type { TopologyConnection, TopologyGraph, TopologyNode, TopologyRow, TraceResult } from '../../api/types'
 import { formatBytesRu, formatRate } from '../../utils/format'
+import AddRuleDialog from '../AddRuleDialog.vue'
 import SvgIcon from '../SvgIcon.vue'
 import { icons } from '../../icons'
 import { connectionsOf, type MapModel, type Rate } from './model'
@@ -32,6 +33,12 @@ const emit = defineEmits<{
 
 // maxConnections — сколько соединений показывать в списке.
 const maxConnections = 50
+
+// addTarget — домен или IP, который добавляется в группу правил из трассировки или списка хостов.
+const addTarget = ref<string | null>(null)
+
+// traceTarget — домен трассировки или ее первый IP.
+const traceTarget = computed(() => props.trace?.domain || props.trace?.ips[0] || '')
 
 const nodesById = computed(() => new Map(props.graph.nodes.map((node) => [node.id, node])))
 
@@ -285,6 +292,11 @@ const kicker = computed(() => {
           <div v-else class="tm-chain">{{ actionLabels[trace.action] ?? trace.action }}</div>
         </div>
 
+        <button v-if="traceTarget" type="button" class="btn btn-secondary btn-sm tm-add-rule" @click="addTarget = traceTarget">
+          <SvgIcon class="btn-icon" :path="icons.plus" />
+          Добавить {{ traceTarget }} в группу
+        </button>
+
         <div class="tm-section-title">Правила маршрутизации</div>
         <ol class="tm-steps">
           <li v-for="step in trace.steps" :key="step.row" :class="{ 'is-match': step.row === trace.row, 'is-pass': step.matched && step.row !== trace.row }">
@@ -466,5 +478,7 @@ const kicker = computed(() => {
         </ul>
       </template>
     </div>
+
+    <AddRuleDialog v-if="addTarget" :target="addTarget" context="Добавлено из поиска пути" @close="addTarget = null" />
   </aside>
 </template>

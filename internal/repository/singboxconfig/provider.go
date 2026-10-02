@@ -118,6 +118,81 @@ func (p *Provider) Backup() (string, error) {
 	return backupPath, nil
 }
 
+// BackupInfo — резервная копия рабочего конфига.
+type BackupInfo struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	Size      int64     `json:"size"`
+}
+
+// backupNameRe — имя файла резервной копии (время создания в UTC).
+var backupNameRe = regexp.MustCompile(`^` + backupPrefix + `(\d{8}-\d{6}\.\d{3})\.json$`)
+
+// ErrBackupNotFound возвращается, если резервной копии с таким именем нет.
+var ErrBackupNotFound = errors.New("backup not found")
+
+// Backups возвращает резервные копии рабочего конфига, новые первыми.
+func (p *Provider) Backups() ([]BackupInfo, error) {
+	entries, err := os.ReadDir(p.backupDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []BackupInfo{}, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("cannot read backup dir: %w", err)
+	}
+
+	backups := make([]BackupInfo, 0, len(entries))
+
+	for _, entry := range entries {
+		match := backupNameRe.FindStringSubmatch(entry.Name())
+		if entry.IsDir() || match == nil {
+			continue
+		}
+
+		createdAt, err := time.Parse("20060102-150405.000", match[1])
+		if err != nil {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		backups = append(backups, BackupInfo{
+			Name:      entry.Name(),
+			CreatedAt: createdAt,
+			Size:      info.Size(),
+		})
+	}
+
+	slices.SortFunc(backups, func(a, b BackupInfo) int {
+		return b.CreatedAt.Compare(a.CreatedAt)
+	})
+
+	return backups, nil
+}
+
+// ReadBackup возвращает содержимое резервной копии name. Имя проверяется: читать можно только файлы
+// резервных копий из каталога копий.
+func (p *Provider) ReadBackup(name string) ([]byte, error) {
+	if !backupNameRe.MatchString(name) {
+		return nil, fmt.Errorf("%w: %s", ErrBackupNotFound, name)
+	}
+
+	data, err := os.ReadFile(filepath.Join(p.backupDir, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: %s", ErrBackupNotFound, name)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("cannot read backup: %w", err)
+	}
+
+	return data, nil
+}
+
 // Restore записывает в рабочий конфиг содержимое резервной копии backupPath.
 func (p *Provider) Restore(backupPath string) error {
 	data, err := os.ReadFile(backupPath)

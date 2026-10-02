@@ -234,6 +234,10 @@ type ConnectionMetadata struct {
 	DestinationIP   string `json:"destinationIP"`
 	DestinationPort string `json:"destinationPort"`
 	SourceIP        string `json:"sourceIP"`
+	SourcePort      string `json:"sourcePort"`
+
+	// ProcessPath — процесс-источник (только если sing-box определяет процессы).
+	ProcessPath string `json:"processPath"`
 }
 
 // Connection — активное соединение из Clash API.
@@ -279,6 +283,36 @@ func (api *ClashAPI) GetConnections() (*Connections, error) {
 	}
 
 	return &parsed, nil
+}
+
+// CloseConnection закрывает активное соединение id.
+func (api *ClashAPI) CloseConnection(id string) error {
+	return api.closeConnections("/connections/" + url.PathEscape(id))
+}
+
+// CloseAllConnections закрывает все активные соединения.
+func (api *ClashAPI) CloseAllConnections() error {
+	return api.closeConnections("/connections")
+}
+
+// closeConnections выполняет DELETE по пути path эндпоинта соединений.
+func (api *ClashAPI) closeConnections(path string) error {
+	resp, err := api.doRequest(http.MethodDelete, path, nil)
+	if err != nil {
+		return fmt.Errorf("cannot do request: %w", err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+
+		return fmt.Errorf("status code is %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 type rulesResponse struct {

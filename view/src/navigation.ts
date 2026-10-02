@@ -30,6 +30,7 @@ export function isNavGroup(entry: NavEntry): entry is NavGroup {
 export const navigation: NavEntry[] = [
   { route: 'overview', title: 'Обзор', icon: icons.overview },
   { route: 'proxies', title: 'Прокси', icon: icons.proxies },
+  { route: 'connections', title: 'Соединения', icon: icons.connections },
   {
     id: 'rules',
     title: 'Правила',
@@ -80,6 +81,8 @@ export const navigation: NavEntry[] = [
     children: [
       { route: 'system-settings', title: 'Настройки' },
       { route: 'system-security', title: 'Безопасность' },
+      { route: 'system-logs', title: 'Логи' },
+      { route: 'system-backup', title: 'Перенос данных' },
       { route: 'system-update', title: 'Обновление', badge: 'update' },
     ],
   },

@@ -61,8 +61,9 @@ type Settings struct {
 	// SourcesProxy генерируется при первом запуске.
 	SourcesProxy SourcesProxy `json:"sources_proxy"`
 
-	Happ     Happ     `json:"happ"`
-	Security Security `json:"security"`
+	Happ      Happ      `json:"happ"`
+	Security  Security  `json:"security"`
+	SpeedTest SpeedTest `json:"speed_test"`
 }
 
 // appDataSection описывает раздел app.json, которым владеет менеджер.
@@ -74,8 +75,9 @@ type appDataSection struct {
 // (данные прежних версий), включаемые по умолчанию флаги иначе прочитались бы как false.
 type presenceSection struct {
 	Settings *struct {
-		Happ     *Happ     `json:"happ"`
-		Security *Security `json:"security"`
+		Happ      *Happ      `json:"happ"`
+		Security  *Security  `json:"security"`
+		SpeedTest *SpeedTest `json:"speed_test"`
 	} `json:"settings"`
 }
 
@@ -108,8 +110,9 @@ func Default() Settings {
 		SourcesProxy: SourcesProxy{
 			Password: "",
 		},
-		Happ:     DefaultHapp(),
-		Security: DefaultSecurity(),
+		Happ:      DefaultHapp(),
+		Security:  DefaultSecurity(),
+		SpeedTest: DefaultSpeedTest(),
 	}
 }
 
@@ -167,6 +170,11 @@ func NewManager(appData *appdata.File) (*Manager, error) {
 
 	if presence.Settings == nil || presence.Settings.Security == nil {
 		m.data.Security = DefaultSecurity()
+		changed = true
+	}
+
+	if presence.Settings == nil || presence.Settings.SpeedTest == nil || len(m.data.SpeedTest.Servers) == 0 {
+		m.data.SpeedTest = DefaultSpeedTest()
 		changed = true
 	}
 
@@ -228,8 +236,24 @@ func (m *Manager) Get() Settings {
 	result := m.data
 	result.ClashAPI.AllowOrigins = slices.Clone(m.data.ClashAPI.AllowOrigins)
 	result.Security.AllowedHosts = slices.Clone(m.data.Security.AllowedHosts)
+	result.SpeedTest.Servers = slices.Clone(m.data.SpeedTest.Servers)
 
 	return result
+}
+
+// UpdateSpeedTest меняет настройки теста скорости outbound-ов. Действуют сразу.
+func (m *Manager) UpdateSpeedTest(speedTest SpeedTest) error {
+	normalized, err := speedTest.Normalize()
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.data.SpeedTest = normalized
+
+	return m.save()
 }
 
 // UpdateHapp меняет настройки применения подписок Happ. Действуют сразу.

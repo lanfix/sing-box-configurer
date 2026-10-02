@@ -17,6 +17,7 @@ import (
 
 	"github.com/lanfix/sing-box-configurer/cmd/config"
 	"github.com/lanfix/sing-box-configurer/internal/amnezia"
+	"github.com/lanfix/sing-box-configurer/internal/appbackup"
 	"github.com/lanfix/sing-box-configurer/internal/auth"
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
@@ -37,6 +38,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/security"
 	"github.com/lanfix/sing-box-configurer/internal/settings"
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
+	"github.com/lanfix/sing-box-configurer/internal/speedtest"
 	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
 	"github.com/lanfix/sing-box-configurer/internal/update"
 	"github.com/lanfix/sing-box-configurer/internal/updater"
@@ -89,8 +91,14 @@ func usage() {
 	flag.PrintDefaults()
 }
 
+// restartExitCode — код выхода для перезапуска после импорта данных. Ненулевой: перезапуск выполняют
+// и политики «только при ошибке» (restart: on-failure в docker, Restart=on-failure в systemd).
+const restartExitCode = 75
+
 // serve запускает HTTP-сервер конфигуратора.
 func serve(cfg *config.AppConfig, configPath string) {
+	startedAt := time.Now()
+
 	log.Printf("Starting Sing-Box Configurer %s (platform: %s, config: %s)", version.Version, cfg.Platform, configPath)
 
 	appData := appdata.NewFile(cfg.AppDataPath)
@@ -278,6 +286,14 @@ func serve(cfg *config.AppConfig, configPath string) {
 		return settingsManager.Get().Security
 	}, ruleSetHosts(cfg))
 
+	// Тест скорости идет через тот же служебный inbound, что и загрузка источников.
+	speedTest := speedtest.NewService(detourProxy, func() settings.SpeedTest {
+		return settingsManager.Get().SpeedTest
+	})
+
+	// Копии app.json перед импортом хранятся рядом с резервными копиями конфига sing-box.
+	appBackup := appbackup.NewService(appData, singBoxConfigProvider, cfg.BackupDir, validateAppData)
+
 	h := handler.NewHandler(handler.Deps{
 		Auth:           authManager,
 		Security:       guard,
@@ -294,11 +310,16 @@ func serve(cfg *config.AppConfig, configPath string) {
 		ClashAPI:       clashAPI,
 		TrafficMonitor: trafficMonitor,
 		Update:         update.NewService(host),
+		Logs:           host.Logs,
+		AppBackup:      appBackup,
+		SpeedTest:      speedTest,
+		Platform:       host.Name,
+		Restart:        restartSelf,
 	})
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /api/health", handler.Health(migrationResult, host.Name))
+	mux.HandleFunc("GET /api/health", handler.Health(migrationResult, host.Name, startedAt))
 	h.Register(mux)
 
 	// Неизвестные методы API — 404, а не страница интерфейса.
@@ -356,6 +377,66 @@ func newPlatform(cfg *config.AppConfig, configPath string) (platform.Platform, e
 	}
 
 	return platform.Platform{}, fmt.Errorf("unknown platform %q", cfg.Platform)
+}
+
+// restartSelf завершает процесс через секунду, чтобы ответ на запрос успел уйти: docker (restart: always)
+// или systemd (Restart=always) запускают конфигуратор заново, и он загружает данные из app.json.
+func restartSelf() {
+	go func() {
+		time.Sleep(time.Second)
+
+		log.Printf("Restarting to load new app data (exit code %d)", restartExitCode)
+		os.Exit(restartExitCode)
+	}()
+}
+
+// validateAppData проверяет, что данные из файла path загружаются менеджерами приложения (для импорта).
+// Файл временный: менеджеры могут дописать в него значения по умолчанию.
+func validateAppData(path string) error {
+	appData := appdata.NewFile(path)
+
+	if _, err := auth.NewManager(appData); err != nil {
+		return fmt.Errorf("вход в панель: %w", err)
+	}
+
+	if _, err := settings.NewManager(appData); err != nil {
+		return fmt.Errorf("настройки: %w", err)
+	}
+
+	rulesManager, err := rules.NewManager(appData, rules.Options{})
+	if err != nil {
+		return fmt.Errorf("правила: %w", err)
+	}
+
+	if err = rulesManager.Load(); err != nil {
+		return fmt.Errorf("правила: %w", err)
+	}
+
+	if _, err = dnsconfig.NewManager(appData); err != nil {
+		return fmt.Errorf("DNS: %w", err)
+	}
+
+	if _, err = dnsrecords.NewManager(appData); err != nil {
+		return fmt.Errorf("DNS-записи: %w", err)
+	}
+
+	if _, err = outbound.NewManager(appData); err != nil {
+		return fmt.Errorf("outbound-ы: %w", err)
+	}
+
+	if _, err = inbounds.NewManager(appData); err != nil {
+		return fmt.Errorf("inbound-ы: %w", err)
+	}
+
+	if _, err = happ.NewStore(appData); err != nil {
+		return fmt.Errorf("подписки Happ: %w", err)
+	}
+
+	if _, err = amnezia.NewManager(appData, nil, nil); err != nil {
+		return fmt.Errorf("конфигурации Amnezia: %w", err)
+	}
+
+	return nil
 }
 
 // outboundConfigs возвращает объекты sing-box outbound-ов, добавленных вручную.

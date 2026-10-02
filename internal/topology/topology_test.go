@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
@@ -240,6 +241,51 @@ func TestBuild(t *testing.T) {
 
 	if len(graph.Warnings) != 0 {
 		t.Errorf("warnings = %v", graph.Warnings)
+	}
+}
+
+// TestBuildHidesServiceInbound проверяет, что служебный inbound конфигуратора и его правила (по одному на
+// outbound) не попадают на карту.
+func TestBuildHidesServiceInbound(t *testing.T) {
+	result, err := render.Render(render.Input{
+		Groups: []rules.Group{
+			{Name: "default", DefaultOutbound: "vless-1"},
+		},
+		DNS: dnsconfig.Data{},
+		Outbounds: []map[string]any{
+			{"type": "vless", "tag": "vless-1", "server": "a.example"},
+		},
+		Settings: settings.Settings{
+			SourcesProxy: settings.SourcesProxy{Password: "secret"},
+		},
+		RuleSetBaseURL: "http://127.0.0.1:8080",
+		SourcesProxy: render.SourcesProxy{
+			Listen: "127.0.0.1",
+			Port:   9091,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(result.Config)
+
+	var config map[string]any
+
+	if err = json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+
+	graph := Build(config, Env{})
+
+	if findNode(graph, InboundID(render.SourcesProxyTag)) != nil {
+		t.Error("service inbound must be hidden")
+	}
+
+	for _, row := range findNode(graph, RouterID).Rows {
+		if strings.Contains(row.Label, "auth_user") || strings.Contains(row.Detail, "auth_user") {
+			t.Errorf("service rule must be hidden: %+v", row)
+		}
 	}
 }
 

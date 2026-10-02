@@ -186,14 +186,19 @@ func (u *updates) updaterContainers(ctx context.Context) ([]dockerapi.Info, erro
 	})
 }
 
-// self находит контейнер конфигуратора. Hostname контейнера по умолчанию — его короткий ID.
+// self находит контейнер конфигуратора.
 func (u *updates) self(ctx context.Context) (dockerapi.Info, error) {
+	return selfContainer(ctx, u.docker)
+}
+
+// selfContainer находит контейнер конфигуратора. Hostname контейнера по умолчанию — его короткий ID.
+func selfContainer(ctx context.Context, docker *dockerapi.Manager) (dockerapi.Info, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		return dockerapi.Info{}, fmt.Errorf("cannot get hostname: %w", err)
 	}
 
-	containers, err := u.docker.List(ctx, dockerapi.Filter{
+	containers, err := docker.List(ctx, dockerapi.Filter{
 		ID:     hostname,
 		Name:   "",
 		Labels: nil,

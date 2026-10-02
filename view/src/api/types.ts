@@ -42,6 +42,17 @@ export interface BulkAddResult {
   failed: number
   total: number
   failed_values?: { value: string; error: string }[]
+  // warnings — добавленные значения, которые входят в URL-источники групп выше.
+  warnings?: { value: string; error: string }[]
+}
+
+// RuleCheck — проверка значения нового правила до добавления.
+export interface RuleCheck {
+  value: string
+  // error — добавить нельзя (пересечение с ручным правилом или некорректное значение).
+  error?: string
+  // warnings — значение перекрыто URL-источником группы выше.
+  warnings?: string[]
 }
 
 export interface DNSServer {
@@ -175,6 +186,40 @@ export interface Settings {
   happ: {
     auto_apply: boolean
   }
+  speed_test: SpeedTestSettings
+}
+
+export interface SpeedTestServer {
+  name: string
+  url: string
+}
+
+export interface SpeedTestSettings {
+  servers: SpeedTestServer[]
+  // duration — длительность замера, с.
+  duration: number
+  streams: number
+}
+
+export interface SpeedTestResult {
+  tag: string
+  server?: string
+  server_url?: string
+  // download — байт/с.
+  download: number
+  bytes: number
+  duration_ms: number
+  latency_ms: number
+  attempts: { server: string; error: string }[]
+  warning?: string
+  error?: string
+  tested_at: string
+}
+
+export interface SpeedTestState {
+  settings: SpeedTestSettings
+  running: string
+  results: Record<string, SpeedTestResult>
 }
 
 // SecuritySettings — защита панели от запросов с чужих сайтов.
@@ -465,4 +510,62 @@ export interface TraceResult {
   dns_nodes: string[]
   dns_edges: string[]
   notes: string[]
+}
+
+// Connection — активное соединение sing-box (страница «Соединения»).
+export interface Connection {
+  id: string
+  host: string
+  destination: string
+  network: string
+  source: string
+  inbound: string
+  rule: string
+  // group — группа правил, в selector которой ушло соединение.
+  group?: string
+  chain: string[]
+  outbound: string
+  process?: string
+  upload: number
+  download: number
+  start: string
+}
+
+export interface ConnectionsSnapshot {
+  connections: Connection[]
+  download_total: number
+  upload_total: number
+  memory: number
+}
+
+// ConfigBackup — резервная копия рабочего конфига sing-box.
+export interface ConfigBackup {
+  name: string
+  created_at: string
+  size: number
+}
+
+export type LogSource = 'sing-box' | 'configurer'
+
+export interface LogsResponse {
+  source: LogSource
+  platform: string
+  text: string
+}
+
+// AppDataSummary — содержимое файла импорта app.json.
+export interface AppDataSummary {
+  schema_version: number
+  latest_version: number
+  counts: Record<string, number>
+  has_auth: boolean
+  username?: string
+  allowed_hosts: string[]
+}
+
+export interface ImportResult {
+  from_version: number
+  to_version: number
+  migrations: string[]
+  backup: string
 }

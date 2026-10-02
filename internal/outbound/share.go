@@ -60,6 +60,12 @@ func ParseShareUrl(shareUrl string) (Share, error) {
 	case "trojan":
 		shareProvider = NewShareTrojanProvider()
 
+	case "ss":
+		shareProvider = NewShareShadowsocksProvider()
+
+	case "vmess":
+		shareProvider = NewShareVMessProvider()
+
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", protocol)
 	}
@@ -80,7 +86,7 @@ func extractProfileNameFromShare(shareData string) (newShareData, profileName st
 		return parts[0], "", nil
 
 	case 2:
-		return parts[0], parts[1], nil
+		return parts[0], unescapeProfileName(parts[1]), nil
 
 	default:
 		return "", "", fmt.Errorf("invalid share data format, there are many # symbols")

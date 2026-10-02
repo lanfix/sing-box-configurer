@@ -38,17 +38,47 @@ func New(opts Options) (platform.Platform, error) {
 		return platform.Platform{}, err
 	}
 
+	runtime := &singBox{
+		docker: manager,
+	}
+
 	return platform.Platform{
-		Name: platform.NameDocker,
-		SingBox: &singBox{
-			docker: manager,
-		},
+		Name:    platform.NameDocker,
+		SingBox: runtime,
 		Updates: &updates{
 			docker:     manager,
 			registry:   NewRegistry(),
 			listenPort: opts.ListenPort,
 		},
+		Logs: &logs{
+			docker:  manager,
+			singBox: runtime,
+		},
 	}, nil
+}
+
+// logs читает логи контейнеров sing-box и конфигуратора.
+type logs struct {
+	docker  *dockerapi.Manager
+	singBox *singBox
+}
+
+// Read возвращает последние lines строк логов контейнера source.
+func (l *logs) Read(ctx context.Context, source string, lines int) (string, error) {
+	switch source {
+	case platform.LogSourceSingBox:
+		return l.singBox.Logs(ctx, lines)
+
+	case platform.LogSourceConfigurer:
+		self, err := selfContainer(ctx, l.docker)
+		if err != nil {
+			return "", err
+		}
+
+		return l.docker.Logs(ctx, self.ID, strconv.Itoa(lines))
+	}
+
+	return "", fmt.Errorf("%w: %s", platform.ErrUnknownLogSource, source)
 }
 
 // singBox управляет контейнером sing-box с лейблами app=sing-box и managed=true.

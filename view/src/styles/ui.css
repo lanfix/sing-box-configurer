@@ -1224,3 +1224,385 @@ button.proxy-node:focus-visible {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ===== Соединения ===== */
+.table .col-num {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.conn-table td {
+    vertical-align: top;
+}
+
+.conn-host {
+    display: inline-block;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+}
+
+.conn-network {
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.conn-route {
+    min-width: 180px;
+}
+
+.conn-chain {
+    display: block;
+    margin-top: 4px;
+    color: #8b949e;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.conn-rate-value {
+    font-size: 24px;
+}
+
+/* ===== Логи ===== */
+.logs-controls-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px 20px;
+}
+
+.logs-controls-row + .logs-controls-row {
+    align-items: center;
+    margin-top: 14px;
+}
+
+.logs-search {
+    flex: 1;
+    min-width: 220px;
+}
+
+.logs-spacer {
+    flex: 1;
+}
+
+.logs-hint {
+    margin: 12px 0 0;
+}
+
+.logs-meta {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 6px;
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.logs-count.is-error {
+    color: #f85149;
+}
+
+.logs-count.is-warn {
+    color: #d29922;
+}
+
+.logs-viewer {
+    height: calc(100vh - 380px);
+    min-height: 320px;
+    padding: 8px 0;
+    overflow: auto;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    background: #0d1117;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.logs-line {
+    padding: 0 12px;
+    color: #c9d1d9;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.logs-line:hover {
+    background: #161b22;
+}
+
+.logs-line.is-error {
+    background: rgba(248, 81, 73, 0.06);
+    color: #ff7b72;
+}
+
+.logs-line.is-warn {
+    color: #e3b341;
+}
+
+.logs-line.is-debug {
+    color: #6e7681;
+}
+
+.logs-empty {
+    padding: 24px;
+    color: #8b949e;
+    font-family: inherit;
+    text-align: center;
+}
+
+/* ===== Перенос данных ===== */
+.settings-card-body.is-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.drop-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 28px 16px;
+    border: 1.5px dashed #30363d;
+    border-radius: 8px;
+    color: #8b949e;
+    font-size: 14px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.drop-zone:hover,
+.drop-zone.is-dragging {
+    border-color: #58a6ff;
+    background: rgba(56, 139, 253, 0.06);
+    color: #c9d1d9;
+}
+
+.drop-zone-input {
+    display: none;
+}
+
+.drop-zone-icon {
+    width: 28px;
+    height: 28px;
+}
+
+.drop-zone-file {
+    color: #e6edf3;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+}
+
+.import-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+}
+
+.import-summary-item {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 12px;
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    background: #0d1117;
+}
+
+.import-summary-item.is-empty {
+    opacity: 0.5;
+}
+
+.import-summary-value {
+    color: #e6edf3;
+    font-size: 20px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.import-summary-label {
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.restart-overlay {
+    z-index: 1000;
+}
+
+.restart-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    max-width: 420px;
+    margin: 16px;
+    padding: 28px;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    background: #161b22;
+    text-align: center;
+}
+
+.restart-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #30363d;
+    border-top-color: #58a6ff;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+
+.restart-title {
+    color: #e6edf3;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.restart-text {
+    margin: 0;
+    color: #8b949e;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* ===== Резервные копии конфига ===== */
+.backup-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 8px;
+    margin: 0 0 16px;
+    padding: 0;
+    list-style: none;
+}
+
+.backup-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.backup-item:hover {
+    border-color: #58a6ff;
+}
+
+.backup-item.active {
+    border-color: #58a6ff;
+    background: rgba(56, 139, 253, 0.12);
+}
+
+.backup-item-title {
+    color: #e6edf3;
+    font-size: 13px;
+}
+
+.backup-item-sub {
+    color: #8b949e;
+    font-size: 12px;
+}
+
+.backup-diff-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+/* ===== Тест скорости ===== */
+.speed-hint {
+    margin: -4px 0 12px;
+}
+
+.speed-result {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.speed-value {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.3;
+}
+
+.speed-value .proxy-delay {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.speed-error {
+    display: -webkit-box;
+    max-width: 280px;
+    overflow: hidden;
+    color: #f85149;
+    font-size: 12px;
+    line-height: 1.4;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    cursor: help;
+}
+
+.icon-btn.is-spinning svg {
+    animation: spin 1.2s linear infinite;
+}
+
+.setting-row.is-wide {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.list-editor-row .speed-server-name {
+    flex: 0 0 180px;
+}
+
+.speed-move-up svg {
+    transform: rotate(-90deg);
+}
+
+.speed-move-down svg {
+    transform: rotate(90deg);
+}
+
+.speed-server-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+@media (max-width: 640px) {
+    .speed-server-row {
+        flex-wrap: wrap;
+    }
+
+    .list-editor-row .speed-server-name {
+        flex: 1 1 100%;
+    }
+}
+
+/* Добавление в группу из поиска пути */
+.tm-add-rule {
+    max-width: 100%;
+    margin: 8px 0 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

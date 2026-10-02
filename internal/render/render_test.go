@@ -2,6 +2,7 @@ package render
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -361,18 +362,19 @@ func TestRenderEmpty(t *testing.T) {
 	}
 }
 
-// TestRenderSourcesProxy проверяет служебный inbound для загрузки URL-источников через outbound-ы.
+// TestRenderSourcesProxy проверяет служебный inbound для загрузки URL-источников и теста скорости: пользователь
+// и маршрутное правило есть у каждого outbound-а конфига, кроме block.
 func TestRenderSourcesProxy(t *testing.T) {
 	in := testInput()
 
-	// Без источников с detour inbound-а нет.
+	// Без порта и пароля inbound-а нет.
 	result, err := Render(in)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if byTag(field(t, result.Config, "inbounds").([]any), SourcesProxyTag) != nil {
-		t.Fatal("sources proxy inbound must not be rendered without detours")
+		t.Fatal("sources proxy inbound must not be rendered without port and password")
 	}
 
 	in.Settings.SourcesProxy.Password = "pass"
@@ -392,17 +394,30 @@ func TestRenderSourcesProxy(t *testing.T) {
 		t.Fatal("sources proxy inbound must be rendered")
 	}
 
-	wantUsers := `[{"password":"pass","username":"vless-1"},{"password":"pass","username":"select-default"}]`
+	users := make([]string, 0)
 
-	if got := toJSON(t, inbound["users"]); got != wantUsers || inbound["listen_port"] != 9091 {
+	for _, user := range inbound["users"].([]any) {
+		users = append(users, user.(map[string]any)["username"].(string))
+	}
+
+	for _, tag := range []string{"auto", "vless-1", "direct", "select-default"} {
+		if !slices.Contains(users, tag) {
+			t.Errorf("inbound users %v must contain %s", users, tag)
+		}
+	}
+
+	if slices.Contains(users, "block") || inbound["listen_port"] != 9091 {
 		t.Errorf("inbound = %s", toJSON(t, inbound))
 	}
 
 	routeRules := field(t, result.Config, "route", "rules").([]any)
-	wantFirst := `{"auth_user":["vless-1"],"inbound":"configurer-sources","outbound":"vless-1"}`
 
-	if got := toJSON(t, routeRules[0]); got != wantFirst {
-		t.Errorf("first route rule = %s, want %s", got, wantFirst)
+	for i, user := range users {
+		want := fmt.Sprintf(`{"auth_user":[%q],"inbound":"configurer-sources","outbound":%q}`, user, user)
+
+		if got := toJSON(t, routeRules[i]); got != want {
+			t.Errorf("route rule %d = %s, want %s", i, got, want)
+		}
 	}
 
 	if !slices.ContainsFunc(result.Warnings, func(warning string) bool {

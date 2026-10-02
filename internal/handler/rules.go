@@ -77,15 +77,49 @@ func (h *Handler) AddRule(w http.ResponseWriter, r *http.Request) {
 		Group:       req.Group,
 	}
 
-	if err := h.rulesManager.AddRule(rule); err != nil {
+	added, warnings, err := h.rulesManager.AddRule(rule)
+	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"success": true,
-		"rule":    rule,
+		"success":  true,
+		"rule":     added,
+		"warnings": warnings,
+	})
+}
+
+// CheckRules проверяет значения новых правил до добавления: пересечения с ручными правилами (добавить нельзя)
+// и с URL-источниками групп выше (предупреждение).
+func (h *Handler) CheckRules(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Type   string   `json:"type"`
+		Values []string `json:"values"`
+		Group  string   `json:"group"`
+	}
+
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if !slices.Contains(ruleTypes, req.Type) {
+		writeJSONError(w, http.StatusBadRequest, "Тип правила должен быть domain, domain_suffix, ip или cidr")
+
+		return
+	}
+
+	checks, err := h.rulesManager.CheckRules(req.Type, req.Group, req.Values)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"checks":        checks,
+		"pending_count": h.rulesManager.GetPendingCount(),
 	})
 }
 

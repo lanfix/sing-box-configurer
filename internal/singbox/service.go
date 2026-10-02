@@ -275,6 +275,52 @@ func (s *Service) applyLocked(ctx context.Context, data []byte, warnings []strin
 	return nil, fmt.Errorf("sing-box не запустился с новым конфигом, прежний конфиг восстановлен: %w\n%s", startErr, logs)
 }
 
+// Backups возвращает резервные копии рабочего конфига, новые первыми.
+func (s *Service) Backups() ([]singboxconfig.BackupInfo, error) {
+	return s.provider.Backups()
+}
+
+// Backup возвращает резервную копию name в том же виде, что и рендер (для сравнения с рабочим конфигом).
+func (s *Service) Backup(name string) ([]byte, error) {
+	data, err := s.provider.ReadBackup(name)
+	if err != nil {
+		return nil, err
+	}
+
+	return normalize(data)
+}
+
+// RestoreBackup делает рабочим конфиг из резервной копии name так же, как применение: проверка sing-box check,
+// резервная копия текущего конфига, замена и перезапуск, а при неудачном запуске — возврат текущего конфига.
+// Данные app.json не меняются, поэтому после отката итоговый конфиг отличается от рабочего.
+func (s *Service) RestoreBackup(ctx context.Context, name string) (*ApplyResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := s.provider.ReadBackup(name)
+	if err != nil {
+		return nil, err
+	}
+
+	backup, err := normalize(data)
+	if err != nil {
+		return nil, fmt.Errorf("резервная копия %s повреждена: %w", name, err)
+	}
+
+	if actual, _ := s.normalizedActual(); bytes.Equal(backup, actual) {
+		return nil, ErrNoChanges
+	}
+
+	result, err := s.applyLocked(ctx, backup, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	result.Message = "Конфиг из резервной копии применен, sing-box перезапущен"
+
+	return result, nil
+}
+
 // Restart перезапускает sing-box без изменения конфига. Не выполняется одновременно с применением конфига.
 func (s *Service) Restart(ctx context.Context) error {
 	s.mu.Lock()
@@ -295,17 +341,22 @@ func (s *Service) normalizedActual() ([]byte, error) {
 		return []byte{}, err
 	}
 
-	config, err := singboxconfig.Parse(data)
-	if err != nil {
-		return data, err
-	}
-
-	normalized, err := singboxconfig.Marshal(config)
+	normalized, err := normalize(data)
 	if err != nil {
 		return data, err
 	}
 
 	return normalized, nil
+}
+
+// normalize приводит конфиг к виду рендера: без комментариев, с отсортированными ключами и отступами.
+func normalize(data []byte) ([]byte, error) {
+	config, err := singboxconfig.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return singboxconfig.Marshal(config)
 }
 
 // check проверяет конфиг командой sing-box check.

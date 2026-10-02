@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"regexp"
 	"slices"
@@ -25,7 +24,7 @@ type Rule struct {
 	Type        string    `json:"type"` // "domain", "domain_suffix", "ip", "cidr"
 	Value       string    `json:"value"`
 	Description string    `json:"description"`
-	Group       string    `json:"group"` // группа, к которой привязано правило
+	Group       string    `json:"group"` // РіСЂСѓРїРїР°, Рє РєРѕС‚РѕСЂРѕР№ РїСЂРёРІСЏР·Р°РЅРѕ РїСЂР°РІРёР»Рѕ
 	Applied     bool      `json:"applied"`
 	Deleted     bool      `json:"deleted"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -36,7 +35,7 @@ type URLSource struct {
 	ID          string    `json:"id"`
 	URL         string    `json:"url"`
 	Description string    `json:"description"`
-	Group       string    `json:"group"`    // группа, к которой привязан источник
+	Group       string    `json:"group"`    // РіСЂСѓРїРїР°, Рє РєРѕС‚РѕСЂРѕР№ РїСЂРёРІСЏР·Р°РЅ РёСЃС‚РѕС‡РЅРёРє
 	Interval    int       `json:"interval"` // in minutes
 	LastUpdate  time.Time `json:"last_update"`
 	LastStatus  string    `json:"last_status"` // "success", "error"
@@ -46,20 +45,20 @@ type URLSource struct {
 	Deleted     bool      `json:"deleted"`
 	CreatedAt   time.Time `json:"created_at"`
 
-	// Detour — outbound sing-box, через который загружается список (например, VPN для заблокированного
-	// сайта). Пустой — загрузка напрямую из конфигуратора.
+	// Detour вЂ” outbound sing-box, С‡РµСЂРµР· РєРѕС‚РѕСЂС‹Р№ Р·Р°РіСЂСѓР¶Р°РµС‚СЃСЏ СЃРїРёСЃРѕРє (РЅР°РїСЂРёРјРµСЂ, VPN РґР»СЏ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРЅРѕРіРѕ
+	// СЃР°Р№С‚Р°). РџСѓСЃС‚РѕР№ вЂ” Р·Р°РіСЂСѓР·РєР° РЅР°РїСЂСЏРјСѓСЋ РёР· РєРѕРЅС„РёРіСѓСЂР°С‚РѕСЂР°.
 	Detour string `json:"detour,omitempty"`
 }
 
-// Group представляет логическую группу для правил.
+// Group РїСЂРµРґСЃС‚Р°РІР»СЏРµС‚ Р»РѕРіРёС‡РµСЃРєСѓСЋ РіСЂСѓРїРїСѓ РґР»СЏ РїСЂР°РІРёР».
 type Group struct {
 	Name            string    `json:"name"`
 	Description     string    `json:"description"`
 	DefaultOutbound string    `json:"default_outbound,omitempty"`
-	DNSServer       string    `json:"dns_server,omitempty"` // тег DNS-сервера для доменов группы
+	DNSServer       string    `json:"dns_server,omitempty"` // С‚РµРі DNS-СЃРµСЂРІРµСЂР° РґР»СЏ РґРѕРјРµРЅРѕРІ РіСЂСѓРїРїС‹
 	CreatedAt       time.Time `json:"created_at"`
 
-	// System — системная группа: не хранится в app.json, не редактируется и не удаляется.
+	// System вЂ” СЃРёСЃС‚РµРјРЅР°СЏ РіСЂСѓРїРїР°: РЅРµ С…СЂР°РЅРёС‚СЃСЏ РІ app.json, РЅРµ СЂРµРґР°РєС‚РёСЂСѓРµС‚СЃСЏ Рё РЅРµ СѓРґР°Р»СЏРµС‚СЃСЏ.
 	System bool `json:"system,omitempty"`
 }
 
@@ -71,30 +70,30 @@ type RulesData struct {
 }
 
 const (
-	// BlockGroupName — системная группа: соединения по ее правилам отклоняются.
+	// BlockGroupName вЂ” СЃРёСЃС‚РµРјРЅР°СЏ РіСЂСѓРїРїР°: СЃРѕРµРґРёРЅРµРЅРёСЏ РїРѕ РµРµ РїСЂР°РІРёР»Р°Рј РѕС‚РєР»РѕРЅСЏСЋС‚СЃСЏ.
 	BlockGroupName = "block"
 
-	// BypassGroupName — системная группа: трафик по ее правилам идет мимо туннеля sing-box.
+	// BypassGroupName вЂ” СЃРёСЃС‚РµРјРЅР°СЏ РіСЂСѓРїРїР°: С‚СЂР°С„РёРє РїРѕ РµРµ РїСЂР°РІРёР»Р°Рј РёРґРµС‚ РјРёРјРѕ С‚СѓРЅРЅРµР»СЏ sing-box.
 	BypassGroupName = "bypass"
 
-	// DefaultGroupName — группа, которая создается при первой инициализации. В нее же попадали правила
-	// до появления групп.
+	// DefaultGroupName вЂ” РіСЂСѓРїРїР°, РєРѕС‚РѕСЂР°СЏ СЃРѕР·РґР°РµС‚СЃСЏ РїСЂРё РїРµСЂРІРѕР№ РёРЅРёС†РёР°Р»РёР·Р°С†РёРё. Р’ РЅРµРµ Р¶Рµ РїРѕРїР°РґР°Р»Рё РїСЂР°РІРёР»Р°
+	// РґРѕ РїРѕСЏРІР»РµРЅРёСЏ РіСЂСѓРїРї.
 	DefaultGroupName = "default"
 
-	// Outbound и DNS-сервер группы default новой инсталляции.
+	// Outbound Рё DNS-СЃРµСЂРІРµСЂ РіСЂСѓРїРїС‹ default РЅРѕРІРѕР№ РёРЅСЃС‚Р°Р»Р»СЏС†РёРё.
 	defaultGroupOutbound  = "auto"
 	defaultGroupDNSServer = "cloudflare"
 )
 
-// groupNameRe — допустимое имя группы: оно входит в теги rule-set-ов и selector-а.
+// groupNameRe вЂ” РґРѕРїСѓСЃС‚РёРјРѕРµ РёРјСЏ РіСЂСѓРїРїС‹: РѕРЅРѕ РІС…РѕРґРёС‚ РІ С‚РµРіРё rule-set-РѕРІ Рё selector-Р°.
 var groupNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// SystemGroups возвращает системные группы.
+// SystemGroups РІРѕР·РІСЂР°С‰Р°РµС‚ СЃРёСЃС‚РµРјРЅС‹Рµ РіСЂСѓРїРїС‹.
 func SystemGroups() []Group {
 	return []Group{
 		{
 			Name:            BlockGroupName,
-			Description:     "Блокировка: соединения отклоняются",
+			Description:     "Р‘Р»РѕРєРёСЂРѕРІРєР°: СЃРѕРµРґРёРЅРµРЅРёСЏ РѕС‚РєР»РѕРЅСЏСЋС‚СЃСЏ",
 			DefaultOutbound: "",
 			DNSServer:       "",
 			CreatedAt:       time.Time{},
@@ -102,7 +101,7 @@ func SystemGroups() []Group {
 		},
 		{
 			Name:            BypassGroupName,
-			Description:     "Мимо туннеля: sing-box не перехватывает трафик",
+			Description:     "РњРёРјРѕ С‚СѓРЅРЅРµР»СЏ: sing-box РЅРµ РїРµСЂРµС…РІР°С‚С‹РІР°РµС‚ С‚СЂР°С„РёРє",
 			DefaultOutbound: "",
 			DNSServer:       "",
 			CreatedAt:       time.Time{},
@@ -111,62 +110,62 @@ func SystemGroups() []Group {
 	}
 }
 
-// IsSystemGroup проверяет, что имя принадлежит системной группе.
+// IsSystemGroup РїСЂРѕРІРµСЂСЏРµС‚, С‡С‚Рѕ РёРјСЏ РїСЂРёРЅР°РґР»РµР¶РёС‚ СЃРёСЃС‚РµРјРЅРѕР№ РіСЂСѓРїРїРµ.
 func IsSystemGroup(name string) bool {
 	return name == BlockGroupName || name == BypassGroupName
 }
 
-// RuleVersion пятая версия формата правил.
+// RuleVersion РїСЏС‚Р°СЏ РІРµСЂСЃРёСЏ С„РѕСЂРјР°С‚Р° РїСЂР°РІРёР».
 // https://sing-box.sagernet.org/configuration/rule-set/source-format/#version
 const RuleVersion = 4
 
-// RuleSetKind определяет, какие типы значений попадают в набор правил.
+// RuleSetKind РѕРїСЂРµРґРµР»СЏРµС‚, РєР°РєРёРµ С‚РёРїС‹ Р·РЅР°С‡РµРЅРёР№ РїРѕРїР°РґР°СЋС‚ РІ РЅР°Р±РѕСЂ РїСЂР°РІРёР».
 type RuleSetKind string
 
 const (
-	// RuleSetKindAll — домены, суффиксы и IP/CIDR в одном наборе.
+	// RuleSetKindAll вЂ” РґРѕРјРµРЅС‹, СЃСѓС„С„РёРєСЃС‹ Рё IP/CIDR РІ РѕРґРЅРѕРј РЅР°Р±РѕСЂРµ.
 	RuleSetKindAll RuleSetKind = ""
 
-	// RuleSetKindDomain — только домены и суффиксы. Такой набор можно использовать в DNS-правилах
-	// без legacy address filter.
+	// RuleSetKindDomain вЂ” С‚РѕР»СЊРєРѕ РґРѕРјРµРЅС‹ Рё СЃСѓС„С„РёРєСЃС‹. РўР°РєРѕР№ РЅР°Р±РѕСЂ РјРѕР¶РЅРѕ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РІ DNS-РїСЂР°РІРёР»Р°С…
+	// Р±РµР· legacy address filter.
 	RuleSetKindDomain RuleSetKind = "domain"
 
-	// RuleSetKindIP — только IP/CIDR.
+	// RuleSetKindIP вЂ” С‚РѕР»СЊРєРѕ IP/CIDR.
 	RuleSetKindIP RuleSetKind = "ip"
 )
 
-// ErrRuleSetNotReady возвращается, пока идет первая загрузка URL-источника набора, у которого нет кэша на диске.
-// Неполный набор отдавать нельзя: sing-box закэширует его и отправит трафик мимо туннеля.
+// ErrRuleSetNotReady РІРѕР·РІСЂР°С‰Р°РµС‚СЃСЏ, РїРѕРєР° РёРґРµС‚ РїРµСЂРІР°СЏ Р·Р°РіСЂСѓР·РєР° URL-РёСЃС‚РѕС‡РЅРёРєР° РЅР°Р±РѕСЂР°, Сѓ РєРѕС‚РѕСЂРѕРіРѕ РЅРµС‚ РєСЌС€Р° РЅР° РґРёСЃРєРµ.
+// РќРµРїРѕР»РЅС‹Р№ РЅР°Р±РѕСЂ РѕС‚РґР°РІР°С‚СЊ РЅРµР»СЊР·СЏ: sing-box Р·Р°РєСЌС€РёСЂСѓРµС‚ РµРіРѕ Рё РѕС‚РїСЂР°РІРёС‚ С‚СЂР°С„РёРє РјРёРјРѕ С‚СѓРЅРЅРµР»СЏ.
 var ErrRuleSetNotReady = errors.New("rule-set is not ready")
 
-// includesDomains проверяет, попадают ли в набор домены и суффиксы.
+// includesDomains РїСЂРѕРІРµСЂСЏРµС‚, РїРѕРїР°РґР°СЋС‚ Р»Рё РІ РЅР°Р±РѕСЂ РґРѕРјРµРЅС‹ Рё СЃСѓС„С„РёРєСЃС‹.
 func (k RuleSetKind) includesDomains() bool {
 	return k != RuleSetKindIP
 }
 
-// includesIPs проверяет, попадают ли в набор IP/CIDR.
+// includesIPs РїСЂРѕРІРµСЂСЏРµС‚, РїРѕРїР°РґР°СЋС‚ Р»Рё РІ РЅР°Р±РѕСЂ IP/CIDR.
 func (k RuleSetKind) includesIPs() bool {
 	return k != RuleSetKindDomain
 }
 
 type SingBoxRuleSet struct {
-	// Version определяет формат правил, которые будет считывать sing-box.
+	// Version РѕРїСЂРµРґРµР»СЏРµС‚ С„РѕСЂРјР°С‚ РїСЂР°РІРёР», РєРѕС‚РѕСЂС‹Рµ Р±СѓРґРµС‚ СЃС‡РёС‚С‹РІР°С‚СЊ sing-box.
 	Version int                      `json:"version"`
 	Rules   []map[string]interface{} `json:"rules"`
 }
 
-// DetourProxy возвращает адрес прокси, через который загружается источник с detour (outbound sing-box).
+// DetourProxy РІРѕР·РІСЂР°С‰Р°РµС‚ Р°РґСЂРµСЃ РїСЂРѕРєСЃРё, С‡РµСЂРµР· РєРѕС‚РѕСЂС‹Р№ Р·Р°РіСЂСѓР¶Р°РµС‚СЃСЏ РёСЃС‚РѕС‡РЅРёРє СЃ detour (outbound sing-box).
 type DetourProxy func(detour string) (*url.URL, error)
 
-// Options — параметры менеджера правил.
+// Options вЂ” РїР°СЂР°РјРµС‚СЂС‹ РјРµРЅРµРґР¶РµСЂР° РїСЂР°РІРёР».
 type Options struct {
-	// SourceListsProxyURL — прокси для загрузки источников без detour (необязательно).
+	// SourceListsProxyURL вЂ” РїСЂРѕРєСЃРё РґР»СЏ Р·Р°РіСЂСѓР·РєРё РёСЃС‚РѕС‡РЅРёРєРѕРІ Р±РµР· detour (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ).
 	SourceListsProxyURL string
 
-	// CacheDir — каталог кэша загруженных списков источников. Пустой — кэш выключен.
+	// CacheDir вЂ” РєР°С‚Р°Р»РѕРі РєСЌС€Р° Р·Р°РіСЂСѓР¶РµРЅРЅС‹С… СЃРїРёСЃРєРѕРІ РёСЃС‚РѕС‡РЅРёРєРѕРІ. РџСѓСЃС‚РѕР№ вЂ” РєСЌС€ РІС‹РєР»СЋС‡РµРЅ.
 	CacheDir string
 
-	// DetourProxy — прокси для источников с detour. nil — detour не поддерживается.
+	// DetourProxy вЂ” РїСЂРѕРєСЃРё РґР»СЏ РёСЃС‚РѕС‡РЅРёРєРѕРІ СЃ detour. nil вЂ” detour РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ.
 	DetourProxy DetourProxy
 }
 
@@ -183,11 +182,11 @@ type Manager struct {
 	cancelFuncs      map[string]context.CancelFunc // URL ID -> cancel function
 	cancelFuncsMu    sync.Mutex
 
-	// attempted — источники, загрузка которых уже выполнялась после старта (под urlRulesMu).
+	// attempted вЂ” РёСЃС‚РѕС‡РЅРёРєРё, Р·Р°РіСЂСѓР·РєР° РєРѕС‚РѕСЂС‹С… СѓР¶Рµ РІС‹РїРѕР»РЅСЏР»Р°СЃСЊ РїРѕСЃР»Рµ СЃС‚Р°СЂС‚Р° (РїРѕРґ urlRulesMu).
 	attempted map[string]bool
 }
 
-// NewManager создает менеджер правил.
+// NewManager СЃРѕР·РґР°РµС‚ РјРµРЅРµРґР¶РµСЂ РїСЂР°РІРёР».
 func NewManager(appData *appdata.File, opts Options) (*Manager, error) {
 	var sourceListsProxy func(r *http.Request) (*url.URL, error)
 
@@ -218,12 +217,12 @@ func NewManager(appData *appdata.File, opts Options) (*Manager, error) {
 	}, nil
 }
 
-// initialGroups возвращает группы новой инсталляции (кроме системных block и bypass).
+// initialGroups РІРѕР·РІСЂР°С‰Р°РµС‚ РіСЂСѓРїРїС‹ РЅРѕРІРѕР№ РёРЅСЃС‚Р°Р»Р»СЏС†РёРё (РєСЂРѕРјРµ СЃРёСЃС‚РµРјРЅС‹С… block Рё bypass).
 func initialGroups() []Group {
 	return []Group{
 		{
 			Name:            DefaultGroupName,
-			Description:     "Группа по умолчанию",
+			Description:     "Р“СЂСѓРїРїР° РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ",
 			DefaultOutbound: defaultGroupOutbound,
 			DNSServer:       defaultGroupDNSServer,
 			CreatedAt:       time.Now(),
@@ -232,13 +231,13 @@ func initialGroups() []Group {
 	}
 }
 
-// legacyGroups возвращает группы для данных, созданных до появления групп: все правила попадают в default,
-// и их трафик, как и раньше, идет напрямую.
+// legacyGroups РІРѕР·РІСЂР°С‰Р°РµС‚ РіСЂСѓРїРїС‹ РґР»СЏ РґР°РЅРЅС‹С…, СЃРѕР·РґР°РЅРЅС‹С… РґРѕ РїРѕСЏРІР»РµРЅРёСЏ РіСЂСѓРїРї: РІСЃРµ РїСЂР°РІРёР»Р° РїРѕРїР°РґР°СЋС‚ РІ default,
+// Рё РёС… С‚СЂР°С„РёРє, РєР°Рє Рё СЂР°РЅСЊС€Рµ, РёРґРµС‚ РЅР°РїСЂСЏРјСѓСЋ.
 func legacyGroups() []Group {
 	return []Group{
 		{
 			Name:            DefaultGroupName,
-			Description:     "Группа по умолчанию",
+			Description:     "Р“СЂСѓРїРїР° РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ",
 			DefaultOutbound: "",
 			DNSServer:       "",
 			CreatedAt:       time.Now(),
@@ -273,7 +272,7 @@ func (rm *Manager) Load() error {
 		changed = true
 	}
 
-	// Данных о группах нет: это новая инсталляция либо данные, созданные до появления групп.
+	// Р”Р°РЅРЅС‹С… Рѕ РіСЂСѓРїРїР°С… РЅРµС‚: СЌС‚Рѕ РЅРѕРІР°СЏ РёРЅСЃС‚Р°Р»Р»СЏС†РёСЏ Р»РёР±Рѕ РґР°РЅРЅС‹Рµ, СЃРѕР·РґР°РЅРЅС‹Рµ РґРѕ РїРѕСЏРІР»РµРЅРёСЏ РіСЂСѓРїРї.
 	if newData.Groups == nil {
 		newData.Groups = initialGroups()
 		changed = true
@@ -310,7 +309,7 @@ func (rm *Manager) Load() error {
 	return nil
 }
 
-// save сохраняет правила, URL-источники и группы в app.json, не затрагивая данные других менеджеров.
+// save СЃРѕС…СЂР°РЅСЏРµС‚ РїСЂР°РІРёР»Р°, URL-РёСЃС‚РѕС‡РЅРёРєРё Рё РіСЂСѓРїРїС‹ РІ app.json, РЅРµ Р·Р°С‚СЂР°РіРёРІР°СЏ РґР°РЅРЅС‹Рµ РґСЂСѓРіРёС… РјРµРЅРµРґР¶РµСЂРѕРІ.
 func (rm *Manager) save() error {
 	return rm.appData.Merge(rm.data)
 }
@@ -319,51 +318,61 @@ func (rm *Manager) GetRules() []Rule {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	// Возвращаем копию, чтобы вызывающий код не читал слайс, который меняют под блокировкой.
+	// Р’РѕР·РІСЂР°С‰Р°РµРј РєРѕРїРёСЋ, С‡С‚РѕР±С‹ РІС‹Р·С‹РІР°СЋС‰РёР№ РєРѕРґ РЅРµ С‡РёС‚Р°Р» СЃР»Р°Р№СЃ, РєРѕС‚РѕСЂС‹Р№ РјРµРЅСЏСЋС‚ РїРѕРґ Р±Р»РѕРєРёСЂРѕРІРєРѕР№.
 	return slices.Clone(rm.data.Rules)
 }
 
-func (rm *Manager) AddRule(rule Rule) error {
+// AddRule РґРѕР±Р°РІР»СЏРµС‚ РїСЂР°РІРёР»Рѕ. Р—РЅР°С‡РµРЅРёРµ РЅРѕСЂРјР°Р»РёР·СѓРµС‚СЃСЏ (СЃРј. normalizeRule), РїРµСЂРµСЃРµС‡РµРЅРёРµ СЃ СЂСѓС‡РЅС‹РјРё РїСЂР°РІРёР»Р°РјРё Р»СЋР±РѕР№
+// РіСЂСѓРїРїС‹ Р·Р°РїСЂРµС‰РµРЅРѕ. Р’РѕР·РІСЂР°С‰Р°РµС‚ РґРѕР±Р°РІР»РµРЅРЅРѕРµ РїСЂР°РІРёР»Рѕ Рё РїСЂРµРґСѓРїСЂРµР¶РґРµРЅРёСЏ Рѕ РїРµСЂРµСЃРµС‡РµРЅРёРё СЃ URL-РёСЃС‚РѕС‡РЅРёРєР°РјРё РіСЂСѓРїРї,
+// РєРѕС‚РѕСЂС‹Рµ СЃС‚РѕСЏС‚ РІС‹С€Рµ: РґР»СЏ С‚Р°РєРёС… Р·РЅР°С‡РµРЅРёР№ СЃСЂР°Р±РѕС‚Р°СЋС‚ РѕРЅРё.
+func (rm *Manager) AddRule(rule Rule) (Rule, []string, error) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	// Проверяем, что группа существует.
+	// РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ РіСЂСѓРїРїР° СЃСѓС‰РµСЃС‚РІСѓРµС‚.
 	if !rm.groupExists(rule.Group) {
-		return fmt.Errorf("группа %s не существует", rule.Group)
+		return Rule{}, nil, fmt.Errorf("РіСЂСѓРїРїР° %s РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚", rule.Group)
 	}
 
-	if err := validateRuleValue(rule); err != nil {
-		return err
+	if err := normalizeRule(&rule); err != nil {
+		return Rule{}, nil, err
 	}
 
-	// Проверяем конфликты с существующими правилами.
-	if err := rm.validateRuleConflicts(rule); err != nil {
-		return err
+	if err := checkConflicts(rule, rm.data.Rules); err != nil {
+		return Rule{}, nil, err
 	}
 
 	rule.Applied = false
+	rule.Deleted = false
 	rule.CreatedAt = time.Now()
 	rm.data.Rules = append(rm.data.Rules, rule)
 
-	return rm.save()
+	if err := rm.save(); err != nil {
+		return Rule{}, nil, err
+	}
+
+	return rule, rm.newSourceShadows(rule.Group).check(rule), nil
 }
 
-// BulkAddResult содержит результаты массового добавления правил.
+// BulkAddResult СЃРѕРґРµСЂР¶РёС‚ СЂРµР·СѓР»СЊС‚Р°С‚С‹ РјР°СЃСЃРѕРІРѕРіРѕ РґРѕР±Р°РІР»РµРЅРёСЏ РїСЂР°РІРёР».
 type BulkAddResult struct {
 	Success      int              `json:"success"`
 	Failed       int              `json:"failed"`
 	Total        int              `json:"total"`
 	FailedValues []BulkAddFailure `json:"failed_values,omitempty"`
 	AddedRules   []Rule           `json:"added_rules,omitempty"`
+
+	// Warnings вЂ” РґРѕР±Р°РІР»РµРЅРЅС‹Рµ Р·РЅР°С‡РµРЅРёСЏ, РєРѕС‚РѕСЂС‹Рµ РІС…РѕРґСЏС‚ РІ URL-РёСЃС‚РѕС‡РЅРёРєРё РіСЂСѓРїРї РІС‹С€Рµ.
+	Warnings []BulkAddFailure `json:"warnings,omitempty"`
 }
 
-// BulkAddFailure содержит информацию об ошибке при добавлении правила.
+// BulkAddFailure СЃРѕРґРµСЂР¶РёС‚ РёРЅС„РѕСЂРјР°С†РёСЋ РѕР± РѕС€РёР±РєРµ РїСЂРё РґРѕР±Р°РІР»РµРЅРёРё РїСЂР°РІРёР»Р°.
 type BulkAddFailure struct {
 	Value string `json:"value"`
 	Error string `json:"error"`
 }
 
-// AddRuleBulk добавляет несколько правил одновременно.
+// AddRuleBulk РґРѕР±Р°РІР»СЏРµС‚ РЅРµСЃРєРѕР»СЊРєРѕ РїСЂР°РІРёР» РѕРґРЅРѕРІСЂРµРјРµРЅРЅРѕ.
 func (rm *Manager) AddRuleBulk(
 	ruleType, values, description, group string,
 ) (*BulkAddResult, error) {
@@ -371,16 +380,18 @@ func (rm *Manager) AddRuleBulk(
 	defer rm.mu.Unlock()
 
 	if !rm.groupExists(group) {
-		return nil, fmt.Errorf("группа %s не существует", group)
+		return nil, fmt.Errorf("РіСЂСѓРїРїР° %s РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚", group)
 	}
 
 	lines := strings.Split(values, "\n")
+	shadows := rm.newSourceShadows(group)
 	result := &BulkAddResult{
 		Total:        0,
 		Success:      0,
 		Failed:       0,
 		FailedValues: []BulkAddFailure{},
 		AddedRules:   []Rule{},
+		Warnings:     []BulkAddFailure{},
 	}
 
 	for _, line := range lines {
@@ -392,7 +403,7 @@ func (rm *Manager) AddRuleBulk(
 
 		result.Total++
 
-		// ID вида «время-номер» совпадали бы у двух массовых добавлений в одну секунду.
+		// ID РІРёРґР° В«РІСЂРµРјСЏ-РЅРѕРјРµСЂВ» СЃРѕРІРїР°РґР°Р»Рё Р±С‹ Сѓ РґРІСѓС… РјР°СЃСЃРѕРІС‹С… РґРѕР±Р°РІР»РµРЅРёР№ РІ РѕРґРЅСѓ СЃРµРєСѓРЅРґСѓ.
 		rule := Rule{
 			ID:          uuid.NewString(),
 			Type:        ruleType,
@@ -403,9 +414,10 @@ func (rm *Manager) AddRuleBulk(
 			CreatedAt:   time.Now(),
 		}
 
-		err := validateRuleValue(rule)
+		// Р”РѕР±Р°РІР»РµРЅРЅС‹Рµ Р·РЅР°С‡РµРЅРёСЏ РїРѕРїР°РґР°СЋС‚ РІ rm.data.Rules, РїРѕСЌС‚РѕРјСѓ СЃР»РµРґСѓСЋС‰РёРµ РїСЂРѕРІРµСЂСЏСЋС‚СЃСЏ Рё СЃ РЅРёРјРё.
+		err := normalizeRule(&rule)
 		if err == nil {
-			err = rm.validateRuleConflicts(rule)
+			err = checkConflicts(rule, rm.data.Rules)
 		}
 
 		if err != nil {
@@ -421,6 +433,13 @@ func (rm *Manager) AddRuleBulk(
 		rm.data.Rules = append(rm.data.Rules, rule)
 		result.AddedRules = append(result.AddedRules, rule)
 		result.Success++
+
+		for _, warning := range shadows.check(rule) {
+			result.Warnings = append(result.Warnings, BulkAddFailure{
+				Value: rule.Value,
+				Error: warning,
+			})
+		}
 	}
 
 	if result.Success > 0 {
@@ -432,17 +451,17 @@ func (rm *Manager) AddRuleBulk(
 	return result, nil
 }
 
-// EditRule обновляет параметры правила.
+// EditRule РѕР±РЅРѕРІР»СЏРµС‚ РїР°СЂР°РјРµС‚СЂС‹ РїСЂР°РІРёР»Р°.
 func (rm *Manager) EditRule(id string, description string, group string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	// Проверяем, что группа существует.
+	// РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ РіСЂСѓРїРїР° СЃСѓС‰РµСЃС‚РІСѓРµС‚.
 	if !rm.groupExists(group) {
-		return fmt.Errorf("группа %s не существует", group)
+		return fmt.Errorf("РіСЂСѓРїРїР° %s РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚", group)
 	}
 
-	// Находим правило.
+	// РќР°С…РѕРґРёРј РїСЂР°РІРёР»Рѕ.
 	found := false
 
 	for i := range rm.data.Rules {
@@ -456,7 +475,7 @@ func (rm *Manager) EditRule(id string, description string, group string) error {
 	}
 
 	if !found {
-		return fmt.Errorf("правило с ID %s не найдено", id)
+		return fmt.Errorf("РїСЂР°РІРёР»Рѕ СЃ ID %s РЅРµ РЅР°Р№РґРµРЅРѕ", id)
 	}
 
 	return rm.save()
@@ -502,7 +521,7 @@ func (rm *Manager) ApplyRules() error {
 	return rm.save()
 }
 
-// GetRuleSetByGroup возвращает набор правил вида kind для указанной группы.
+// GetRuleSetByGroup РІРѕР·РІСЂР°С‰Р°РµС‚ РЅР°Р±РѕСЂ РїСЂР°РІРёР» РІРёРґР° kind РґР»СЏ СѓРєР°Р·Р°РЅРЅРѕР№ РіСЂСѓРїРїС‹.
 func (rm *Manager) GetRuleSetByGroup(groupName string, kind RuleSetKind) (SingBoxRuleSet, error) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
@@ -510,13 +529,13 @@ func (rm *Manager) GetRuleSetByGroup(groupName string, kind RuleSetKind) (SingBo
 	return rm.getRuleSetLocked(kind, groupName)
 }
 
-// GetBypassRuleSet возвращает набор правил системной группы bypass (мимо туннеля).
+// GetBypassRuleSet РІРѕР·РІСЂР°С‰Р°РµС‚ РЅР°Р±РѕСЂ РїСЂР°РІРёР» СЃРёСЃС‚РµРјРЅРѕР№ РіСЂСѓРїРїС‹ bypass (РјРёРјРѕ С‚СѓРЅРЅРµР»СЏ).
 func (rm *Manager) GetBypassRuleSet() (SingBoxRuleSet, error) {
 	return rm.GetRuleSetByGroup(BypassGroupName, RuleSetKindAll)
 }
 
-// getRuleSetLocked собирает набор вида kind из примененных правил и источников группы groupName
-// (без блокировки). Если какой-то из источников еще не загружен после старта, возвращает ErrRuleSetNotReady.
+// getRuleSetLocked СЃРѕР±РёСЂР°РµС‚ РЅР°Р±РѕСЂ РІРёРґР° kind РёР· РїСЂРёРјРµРЅРµРЅРЅС‹С… РїСЂР°РІРёР» Рё РёСЃС‚РѕС‡РЅРёРєРѕРІ РіСЂСѓРїРїС‹ groupName
+// (Р±РµР· Р±Р»РѕРєРёСЂРѕРІРєРё). Р•СЃР»Рё РєР°РєРѕР№-С‚Рѕ РёР· РёСЃС‚РѕС‡РЅРёРєРѕРІ РµС‰Рµ РЅРµ Р·Р°РіСЂСѓР¶РµРЅ РїРѕСЃР»Рµ СЃС‚Р°СЂС‚Р°, РІРѕР·РІСЂР°С‰Р°РµС‚ ErrRuleSetNotReady.
 func (rm *Manager) getRuleSetLocked(kind RuleSetKind, groupName string) (SingBoxRuleSet, error) {
 	rules := make([]map[string]any, 0, 1)
 
@@ -526,11 +545,11 @@ func (rm *Manager) getRuleSetLocked(kind RuleSetKind, groupName string) (SingBox
 		ipCidrs        []string
 	)
 
-	// Карты ручных правил для отсечения конфликтующих значений из источников.
+	// РљР°СЂС‚С‹ СЂСѓС‡РЅС‹С… РїСЂР°РІРёР» РґР»СЏ РѕС‚СЃРµС‡РµРЅРёСЏ РєРѕРЅС„Р»РёРєС‚СѓСЋС‰РёС… Р·РЅР°С‡РµРЅРёР№ РёР· РёСЃС‚РѕС‡РЅРёРєРѕРІ.
 	manualDomains := make(map[string]bool)
 	manualSuffixes := make(map[string]bool)
 
-	// Правила, помеченные на удаление, но примененные, остаются в наборе до применения изменений.
+	// РџСЂР°РІРёР»Р°, РїРѕРјРµС‡РµРЅРЅС‹Рµ РЅР° СѓРґР°Р»РµРЅРёРµ, РЅРѕ РїСЂРёРјРµРЅРµРЅРЅС‹Рµ, РѕСЃС‚Р°СЋС‚СЃСЏ РІ РЅР°Р±РѕСЂРµ РґРѕ РїСЂРёРјРµРЅРµРЅРёСЏ РёР·РјРµРЅРµРЅРёР№.
 	for _, rule := range rm.data.Rules {
 		if !rule.Applied || rule.Group != groupName {
 			continue
@@ -556,10 +575,10 @@ func (rm *Manager) getRuleSetLocked(kind RuleSetKind, groupName string) (SingBox
 		}
 	}
 
-	// Источники, еще не загруженные после старта.
+	// РСЃС‚РѕС‡РЅРёРєРё, РµС‰Рµ РЅРµ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Рµ РїРѕСЃР»Рµ СЃС‚Р°СЂС‚Р°.
 	var notLoaded []string
 
-	// Источники, помеченные на удаление, но примененные, также остаются в наборе.
+	// РСЃС‚РѕС‡РЅРёРєРё, РїРѕРјРµС‡РµРЅРЅС‹Рµ РЅР° СѓРґР°Р»РµРЅРёРµ, РЅРѕ РїСЂРёРјРµРЅРµРЅРЅС‹Рµ, С‚Р°РєР¶Рµ РѕСЃС‚Р°СЋС‚СЃСЏ РІ РЅР°Р±РѕСЂРµ.
 	rm.urlRulesMu.RLock()
 
 	for _, source := range rm.data.URLSources {
@@ -569,8 +588,8 @@ func (rm *Manager) getRuleSetLocked(kind RuleSetKind, groupName string) (SingBox
 
 		ruleSet, ok := rm.urlRules[source.ID]
 
-		// Источник без кэша, который не загрузился и после попытки, не держит всю группу: прежде
-		// в наборе его тоже не было, а без набора sing-box может не запуститься.
+		// РСЃС‚РѕС‡РЅРёРє Р±РµР· РєСЌС€Р°, РєРѕС‚РѕСЂС‹Р№ РЅРµ Р·Р°РіСЂСѓР·РёР»СЃСЏ Рё РїРѕСЃР»Рµ РїРѕРїС‹С‚РєРё, РЅРµ РґРµСЂР¶РёС‚ РІСЃСЋ РіСЂСѓРїРїСѓ: РїСЂРµР¶РґРµ
+		// РІ РЅР°Р±РѕСЂРµ РµРіРѕ С‚РѕР¶Рµ РЅРµ Р±С‹Р»Рѕ, Р° Р±РµР· РЅР°Р±РѕСЂР° sing-box РјРѕР¶РµС‚ РЅРµ Р·Р°РїСѓСЃС‚РёС‚СЊСЃСЏ.
 		if !ok && !rm.attempted[source.ID] {
 			notLoaded = append(notLoaded, source.Description)
 
@@ -581,7 +600,7 @@ func (rm *Manager) getRuleSetLocked(kind RuleSetKind, groupName string) (SingBox
 			continue
 		}
 
-		// IP/CIDR добавляем без проверки конфликтов.
+		// IP/CIDR РґРѕР±Р°РІР»СЏРµРј Р±РµР· РїСЂРѕРІРµСЂРєРё РєРѕРЅС„Р»РёРєС‚РѕРІ.
 		if kind.includesIPs() {
 			ipCidrs = append(ipCidrs, ruleSet.CidrList...)
 		}
@@ -609,7 +628,7 @@ func (rm *Manager) getRuleSetLocked(kind RuleSetKind, groupName string) (SingBox
 		return SingBoxRuleSet{}, fmt.Errorf("%w: url sources not loaded: %s", ErrRuleSetNotReady, strings.Join(notLoaded, ", "))
 	}
 
-	// Все значения собираются в одно правило.
+	// Р’СЃРµ Р·РЅР°С‡РµРЅРёСЏ СЃРѕР±РёСЂР°СЋС‚СЃСЏ РІ РѕРґРЅРѕ РїСЂР°РІРёР»Рѕ.
 	if len(domains) > 0 || len(domainSuffixes) > 0 || len(ipCidrs) > 0 {
 		rule := map[string]any{}
 
@@ -634,10 +653,10 @@ func (rm *Manager) getRuleSetLocked(kind RuleSetKind, groupName string) (SingBox
 	}, nil
 }
 
-// hasConflictWithManualRules проверяет, конфликтует ли правило с ручными правилами.
+// hasConflictWithManualRules РїСЂРѕРІРµСЂСЏРµС‚, РєРѕРЅС„Р»РёРєС‚СѓРµС‚ Р»Рё РїСЂР°РІРёР»Рѕ СЃ СЂСѓС‡РЅС‹РјРё РїСЂР°РІРёР»Р°РјРё.
 func hasConflictWithManualRules(value, ruleType string, manualDomains, manualSuffixes map[string]bool) bool {
 	if ruleType == "domain" {
-		// Проверяем, есть ли суффикс, который покрывает этот домен.
+		// РџСЂРѕРІРµСЂСЏРµРј, РµСЃС‚СЊ Р»Рё СЃСѓС„С„РёРєСЃ, РєРѕС‚РѕСЂС‹Р№ РїРѕРєСЂС‹РІР°РµС‚ СЌС‚РѕС‚ РґРѕРјРµРЅ.
 		for suffix := range manualSuffixes {
 			if isDomainMatchesSuffix(value, suffix) {
 				return true
@@ -646,14 +665,14 @@ func hasConflictWithManualRules(value, ruleType string, manualDomains, manualSuf
 	}
 
 	if ruleType == "domain_suffix" {
-		// Проверяем, есть ли домен, который конфликтует с этим суффиксом.
+		// РџСЂРѕРІРµСЂСЏРµРј, РµСЃС‚СЊ Р»Рё РґРѕРјРµРЅ, РєРѕС‚РѕСЂС‹Р№ РєРѕРЅС„Р»РёРєС‚СѓРµС‚ СЃ СЌС‚РёРј СЃСѓС„С„РёРєСЃРѕРј.
 		for domain := range manualDomains {
 			if isDomainMatchesSuffix(domain, value) {
 				return true
 			}
 		}
 
-		// Проверяем, есть ли суффикс, который конфликтует с этим суффиксом.
+		// РџСЂРѕРІРµСЂСЏРµРј, РµСЃС‚СЊ Р»Рё СЃСѓС„С„РёРєСЃ, РєРѕС‚РѕСЂС‹Р№ РєРѕРЅС„Р»РёРєС‚СѓРµС‚ СЃ СЌС‚РёРј СЃСѓС„С„РёРєСЃРѕРј.
 		for suffix := range manualSuffixes {
 			if isDomainMatchesSuffix(value, suffix) || isDomainMatchesSuffix(suffix, value) {
 				return true
@@ -677,21 +696,21 @@ func (rm *Manager) GetPendingCount() int {
 	return count
 }
 
-// GetGroups возвращает пользовательские группы (без системных) в порядке их создания.
+// GetGroups РІРѕР·РІСЂР°С‰Р°РµС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёРµ РіСЂСѓРїРїС‹ (Р±РµР· СЃРёСЃС‚РµРјРЅС‹С…) РІ РїРѕСЂСЏРґРєРµ РёС… СЃРѕР·РґР°РЅРёСЏ.
 func (rm *Manager) GetGroups() []Group {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	// Возвращаем копию, чтобы вызывающий код не читал слайс, который меняют под блокировкой.
+	// Р’РѕР·РІСЂР°С‰Р°РµРј РєРѕРїРёСЋ, С‡С‚РѕР±С‹ РІС‹Р·С‹РІР°СЋС‰РёР№ РєРѕРґ РЅРµ С‡РёС‚Р°Р» СЃР»Р°Р№СЃ, РєРѕС‚РѕСЂС‹Р№ РјРµРЅСЏСЋС‚ РїРѕРґ Р±Р»РѕРєРёСЂРѕРІРєРѕР№.
 	return slices.Clone(rm.data.Groups)
 }
 
-// GetAllGroups возвращает системные группы, а за ними пользовательские.
+// GetAllGroups РІРѕР·РІСЂР°С‰Р°РµС‚ СЃРёСЃС‚РµРјРЅС‹Рµ РіСЂСѓРїРїС‹, Р° Р·Р° РЅРёРјРё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёРµ.
 func (rm *Manager) GetAllGroups() []Group {
 	return append(SystemGroups(), rm.GetGroups()...)
 }
 
-// GroupsByDNSServer возвращает имена пользовательских групп, у которых DNS-сервер равен dnsServer.
+// GroupsByDNSServer РІРѕР·РІСЂР°С‰Р°РµС‚ РёРјРµРЅР° РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёС… РіСЂСѓРїРї, Сѓ РєРѕС‚РѕСЂС‹С… DNS-СЃРµСЂРІРµСЂ СЂР°РІРµРЅ dnsServer.
 func (rm *Manager) GroupsByDNSServer(dnsServer string) []string {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
@@ -707,7 +726,7 @@ func (rm *Manager) GroupsByDNSServer(dnsServer string) []string {
 	return names
 }
 
-// AddGroup добавляет новую группу.
+// AddGroup РґРѕР±Р°РІР»СЏРµС‚ РЅРѕРІСѓСЋ РіСЂСѓРїРїСѓ.
 func (rm *Manager) AddGroup(group Group) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -715,17 +734,17 @@ func (rm *Manager) AddGroup(group Group) error {
 	group.Name = strings.TrimSpace(group.Name)
 
 	if !groupNameRe.MatchString(group.Name) {
-		return fmt.Errorf("некорректное имя группы %q: допустимы латиница, цифры, дефис и подчеркивание", group.Name)
+		return fmt.Errorf("РЅРµРєРѕСЂСЂРµРєС‚РЅРѕРµ РёРјСЏ РіСЂСѓРїРїС‹ %q: РґРѕРїСѓСЃС‚РёРјС‹ Р»Р°С‚РёРЅРёС†Р°, С†РёС„СЂС‹, РґРµС„РёСЃ Рё РїРѕРґС‡РµСЂРєРёРІР°РЅРёРµ", group.Name)
 	}
 
 	if IsSystemGroup(group.Name) {
-		return fmt.Errorf("имя группы %s зарезервировано", group.Name)
+		return fmt.Errorf("РёРјСЏ РіСЂСѓРїРїС‹ %s Р·Р°СЂРµР·РµСЂРІРёСЂРѕРІР°РЅРѕ", group.Name)
 	}
 
-	// Проверяем, что группа с таким именем не существует.
+	// РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ РіСЂСѓРїРїР° СЃ С‚Р°РєРёРј РёРјРµРЅРµРј РЅРµ СЃСѓС‰РµСЃС‚РІСѓРµС‚.
 	for _, g := range rm.data.Groups {
 		if g.Name == group.Name {
-			return fmt.Errorf("группа с именем %s уже существует", group.Name)
+			return fmt.Errorf("РіСЂСѓРїРїР° СЃ РёРјРµРЅРµРј %s СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓРµС‚", group.Name)
 		}
 	}
 
@@ -736,16 +755,16 @@ func (rm *Manager) AddGroup(group Group) error {
 	return rm.save()
 }
 
-// EditGroup обновляет параметры группы.
+// EditGroup РѕР±РЅРѕРІР»СЏРµС‚ РїР°СЂР°РјРµС‚СЂС‹ РіСЂСѓРїРїС‹.
 func (rm *Manager) EditGroup(name, description, defaultOutbound, dnsServer string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	if IsSystemGroup(name) {
-		return fmt.Errorf("системную группу %s нельзя изменить", name)
+		return fmt.Errorf("СЃРёСЃС‚РµРјРЅСѓСЋ РіСЂСѓРїРїСѓ %s РЅРµР»СЊР·СЏ РёР·РјРµРЅРёС‚СЊ", name)
 	}
 
-	// Находим группу.
+	// РќР°С…РѕРґРёРј РіСЂСѓРїРїСѓ.
 	found := false
 
 	for i := range rm.data.Groups {
@@ -760,35 +779,35 @@ func (rm *Manager) EditGroup(name, description, defaultOutbound, dnsServer strin
 	}
 
 	if !found {
-		return fmt.Errorf("группа %s не найдена", name)
+		return fmt.Errorf("РіСЂСѓРїРїР° %s РЅРµ РЅР°Р№РґРµРЅР°", name)
 	}
 
 	return rm.save()
 }
 
-// DeleteGroup удаляет группу.
+// DeleteGroup СѓРґР°Р»СЏРµС‚ РіСЂСѓРїРїСѓ.
 func (rm *Manager) DeleteGroup(name string) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	if IsSystemGroup(name) {
-		return fmt.Errorf("системную группу %s нельзя удалить", name)
+		return fmt.Errorf("СЃРёСЃС‚РµРјРЅСѓСЋ РіСЂСѓРїРїСѓ %s РЅРµР»СЊР·СЏ СѓРґР°Р»РёС‚СЊ", name)
 	}
 
-	// Удалить можно только пустую группу.
+	// РЈРґР°Р»РёС‚СЊ РјРѕР¶РЅРѕ С‚РѕР»СЊРєРѕ РїСѓСЃС‚СѓСЋ РіСЂСѓРїРїСѓ.
 	for _, rule := range rm.data.Rules {
 		if rule.Group == name && !rule.Deleted {
-			return fmt.Errorf("в группе %s есть правила, удалите их сначала", name)
+			return fmt.Errorf("РІ РіСЂСѓРїРїРµ %s РµСЃС‚СЊ РїСЂР°РІРёР»Р°, СѓРґР°Р»РёС‚Рµ РёС… СЃРЅР°С‡Р°Р»Р°", name)
 		}
 	}
 
 	for _, source := range rm.data.URLSources {
 		if source.Group == name && !source.Deleted {
-			return fmt.Errorf("в группе %s есть источники, удалите их сначала", name)
+			return fmt.Errorf("РІ РіСЂСѓРїРїРµ %s РµСЃС‚СЊ РёСЃС‚РѕС‡РЅРёРєРё, СѓРґР°Р»РёС‚Рµ РёС… СЃРЅР°С‡Р°Р»Р°", name)
 		}
 	}
 
-	// Удаляем группу.
+	// РЈРґР°Р»СЏРµРј РіСЂСѓРїРїСѓ.
 	newGroups := []Group{}
 
 	for _, g := range rm.data.Groups {
@@ -802,7 +821,7 @@ func (rm *Manager) DeleteGroup(name string) error {
 	return rm.save()
 }
 
-// groupExists проверяет, существует ли группа (пользовательская или системная) с заданным именем.
+// groupExists РїСЂРѕРІРµСЂСЏРµС‚, СЃСѓС‰РµСЃС‚РІСѓРµС‚ Р»Рё РіСЂСѓРїРїР° (РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєР°СЏ РёР»Рё СЃРёСЃС‚РµРјРЅР°СЏ) СЃ Р·Р°РґР°РЅРЅС‹Рј РёРјРµРЅРµРј.
 func (rm *Manager) groupExists(name string) bool {
 	if IsSystemGroup(name) {
 		return true
@@ -817,77 +836,14 @@ func (rm *Manager) groupExists(name string) bool {
 	return false
 }
 
-// validateRuleValue проверяет значение правил ip и cidr: адрес или подсеть, как их разбирает sing-box.
-// Неверное значение попало бы в rule-set группы, и sing-box не смог бы его загрузить.
-func validateRuleValue(rule Rule) error {
-	if rule.Type != "ip" && rule.Type != "cidr" {
-		return nil
-	}
-
-	if _, err := netip.ParsePrefix(rule.Value); err == nil {
-		return nil
-	}
-
-	if _, err := netip.ParseAddr(rule.Value); err == nil {
-		return nil
-	}
-
-	return fmt.Errorf("%s не является IP-адресом или подсетью", rule.Value)
-}
-
-// validateRuleConflicts проверяет конфликты правил domain и domain_suffix глобально.
-func (rm *Manager) validateRuleConflicts(newRule Rule) error {
-	// Проверяем только для domain и domain_suffix.
-	if newRule.Type != "domain" && newRule.Type != "domain_suffix" {
-		return nil
-	}
-
-	for _, rule := range rm.data.Rules {
-		// Пропускаем удаленные правила.
-		if rule.Deleted {
-			continue
-		}
-
-		// Проверяем дубликаты глобально.
-		if rule.Type == newRule.Type && rule.Value == newRule.Value {
-			if rule.Group == newRule.Group {
-				return fmt.Errorf("правило %s %s уже существует в группе %s", newRule.Type, newRule.Value, newRule.Group)
-			}
-
-			return fmt.Errorf("правило %s %s уже существует в другой группе %s", newRule.Type, newRule.Value, rule.Group)
-		}
-
-		// Проверяем конфликты domain и domain_suffix глобально.
-		if newRule.Type == "domain" && rule.Type == "domain_suffix" {
-			if isDomainMatchesSuffix(newRule.Value, rule.Value) {
-				return fmt.Errorf("домен %s конфликтует с существующим суффиксом %s в группе %s", newRule.Value, rule.Value, rule.Group)
-			}
-		}
-
-		if newRule.Type == "domain_suffix" && rule.Type == "domain" {
-			if isDomainMatchesSuffix(rule.Value, newRule.Value) {
-				return fmt.Errorf("суффикс %s конфликтует с существующим доменом %s в группе %s", newRule.Value, rule.Value, rule.Group)
-			}
-		}
-
-		if newRule.Type == "domain_suffix" && rule.Type == "domain_suffix" {
-			if isDomainMatchesSuffix(newRule.Value, rule.Value) || isDomainMatchesSuffix(rule.Value, newRule.Value) {
-				return fmt.Errorf("суффикс %s конфликтует с существующим суффиксом %s в группе %s", newRule.Value, rule.Value, rule.Group)
-			}
-		}
-	}
-
-	return nil
-}
-
-// isDomainMatchesSuffix проверяет, является ли домен поддоменом суффикса.
+// isDomainMatchesSuffix РїСЂРѕРІРµСЂСЏРµС‚, СЏРІР»СЏРµС‚СЃСЏ Р»Рё РґРѕРјРµРЅ РїРѕРґРґРѕРјРµРЅРѕРј СЃСѓС„С„РёРєСЃР°.
 func isDomainMatchesSuffix(domain, suffix string) bool {
-	// example.com совпадает с суффиксом example.com.
+	// example.com СЃРѕРІРїР°РґР°РµС‚ СЃ СЃСѓС„С„РёРєСЃРѕРј example.com.
 	if domain == suffix {
 		return true
 	}
 
-	// test.example.com совпадает с суффиксом example.com.
+	// test.example.com СЃРѕРІРїР°РґР°РµС‚ СЃ СЃСѓС„С„РёРєСЃРѕРј example.com.
 	if strings.HasSuffix(domain, "."+suffix) {
 		return true
 	}

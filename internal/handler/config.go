@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/lanfix/sing-box-configurer/internal/repository/singboxconfig"
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
 )
 
@@ -55,6 +56,79 @@ func (h *Handler) ApplyConfig(w http.ResponseWriter, r *http.Request) {
 			"message":  result.Message,
 			"warnings": result.Warnings,
 			"backup":   result.Backup,
+		})
+	}
+}
+
+// GetConfigBackups возвращает резервные копии рабочего конфига sing-box.
+func (h *Handler) GetConfigBackups(w http.ResponseWriter, _ *http.Request) {
+	backups, err := h.singBox.Backups()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"backups": backups,
+	})
+}
+
+// GetConfigBackup возвращает содержимое резервной копии (параметр name) в виде рендера.
+func (h *Handler) GetConfigBackup(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+
+	content, err := h.singBox.Backup(name)
+	if errors.Is(err, singboxconfig.ErrBackupNotFound) {
+		writeJSONError(w, http.StatusNotFound, "Резервная копия не найдена")
+
+		return
+	}
+
+	if err != nil {
+		writeJSONError(w, http.StatusUnprocessableEntity, "Резервная копия не читается: "+err.Error())
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":    name,
+		"content": string(content),
+	})
+}
+
+// RestoreConfigBackup делает рабочим конфиг из резервной копии и перезапускает sing-box.
+func (h *Handler) RestoreConfigBackup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	result, err := h.singBox.RestoreBackup(r.Context(), req.Name)
+
+	switch {
+	case errors.Is(err, singboxconfig.ErrBackupNotFound):
+		writeJSONError(w, http.StatusNotFound, "Резервная копия не найдена")
+
+	case errors.Is(err, singbox.ErrNoChanges):
+		writeJSONError(w, http.StatusConflict, "Рабочий конфиг совпадает с резервной копией, восстанавливать нечего")
+
+	case errors.Is(err, singbox.ErrCheckFailed):
+		writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
+
+	case err != nil:
+		log.Printf("Cannot restore sing-box config backup %s: %v", req.Name, err)
+		writeJSONError(w, http.StatusBadGateway, err.Error())
+
+	default:
+		log.Printf("sing-box config restored from backup %s (previous config: %s)", req.Name, result.Backup)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true,
+			"message": result.Message,
+			"backup":  result.Backup,
 		})
 	}
 }

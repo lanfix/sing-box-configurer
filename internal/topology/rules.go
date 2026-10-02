@@ -70,7 +70,22 @@ func conditionKeys(rule map[string]any) []string {
 	return keys
 }
 
-// parseRouteRules разбирает route.rules и добавляет строку final.
+// isServiceRule проверяет, что правило относится только к служебному inbound-у конфигуратора (загрузка
+// источников и тест скорости): такие правила есть у каждого outbound-а и на карте не показываются.
+func isServiceRule(rule map[string]any) bool {
+	switch inbound := rule["inbound"].(type) {
+	case string:
+		return inbound == render.SourcesProxyTag
+
+	case []any:
+		return len(inbound) == 1 && inbound[0] == render.SourcesProxyTag
+	}
+
+	return false
+}
+
+// parseRouteRules разбирает route.rules (кроме служебных правил) и добавляет строку final. Индексы строк —
+// индексы правил в route.rules.
 func parseRouteRules(config map[string]any, groups map[string]GroupInfo) []parsedRule {
 	route, _ := config["route"].(map[string]any)
 	list := objects(route["rules"])
@@ -78,6 +93,10 @@ func parseRouteRules(config map[string]any, groups map[string]GroupInfo) []parse
 	reject := rejectTarget(config)
 
 	for i, raw := range list {
+		if isServiceRule(raw) {
+			continue
+		}
+
 		action := jsonmap.String(raw, "action")
 		if action == "" {
 			action = "route"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, toRef } from 'vue'
 
 import { get, post } from '../../api/client'
 import type { BulkAddResult, Rule } from '../../api/types'
@@ -10,6 +10,7 @@ import FormField from '../../components/ui/FormField.vue'
 import IconButton from '../../components/ui/IconButton.vue'
 import SegmentedControl from '../../components/ui/SegmentedControl.vue'
 import { groupLabel, useGroups } from '../../composables/useGroups'
+import { useRuleCheck } from '../../composables/useRuleCheck'
 import { icons } from '../../icons'
 import { confirmAction } from '../../stores/confirm'
 import { showError, showMessage } from '../../stores/toast'
@@ -78,6 +79,14 @@ function matchesType(value: string, type: RuleType): boolean {
 
 // entered — введенные значения (одно или по строкам).
 const entered = computed(() => (form.bulk ? form.values.split('\n') : [form.value]).map((value) => value.trim()).filter(Boolean))
+
+// Проверка пересечений до добавления: с ручными правилами — добавить нельзя, с источниками групп выше — предупреждение.
+const { checks, checking } = useRuleCheck(toRef(form, 'type'), entered, toRef(form, 'group'))
+const conflicts = computed(() => checks.value.filter((check) => check.error))
+const shadowWarnings = computed(() => checks.value.flatMap((check) => check.warnings ?? []))
+
+// singleConflict — пересечение одиночного значения: кнопка добавления недоступна.
+const singleConflict = computed(() => (!form.bulk && !suggestion.value ? conflicts.value[0]?.error ?? '' : ''))
 
 // suggestion — значение не подходит под тип, но похоже на другой: предлагаем переключить.
 const suggestion = computed(() => {
@@ -162,17 +171,26 @@ async function add(): Promise<void> {
         message += ` (ошибок: ${result.failed})\n${details}${result.failed > 3 ? `\n... и еще ${result.failed - 3}` : ''}`
       }
 
-      showMessage(message, result.failed > 0 ? 'warning' : 'success')
+      const warnings = result.warnings ?? []
+
+      if (warnings.length > 0) {
+        message += `\nПерекрыты источниками групп выше: ${warnings.length}\n${warnings.slice(0, 3).map((warning) => warning.error).join('\n')}`
+      }
+
+      showMessage(message, result.failed > 0 || warnings.length > 0 ? 'warning' : 'success')
       form.values = ''
     } else {
-      await post('/api/rules/add', {
+      const result = await post<{ rule: Rule; warnings?: string[] }>('/api/rules/add', {
         type: form.type,
         value: form.value.trim(),
         description: form.description,
         group: form.group,
       })
 
-      showMessage(`Правило ${form.value.trim()} добавлено. Примените правила, чтобы оно заработало.`)
+      const warnings = result.warnings ?? []
+      const message = `Правило ${result.rule?.value ?? form.value.trim()} добавлено. Примените правила, чтобы оно заработало.`
+
+      showMessage(warnings.length ? `${message}\n${warnings.join('\n')}` : message, warnings.length ? 'warning' : 'success')
       form.value = ''
     }
 
@@ -287,7 +305,11 @@ onMounted(load)
         </FormField>
       </div>
 
-      <FormField :label="form.bulk ? 'Значения — по одному на строку' : 'Значение'" :input-id="form.bulk ? 'ruleValues' : 'ruleValue'">
+      <FormField
+        :label="form.bulk ? 'Значения — по одному на строку' : 'Значение'"
+        :input-id="form.bulk ? 'ruleValues' : 'ruleValue'"
+        :error="singleConflict"
+      >
         <input
           v-if="!form.bulk"
           id="ruleValue"
@@ -323,12 +345,28 @@ onMounted(load)
         </template>
       </FormField>
 
+      <div v-if="form.bulk && conflicts.length > 0" class="callout is-bad">
+        <strong>Не будут добавлены: {{ conflicts.length }} из {{ checks.length }}</strong>
+        <div v-for="check in conflicts.slice(0, 5)" :key="check.value">{{ check.error }}</div>
+        <div v-if="conflicts.length > 5">... и еще {{ conflicts.length - 5 }}</div>
+      </div>
+
+      <div v-if="shadowWarnings.length > 0" class="callout is-warn">
+        <strong>Перекрыто URL-источниками групп выше — для этих значений сработают они</strong>
+        <div v-for="warning in shadowWarnings.slice(0, 5)" :key="warning">{{ warning }}</div>
+        <div v-if="shadowWarnings.length > 5">... и еще {{ shadowWarnings.length - 5 }}</div>
+      </div>
+
       <FormField label="Описание" input-id="ruleDescription" optional>
         <input id="ruleDescription" v-model="form.description" class="form-input" type="text" placeholder="Для чего это правило">
       </FormField>
 
       <div class="form-actions" style="margin-top: 0;">
-        <button type="submit" class="btn btn-primary" :disabled="adding">
+        <button
+          type="submit"
+          class="btn btn-primary"
+          :disabled="adding || Boolean(singleConflict) || (!form.bulk && checking) || (form.bulk && entered.length > 0 && conflicts.length === entered.length)"
+        >
           <SvgIcon class="btn-icon" :path="icons.plus" />
           {{ adding ? 'Добавление...' : (form.bulk ? `Добавить (${entered.length})` : 'Добавить') }}
         </button>

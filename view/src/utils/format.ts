@@ -80,6 +80,40 @@ export function formatDateTime(dateString?: string): string {
   return date.toLocaleString('ru-RU')
 }
 
+// formatDuration форматирует длительность: «45 с», «12 мин», «3 ч 5 мин», «2 дн 4 ч».
+export function formatDuration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+
+  if (seconds < 60) {
+    return `${seconds} с`
+  }
+
+  const minutes = Math.floor(seconds / 60)
+
+  if (minutes < 60) {
+    return `${minutes} мин`
+  }
+
+  const hours = Math.floor(minutes / 60)
+
+  if (hours < 24) {
+    return minutes % 60 ? `${hours} ч ${minutes % 60} мин` : `${hours} ч`
+  }
+
+  return hours % 24 ? `${Math.floor(hours / 24)} дн ${hours % 24} ч` : `${Math.floor(hours / 24)} дн`
+}
+
+// formatBitrate форматирует скорость в байтах в секунду как мегабиты: так скорость каналов указывают провайдеры.
+export function formatBitrate(bytesPerSecond: number): string {
+  const mbps = (bytesPerSecond * 8) / 1e6
+
+  if (mbps >= 100) {
+    return `${Math.round(mbps)} Мбит/с`
+  }
+
+  return `${mbps.toFixed(mbps >= 10 ? 1 : 2)} Мбит/с`
+}
+
 // formatDate форматирует дату словами («6 октября 2026 г.»).
 export function formatDate(date: Date): string {
   return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })

@@ -87,9 +87,41 @@ func LatestVersion() int {
 	return latestVersion(baseVersion, registry)
 }
 
+// BaseVersion возвращает самую старую версию схемы, которую эта версия приложения умеет мигрировать.
+func BaseVersion() int {
+	return baseVersion
+}
+
+// SchemaVersion возвращает версию схемы данных fields. Данные без schema_version созданы до появления
+// миграций — это версия 0.
+func SchemaVersion(fields map[string]json.RawMessage) (int, error) {
+	current := 0
+
+	if raw, ok := fields[schemaVersionKey]; ok {
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return 0, fmt.Errorf("invalid %s: %w", schemaVersionKey, err)
+		}
+	}
+
+	return current, nil
+}
+
 // Run применяет недостающие миграции из реестра.
 func Run(appData *appdata.File, singBoxStore SingBoxConfigStore) (*Result, error) {
 	return run(appData, singBoxStore, baseVersion, registry)
+}
+
+// MigrateData приводит данные app.json fields к актуальной версии схемы в памяти (например, при импорте).
+// Ничего не записывает: изменения конфига sing-box, которые сделали миграции, отбрасываются. fields
+// меняется на месте.
+func MigrateData(fields map[string]json.RawMessage, singBoxStore SingBoxConfigStore) (*Result, error) {
+	if err := validate(baseVersion, registry); err != nil {
+		return nil, err
+	}
+
+	result, _, err := migrate(fields, singBoxStore, baseVersion, registry)
+
+	return result, err
 }
 
 // run применяет миграции из списка list, который начинается с версии base+1.
@@ -118,21 +150,45 @@ func run(appData *appdata.File, singBoxStore SingBoxConfigStore, base int, list 
 		}, nil
 	}
 
-	// Данные без schema_version созданы до появления миграций — это версия 0.
-	current := 0
+	result, state, err := migrate(fields, singBoxStore, base, list)
+	if err != nil {
+		return nil, err
+	}
 
-	if raw, ok := fields[schemaVersionKey]; ok {
-		if err = json.Unmarshal(raw, &current); err != nil {
-			return nil, fmt.Errorf("invalid %s: %w", schemaVersionKey, err)
+	if state == nil {
+		return result, nil
+	}
+
+	// Конфиг sing-box пишем первым: версия схемы в app.json — признак завершения миграций.
+	if state.singBoxChanged {
+		if err = singBoxStore.WriteActualConfig(state.singBoxConfig); err != nil {
+			return nil, fmt.Errorf("cannot write sing-box config: %w", err)
 		}
 	}
 
+	if err = appData.WriteRaw(state.AppData); err != nil {
+		return nil, fmt.Errorf("cannot write app data: %w", err)
+	}
+
+	return result, nil
+}
+
+// migrate применяет к fields в памяти миграции из списка list, который начинается с версии base+1.
+// Если данные уже актуальны, возвращает nil вместо состояния.
+func migrate(fields map[string]json.RawMessage, singBoxStore SingBoxConfigStore, base int, list []Migration) (*Result, *State, error) {
+	latest := latestVersion(base, list)
+
+	current, err := SchemaVersion(fields)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	if current > latest {
-		return nil, fmt.Errorf("%w: data version %d, supported %d", ErrNewerSchema, current, latest)
+		return nil, nil, fmt.Errorf("%w: data version %d, supported %d", ErrNewerSchema, current, latest)
 	}
 
 	if current < base {
-		return nil, fmt.Errorf("%w: data version %d, minimal %d", ErrOldSchema, current, base)
+		return nil, nil, fmt.Errorf("%w: data version %d, minimal %d", ErrOldSchema, current, base)
 	}
 
 	result := &Result{
@@ -142,7 +198,7 @@ func run(appData *appdata.File, singBoxStore SingBoxConfigStore, base int, list 
 	}
 
 	if current == latest {
-		return result, nil
+		return result, nil, nil
 	}
 
 	state := &State{
@@ -160,27 +216,16 @@ func run(appData *appdata.File, singBoxStore SingBoxConfigStore, base int, list 
 		log.Printf("Applying migration %d: %s", migration.Version, migration.Name)
 
 		if err = migration.Up(state); err != nil {
-			return nil, fmt.Errorf("migration %d (%s) failed: %w", migration.Version, migration.Name, err)
+			return nil, nil, fmt.Errorf("migration %d (%s) failed: %w", migration.Version, migration.Name, err)
 		}
 
 		result.Applied = append(result.Applied, fmt.Sprintf("%d: %s", migration.Version, migration.Name))
 	}
 
-	// Конфиг sing-box пишем первым: версия схемы в app.json — признак завершения миграций.
-	if state.singBoxChanged {
-		if err = singBoxStore.WriteActualConfig(state.singBoxConfig); err != nil {
-			return nil, fmt.Errorf("cannot write sing-box config: %w", err)
-		}
-	}
-
 	versionRaw, _ := json.Marshal(latest)
 	state.AppData[schemaVersionKey] = versionRaw
 
-	if err = appData.WriteRaw(state.AppData); err != nil {
-		return nil, fmt.Errorf("cannot write app data: %w", err)
-	}
-
-	return result, nil
+	return result, state, nil
 }
 
 // writeSchemaVersion записывает только версию схемы.

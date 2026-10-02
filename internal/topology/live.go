@@ -57,7 +57,7 @@ func MapConnections(config map[string]any, connections []singboxclashapi.Connect
 			Destination: destination,
 			Network:     strings.ToLower(conn.Metadata.Network),
 			Source:      conn.Metadata.SourceIP,
-			Inbound:     inboundTag(conn.Metadata.Type),
+			Inbound:     InboundTag(conn.Metadata.Type),
 			Row:         matchRow(routeRules, conn.Rule, chain),
 			Rule:        conn.Rule,
 			Chain:       chain,
@@ -72,8 +72,8 @@ func MapConnections(config map[string]any, connections []singboxclashapi.Connect
 	}
 }
 
-// inboundTag возвращает тег inbound-а из поля type метаданных Clash API («тип/тег»).
-func inboundTag(value string) string {
+// InboundTag возвращает тег inbound-а из поля type метаданных Clash API («тип/тег»).
+func InboundTag(value string) string {
 	if _, tag, ok := strings.Cut(value, "/"); ok {
 		return tag
 	}

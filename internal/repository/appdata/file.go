@@ -11,22 +11,52 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/fsutil"
 )
 
-// ErrNotExist возвращается, если файл данных приложения ещё не создан.
-var ErrNotExist = os.ErrNotExist
+var (
+	// ErrNotExist возвращается, если файл данных приложения ещё не создан.
+	ErrNotExist = os.ErrNotExist
+
+	// ErrFrozen возвращается при записи после Replace: файл заменен целиком и ждет перезапуска приложения.
+	ErrFrozen = errors.New("app data is replaced, restart is pending")
+)
 
 // File — общий JSON-файл данных приложения (app.json).
 // Разные менеджеры хранят в нем свои поля верхнего уровня и не затирают чужие.
 type File struct {
 	path string
 	mu   sync.Mutex
+
+	// frozen — файл заменен через Replace: менеджеры держат в памяти прежние данные, и их запись
+	// затерла бы новые разделы.
+	frozen bool
 }
 
 // NewFile создает доступ к файлу данных приложения по пути path.
 func NewFile(path string) *File {
 	return &File{
-		path: path,
-		mu:   sync.Mutex{},
+		path:   path,
+		mu:     sync.Mutex{},
+		frozen: false,
 	}
+}
+
+// Path возвращает путь к файлу данных.
+func (f *File) Path() string {
+	return f.path
+}
+
+// Replace полностью перезаписывает файл полями fields и запрещает дальнейшую запись до перезапуска
+// приложения (ErrFrozen): данные менеджеров в памяти больше не соответствуют файлу.
+func (f *File) Replace(fields map[string]json.RawMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if err := f.writeLocked(fields); err != nil {
+		return err
+	}
+
+	f.frozen = true
+
+	return nil
 }
 
 // Read читает файл и раскладывает его в v. Поля, которых нет в v, игнорируются.
@@ -114,6 +144,10 @@ func (f *File) WriteRaw(fields map[string]json.RawMessage) error {
 
 // writeLocked записывает поля в файл. Вызывается под блокировкой.
 func (f *File) writeLocked(fields map[string]json.RawMessage) error {
+	if f.frozen {
+		return ErrFrozen
+	}
+
 	// encoding/json сортирует ключи map, поэтому порядок полей в файле стабилен.
 	result, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {

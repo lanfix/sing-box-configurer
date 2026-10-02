@@ -55,7 +55,29 @@ func New(opts Options) platform.Platform {
 			opts:     opts,
 			releases: newReleases(opts.Repository),
 		},
+		Logs: &logs{
+			units: map[string]string{
+				platform.LogSourceSingBox:    opts.SingBoxUnit,
+				platform.LogSourceConfigurer: opts.ConfigurerUnit,
+			},
+		},
 	}
+}
+
+// logs читает журналы служб sing-box и конфигуратора из journald.
+type logs struct {
+	// units — служба каждого источника журнала.
+	units map[string]string
+}
+
+// Read возвращает последние lines строк журнала службы источника source.
+func (l *logs) Read(ctx context.Context, source string, lines int) (string, error) {
+	unit, ok := l.units[source]
+	if !ok {
+		return "", fmt.Errorf("%w: %s", platform.ErrUnknownLogSource, source)
+	}
+
+	return unitLogs(ctx, unit, lines, time.Time{})
 }
 
 // singBox управляет службой sing-box.

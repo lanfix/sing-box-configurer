@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Системные настройки: параметры sing-box, Clash API, подписки Happ и плановая перезагрузка.
+// Системные настройки: параметры sing-box, Clash API, подписки Happ, плановая перезагрузка и тест скорости.
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import { get, post } from '../../api/client'
@@ -14,6 +14,7 @@ import { useLeaveGuard, useSavedState } from '../../composables/useSavedState'
 import { icons } from '../../icons'
 import { confirmAction } from '../../stores/confirm'
 import { showError, showMessage } from '../../stores/toast'
+import SpeedTestCard from './SpeedTestCard.vue'
 
 interface RestartStatus {
   enabled: boolean
@@ -422,5 +423,7 @@ onMounted(() => {
 
       <SaveBar :dirty="restartState.dirty.value" :saving="savingRestart" @reset="resetRestart" />
     </form>
+
+    <SpeedTestCard />
   </div>
 </template>

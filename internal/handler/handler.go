@@ -7,18 +7,21 @@ import (
 	"net/http"
 
 	"github.com/lanfix/sing-box-configurer/internal/amnezia"
+	"github.com/lanfix/sing-box-configurer/internal/appbackup"
 	"github.com/lanfix/sing-box-configurer/internal/auth"
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
 	"github.com/lanfix/sing-box-configurer/internal/happ"
 	"github.com/lanfix/sing-box-configurer/internal/inbounds"
 	"github.com/lanfix/sing-box-configurer/internal/outbound"
+	"github.com/lanfix/sing-box-configurer/internal/platform"
 	"github.com/lanfix/sing-box-configurer/internal/repository/singboxclashapi"
 	"github.com/lanfix/sing-box-configurer/internal/rules"
 	"github.com/lanfix/sing-box-configurer/internal/scheduler"
 	"github.com/lanfix/sing-box-configurer/internal/security"
 	"github.com/lanfix/sing-box-configurer/internal/settings"
 	"github.com/lanfix/sing-box-configurer/internal/singbox"
+	"github.com/lanfix/sing-box-configurer/internal/speedtest"
 	"github.com/lanfix/sing-box-configurer/internal/trafficmonitor"
 	"github.com/lanfix/sing-box-configurer/internal/update"
 )
@@ -43,6 +46,15 @@ type Deps struct {
 	ClashAPI       *singboxclashapi.ClashAPI
 	TrafficMonitor *trafficmonitor.Monitor
 	Update         *update.Service
+	Logs           platform.Logs
+	AppBackup      *appbackup.Service
+	SpeedTest      *speedtest.Service
+
+	// Platform — название платформы установки (docker, systemd).
+	Platform string
+
+	// Restart перезапускает конфигуратор (после импорта данных).
+	Restart func()
 }
 
 // Handler обрабатывает запросы API.
@@ -62,6 +74,11 @@ type Handler struct {
 	clashAPI          *singboxclashapi.ClashAPI
 	trafficMonitor    *trafficmonitor.Monitor
 	updateService     *update.Service
+	logs              platform.Logs
+	appBackup         *appbackup.Service
+	speedTest         *speedtest.Service
+	platform          string
+	restart           func()
 }
 
 // NewHandler создает обработчики API.
@@ -82,6 +99,11 @@ func NewHandler(deps Deps) *Handler {
 		clashAPI:          deps.ClashAPI,
 		trafficMonitor:    deps.TrafficMonitor,
 		updateService:     deps.Update,
+		logs:              deps.Logs,
+		appBackup:         deps.AppBackup,
+		speedTest:         deps.SpeedTest,
+		platform:          deps.Platform,
+		restart:           deps.Restart,
 	}
 }
 
@@ -101,6 +123,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/ruleset/bypass", h.GetBypassRuleSet)
 
 	mux.HandleFunc("GET /api/rules", h.GetRules)
+	mux.HandleFunc("POST /api/rules/check", h.CheckRules)
 	mux.HandleFunc("POST /api/rules/add", h.AddRule)
 	mux.HandleFunc("POST /api/rules/add-bulk", h.AddRuleBulk)
 	mux.HandleFunc("POST /api/rules/edit", h.EditRule)
@@ -139,6 +162,11 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/outbounds/edit", h.EditOutbound)
 	mux.HandleFunc("POST /api/outbounds/delete", h.DeleteOutbound)
 
+	mux.HandleFunc("GET /api/speedtest", h.GetSpeedTest)
+	mux.HandleFunc("POST /api/speedtest/run", h.RunSpeedTest)
+	mux.HandleFunc("POST /api/speedtest/settings", h.UpdateSpeedTestSettings)
+	mux.HandleFunc("POST /api/speedtest/settings/reset", h.ResetSpeedTestSettings)
+
 	mux.HandleFunc("GET /api/urltests", h.GetURLTests)
 	mux.HandleFunc("POST /api/urltests/preview", h.PreviewURLTest)
 	mux.HandleFunc("POST /api/urltests/add", h.AddURLTest)
@@ -163,13 +191,25 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/config", h.GetConfig)
 	mux.HandleFunc("GET /api/config/status", h.GetConfigStatus)
 	mux.HandleFunc("POST /api/config/apply", h.ApplyConfig)
+	mux.HandleFunc("GET /api/config/backups", h.GetConfigBackups)
+	mux.HandleFunc("GET /api/config/backups/content", h.GetConfigBackup)
+	mux.HandleFunc("POST /api/config/backups/restore", h.RestoreConfigBackup)
 	mux.HandleFunc("POST /api/control/reload", h.ReloadSingBox)
+
+	mux.HandleFunc("GET /api/logs", h.GetLogs)
+
+	mux.HandleFunc("GET /api/app-data/export", h.ExportAppData)
+	mux.HandleFunc("POST /api/app-data/inspect", h.InspectAppData)
+	mux.HandleFunc("POST /api/app-data/import", h.ImportAppData)
 
 	mux.HandleFunc("GET /api/clash/overview", h.GetClashOverview)
 	mux.HandleFunc("GET /api/clash/proxies", h.GetClashProxies)
 	mux.HandleFunc("POST /api/clash/proxies/select", h.SelectClashProxy)
 	mux.HandleFunc("GET /api/clash/proxies/delay", h.TestClashProxyDelay)
 	mux.HandleFunc("GET /api/clash/group/delay", h.TestClashGroupDelay)
+
+	mux.HandleFunc("GET /api/connections", h.GetConnections)
+	mux.HandleFunc("POST /api/connections/close", h.CloseConnections)
 
 	mux.HandleFunc("GET /api/topology", h.GetTopology)
 	mux.HandleFunc("GET /api/topology/connections", h.GetTopologyConnections)
