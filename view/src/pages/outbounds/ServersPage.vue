@@ -392,7 +392,7 @@ onMounted(() => {
   </p>
 
   <div class="data-table">
-    <table class="table">
+    <table class="table table-cards">
       <thead>
         <tr>
           <th>Тег</th>
@@ -412,16 +412,16 @@ onMounted(() => {
         </tr>
         <tr v-for="outbound in filtered" :key="`${outbound.source}:${outbound.tag}`">
           <td><span class="cell-main">{{ outbound.tag }}</span></td>
-          <td><span class="badge badge-domain">{{ outbound.type }}</span></td>
-          <td>
+          <td class="card-inline"><span class="badge badge-domain">{{ outbound.type }}</span></td>
+          <td data-label="Адрес">
             <span v-if="outbound.server" class="cell-mono">{{ outbound.server }}{{ outbound.port ? `:${outbound.port}` : '' }}</span>
             <span v-else class="muted">—</span>
           </td>
-          <td>
+          <td data-label="Источник">
             <span class="badge badge-source">{{ sourceLabels[outbound.source as ServerSource] }}</span>
             <div v-if="outbound.source_name" class="cell-sub">{{ outbound.source_name }}</div>
           </td>
-          <td v-if="speedSettings" class="speed-cell">
+          <td v-if="speedSettings" class="speed-cell" data-label="Скорость">
             <div v-if="canSpeedTest(outbound)" class="speed-result">
               <IconButton
                 icon="speedometer"

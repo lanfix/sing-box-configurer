@@ -263,7 +263,7 @@ function premiumTiles(premium: AmneziaPremium) {
         <div v-for="warning in profile.warnings" :key="warning">{{ warning }}</div>
       </div>
 
-      <table class="table">
+      <table class="table amnezia-items">
         <thead><tr><th>Протокол</th><th>Тип</th><th>Сервер</th></tr></thead>
         <tbody>
           <tr v-for="item in profile.items" :key="item.tag">

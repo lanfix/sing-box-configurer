@@ -220,14 +220,39 @@ const tableRows = computed(() => traffic.value.map((sample, i) => {
   return { when: secondsAgo === 0 ? 'сейчас' : `−${secondsAgo} с`, down: formatRate(sample.down), up: formatRate(sample.up) }
 }).reverse())
 
-// onPointer запоминает положение курсора над графиком.
+// touchHideDelay — сколько подсказка остается на экране после касания графика пальцем.
+const touchHideDelay = 3000
+
+let touchHideTimer: ReturnType<typeof setTimeout> | undefined
+
+// onPointer запоминает положение курсора или пальца над графиком.
 function onPointer(event: PointerEvent): void {
   const rect = chartWrap.value?.getBoundingClientRect()
+
+  clearTimeout(touchHideTimer)
 
   if (rect) {
     hoverX.value = event.clientX - rect.left
   }
 }
+
+// onPointerLeave убирает подсказку. После касания пальцем она видна еще несколько секунд:
+// у сенсорного экрана нет наведения, и подсказка иначе исчезла бы сразу.
+function onPointerLeave(event: PointerEvent): void {
+  clearTimeout(touchHideTimer)
+
+  if (event.pointerType !== 'touch') {
+    hoverX.value = null
+
+    return
+  }
+
+  touchHideTimer = setTimeout(() => {
+    hoverX.value = null
+  }, touchHideDelay)
+}
+
+onBeforeUnmount(() => clearTimeout(touchHideTimer))
 </script>
 
 <template>
@@ -274,7 +299,7 @@ function onPointer(event: PointerEvent): void {
         </div>
       </div>
 
-      <div ref="chartWrap" class="chart-wrap" @pointermove="onPointer" @pointerleave="hoverX = null">
+      <div ref="chartWrap" class="chart-wrap" @pointerdown="onPointer" @pointermove="onPointer" @pointerleave="onPointerLeave">
         <svg
           v-if="chart.width > 0 && chart.height > 0"
           class="chart-svg"

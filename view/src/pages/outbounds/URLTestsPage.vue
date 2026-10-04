@@ -371,7 +371,7 @@ onMounted(load)
   </HelpHint>
 
   <div class="data-table">
-    <table class="table">
+    <table class="table table-cards">
       <thead>
         <tr>
           <th>Тег</th>
@@ -391,7 +391,7 @@ onMounted(load)
               <span class="cell-main">{{ view.tag }}</span>
               <div v-if="view.description" class="cell-sub">{{ view.description }}</div>
             </td>
-            <td>
+            <td data-label="Источники">
               <div class="chip-list">
                 <span v-for="source in view.sources ?? []" :key="sourceKey(source)" class="badge badge-source">{{ sourceLabel(source) }}</span>
                 <span v-if="view.tags?.length" class="badge badge-source">+{{ view.tags.length }} явно</span>
@@ -400,7 +400,7 @@ onMounted(load)
               <div v-if="view.exclude_regexp" class="urltest-filter">исключить: <code>{{ view.exclude_regexp }}</code></div>
               <div v-if="view.exclude_tags?.length" class="urltest-filter">исключено вручную: {{ view.exclude_tags.length }}</div>
             </td>
-            <td>
+            <td data-label="Состав">
               <span v-if="view.error" class="status-badge status-error" :title="view.error">ошибка</span>
               <template v-else>
                 <span
@@ -414,7 +414,7 @@ onMounted(load)
                 </button>
               </template>
             </td>
-            <td>
+            <td data-label="Группы">
               <span v-if="groupsUsing(view.tag).length">{{ groupsUsing(view.tag).join(', ') }}</span>
               <span v-else class="muted">—</span>
             </td>
@@ -431,7 +431,7 @@ onMounted(load)
               </div>
             </td>
           </tr>
-          <tr v-if="expanded.includes(view.tag)">
+          <tr v-if="expanded.includes(view.tag)" class="is-detail">
             <td colspan="5">
               <div class="chip-list">
                 <span

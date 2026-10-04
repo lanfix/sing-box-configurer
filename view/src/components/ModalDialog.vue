@@ -37,7 +37,9 @@ onMounted(async () => {
   openModals.push(id)
   document.addEventListener('keydown', onKeydown)
 
-  if (props.autofocus !== false) {
+  // На сенсорном экране фокус открыл бы клавиатуру, и она закрыла бы половину окна до того,
+  // как пользователь его увидел.
+  if (props.autofocus !== false && !window.matchMedia('(pointer: coarse)').matches) {
     await nextTick()
 
     const field = body.value?.querySelector<HTMLElement>('input:not([disabled]):not([type=checkbox]):not([type=radio]), textarea:not([disabled]), select:not([disabled])')

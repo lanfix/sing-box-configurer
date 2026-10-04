@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { icons } from '../icons'
@@ -10,8 +10,19 @@ import { alertLevel, alertsOf } from '../stores/subscriptionAlerts'
 import { updateAvailable, updates } from '../stores/updates'
 import SvgIcon from './SvgIcon.vue'
 
+const props = defineProps<{
+  // open — меню выдвинуто поверх страницы (на узком экране).
+  open: boolean
+}>()
+
+const emit = defineEmits<{
+  close: []
+}>()
+
 const route = useRoute()
 const router = useRouter()
+
+const closeButton = ref<HTMLButtonElement | null>(null)
 
 // storageKey — ключ localStorage с раскрытыми группами меню.
 const storageKey = 'navOpenGroups'
@@ -92,18 +103,29 @@ async function signOut(): Promise<void> {
   await router.push({ name: 'login' })
 }
 
+// Открытое меню получает фокус, чтобы с клавиатуры можно было сразу выбрать пункт или закрыть его.
+watch(() => props.open, async (open) => {
+  if (open) {
+    await nextTick()
+    closeButton.value?.focus()
+  }
+})
+
 watch(() => route.name, openActiveGroup)
 onMounted(openActiveGroup)
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :class="{ 'is-open': open }" aria-label="Меню">
     <div class="sidebar-header">
       <img class="logo" src="/favicon.svg" alt="">
       <div class="logo-text">
         <span class="title">Sing-Box</span>
         <span class="subtitle">Configurer {{ updates.check?.current_version ?? '' }}</span>
       </div>
+      <button ref="closeButton" type="button" class="icon-btn sidebar-close" aria-label="Закрыть меню" @click="emit('close')">
+        <SvgIcon :path="icons.close" />
+      </button>
     </div>
 
     <nav class="nav-menu">

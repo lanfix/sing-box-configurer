@@ -35,6 +35,12 @@ const positionsKey = 'traffic-map-positions'
 const narrowQuery = '(max-width: 1200px)'
 const panelWidth = 330
 
+// На телефоне панель выезжает снизу и закрывает часть карты (phonePanelShare высоты), а карта не
+// уменьшается мельче phoneMinZoom: вписанная целиком, она нечитаема, остальное листается пальцем.
+const phoneQuery = '(max-width: 720px)'
+const phonePanelShare = 0.58
+const phoneMinZoom = 0.5
+
 interface Prefs {
   live: boolean
   dns: boolean
@@ -203,8 +209,42 @@ onNodesInitialized(() => {
   }
 
   fitted = true
-  void fitView({ padding: 0.08 })
+  void fitMap(0.08)
 })
+
+// fitMap вписывает карту в видимую область. На телефоне, если узлы получились бы слишком мелкими,
+// показывает начало карты (inbound-ы слева) в масштабе phoneMinZoom.
+async function fitMap(padding: number, duration?: number): Promise<void> {
+  const flow = stage.value?.querySelector('.tm-flow')
+  const nodes = getNodes.value
+
+  if (!flow || nodes.length === 0 || !window.matchMedia(phoneQuery).matches) {
+    await fitView({ padding, duration })
+
+    return
+  }
+
+  const left = Math.min(...nodes.map((node) => node.position.x))
+  const top = Math.min(...nodes.map((node) => node.position.y))
+  const right = Math.max(...nodes.map((node) => node.position.x + (node.dimensions.width || boxWidth)))
+  const bottom = Math.max(...nodes.map((node) => node.position.y + (node.dimensions.height || boxHeight)))
+  const fitZoom = Math.min(flow.clientWidth * (1 - padding) / (right - left), flow.clientHeight * (1 - padding) / (bottom - top))
+
+  if (fitZoom >= phoneMinZoom) {
+    await fitView({ padding, duration })
+
+    return
+  }
+
+  const graphHeight = (bottom - top) * phoneMinZoom
+  const offsetY = graphHeight < flow.clientHeight ? (flow.clientHeight - graphHeight) / 2 : 16
+
+  await setViewport({
+    x: 16 - left * phoneMinZoom,
+    y: offsetY - top * phoneMinZoom,
+    zoom: phoneMinZoom,
+  }, { duration })
+}
 
 watch(nodeData, (data) => {
   for (const [id, value] of Object.entries(data)) {
@@ -405,9 +445,10 @@ async function fitPath(): Promise<void> {
   const top = Math.min(...nodes.map((node) => node.position.y))
   const right = Math.max(...nodes.map((node) => node.position.x + (node.dimensions.width || boxWidth)))
   const bottom = Math.max(...nodes.map((node) => node.position.y + (node.dimensions.height || boxHeight)))
-  const overlay = window.matchMedia(narrowQuery).matches ? panelWidth + 20 : 0
+  const phone = window.matchMedia(phoneQuery).matches
+  const overlay = !phone && window.matchMedia(narrowQuery).matches ? panelWidth + 20 : 0
   const width = Math.max(flow.clientWidth - overlay, 200)
-  const height = flow.clientHeight
+  const height = phone ? flow.clientHeight * (1 - phonePanelShare) : flow.clientHeight
   const zoom = Math.min((width * 0.9) / (right - left), (height * 0.9) / (bottom - top), 1.2)
 
   await setViewport({
@@ -462,7 +503,7 @@ function resetLayout(): void {
   saved = {}
   writeStorage(positionsKey, saved)
   layoutVersion.value++
-  void nextTick(() => setTimeout(() => fitView({ padding: 0.12, duration: 300 }), 50))
+  void nextTick(() => setTimeout(() => fitMap(0.12, 300), 50))
 }
 
 // expand раскрывает подписку.
@@ -490,7 +531,12 @@ function focusNode(id: string): void {
   }
 
   selection.value = { type: 'node', id: target }
-  void setCenter(node.position.x + (node.dimensions.width || 200) / 2, node.position.y + (node.dimensions.height || 60) / 2, { zoom: 1, duration: 400 })
+
+  // На телефоне узел ставится в середину открытой над панелью части карты.
+  const flow = stage.value?.querySelector('.tm-flow')
+  const shift = flow && window.matchMedia(phoneQuery).matches ? flow.clientHeight * phonePanelShare / 2 : 0
+
+  void setCenter(node.position.x + (node.dimensions.width || 200) / 2, node.position.y + (node.dimensions.height || 60) / 2 + shift, { zoom: 1, duration: 400 })
 }
 
 // selectProxy переключает участника selector-а.

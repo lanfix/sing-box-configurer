@@ -167,7 +167,8 @@ onMounted(load)
         <p class="settings-card-description">
           JSON-объект, поля которого дописываются в секцию <code>dns</code> как есть, — например,
           <code>reverse_mapping</code>, <code>independent_cache</code> или <code>client_subnet</code>. Поля
-          <code v-for="key in reservedKeys" :key="key" style="margin-right: 3px;">{{ key }}</code> задает конфигуратор —
+          <template v-for="(key, index) in reservedKeys" :key="key"><code>{{ key }}</code>{{ index < reservedKeys.length - 1 ? ', ' : '' }}</template>
+          задает конфигуратор —
           их здесь указывать нельзя.
         </p>
       </div>

@@ -287,7 +287,7 @@ function resetFilters(): void {
   </div>
 
   <div class="data-table">
-    <table class="table conn-table">
+    <table class="table table-cards conn-table">
       <thead>
         <tr>
           <th>Хост</th>
@@ -317,7 +317,7 @@ function resetFilters(): void {
               <template v-if="conn.host && conn.destination"> · {{ conn.destination }}</template>
             </div>
           </td>
-          <td>
+          <td data-label="Источник">
             <span class="cell-mono">{{ conn.source || '—' }}</span>
             <div class="cell-sub">
               <template v-if="conn.inbound === serviceInbound">служебное: конфигуратор</template>
@@ -325,21 +325,21 @@ function resetFilters(): void {
               <template v-if="conn.process"> · {{ conn.process }}</template>
             </div>
           </td>
-          <td class="conn-route">
+          <td class="conn-route" data-label="Маршрут">
             <GroupBadge v-if="conn.group" :group="conn.group" />
             <span class="conn-chain" :title="conn.rule">
               {{ conn.chain.length ? conn.chain.join(' → ') : '—' }}
             </span>
           </td>
-          <td class="col-num">
+          <td class="col-num" data-label="Скорость">
             <div>↓ {{ formatRate(rateOf(conn).down) }}</div>
             <div class="cell-sub">↑ {{ formatRate(rateOf(conn).up) }}</div>
           </td>
-          <td class="col-num">
+          <td class="col-num" data-label="Трафик">
             <div>↓ {{ formatBytesRu(conn.download) }}</div>
             <div class="cell-sub">↑ {{ formatBytesRu(conn.upload) }}</div>
           </td>
-          <td class="col-num">{{ age(conn) }}</td>
+          <td class="col-num" data-label="Время">{{ age(conn) }}</td>
           <td class="actions-cell">
             <div class="row-actions">
               <IconButton

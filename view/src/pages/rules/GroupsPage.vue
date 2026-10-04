@@ -176,7 +176,7 @@ onMounted(load)
   </HelpHint>
 
   <div class="data-table">
-    <table class="table">
+    <table class="table table-cards">
       <thead>
         <tr>
           <th>Группа</th>
@@ -193,17 +193,17 @@ onMounted(load)
             <span class="inline-badges"><span class="badge badge-system">системная</span></span>
             <div class="cell-sub">{{ systemTitles[group.name] ?? group.description }}</div>
           </td>
-          <td class="muted">{{ group.name === 'block' ? 'отклоняется' : 'мимо туннеля' }}</td>
-          <td class="muted">—</td>
-          <td class="muted">—</td>
-          <td class="actions-cell"></td>
+          <td class="muted" data-label="Трафик">{{ group.name === 'block' ? 'отклоняется' : 'мимо туннеля' }}</td>
+          <td class="muted mobile-hidden">—</td>
+          <td class="muted mobile-hidden">—</td>
+          <td class="actions-cell mobile-hidden"></td>
         </tr>
         <tr v-for="group in userGroups" :key="group.name">
           <td>
             <span class="cell-main">{{ group.name }}</span>
             <div v-if="group.description" class="cell-sub">{{ group.description }}</div>
           </td>
-          <td>
+          <td data-label="Трафик">
             {{ group.default_outbound || 'direct' }}
             <span
               v-if="outboundTags.length && !outboundTags.includes(group.default_outbound || 'direct')"
@@ -212,11 +212,11 @@ onMounted(load)
               title="Outbound не найден: по умолчанию будет выбран block"
             >не найден</span>
           </td>
-          <td>
+          <td data-label="DNS-сервер">
             <span v-if="group.dns_server">{{ group.dns_server }}</span>
             <span v-else class="muted">по умолчанию</span>
           </td>
-          <td class="date-cell">{{ formatDateTime(group.created_at) }}</td>
+          <td class="date-cell" data-label="Создана">{{ formatDateTime(group.created_at) }}</td>
           <td class="actions-cell">
             <div class="row-actions">
               <IconButton icon="edit" title="Изменить" @click="openEditor(group)" />

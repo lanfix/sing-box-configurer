@@ -169,7 +169,7 @@ onMounted(load)
   </div>
 
   <div class="data-table">
-    <table class="table">
+    <table class="table table-cards">
       <thead>
         <tr>
           <th>Домен</th>
@@ -187,12 +187,12 @@ onMounted(load)
         </tr>
         <tr v-for="record in filtered" :key="record.id">
           <td><span class="cell-main">{{ record.domain }}</span></td>
-          <td>
+          <td data-label="Адреса">
             <div class="value-list">
               <code v-for="address in record.addresses" :key="address">{{ address }}</code>
             </div>
           </td>
-          <td class="description-cell">{{ record.description }}</td>
+          <td class="description-cell" :class="{ 'mobile-hidden': !record.description }">{{ record.description }}</td>
           <td class="actions-cell">
             <div class="row-actions">
               <IconButton icon="edit" title="Изменить" @click="openEditor(record)" />

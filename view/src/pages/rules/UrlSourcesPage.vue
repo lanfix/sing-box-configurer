@@ -312,7 +312,7 @@ function applyStatus(source: URLSource): { cls: string; text: string } {
   </div>
 
   <div class="data-table">
-    <table class="table">
+    <table class="table table-cards">
       <thead>
         <tr>
           <th>Источник</th>
@@ -335,16 +335,16 @@ function applyStatus(source: URLSource): { cls: string; text: string } {
               <template v-if="source.detour">загрузка через {{ source.detour }}</template>
             </div>
           </td>
-          <td><GroupBadge :group="source.group" /></td>
-          <td>
+          <td class="card-inline"><GroupBadge :group="source.group" /></td>
+          <td data-label="Загрузка">
             <div class="inline-status is-muted" :title="formatDateTime(source.last_update)">
               <span class="stat-dot" :class="loadStatus(source).dot"></span>
               <span>{{ loadStatus(source).text }}</span>
             </div>
             <div v-if="source.last_error" class="source-error" :title="source.last_error">{{ source.last_error }}</div>
           </td>
-          <td class="date-cell">{{ intervalLabel(source.interval) }}</td>
-          <td><span class="status-badge" :class="applyStatus(source).cls">{{ applyStatus(source).text }}</span></td>
+          <td class="date-cell" data-label="Обновление">{{ intervalLabel(source.interval) }}</td>
+          <td class="card-inline"><span class="status-badge" :class="applyStatus(source).cls">{{ applyStatus(source).text }}</span></td>
           <td class="actions-cell">
             <div class="row-actions">
               <IconButton

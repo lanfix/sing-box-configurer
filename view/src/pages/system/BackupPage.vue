@@ -255,7 +255,7 @@ function reloadPage(): void {
           <SvgIcon class="drop-zone-icon" :path="icons.upload" />
           <span v-if="inspecting">Проверка файла...</span>
           <span v-else-if="fileName" class="drop-zone-file">{{ fileName }}</span>
-          <span v-else>Выберите файл <code>app.json</code> или перетащите его сюда</span>
+          <span v-else>Выберите файл <code>app.json</code><span class="drop-zone-drag"> или перетащите его сюда</span></span>
         </label>
 
         <div v-if="inspectError" class="callout is-bad">

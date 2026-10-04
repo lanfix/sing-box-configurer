@@ -181,7 +181,7 @@ onMounted(load)
   </HelpHint>
 
   <div class="data-table">
-    <table class="table">
+    <table class="table table-cards">
       <thead>
         <tr>
           <th>Сервер</th>
@@ -203,17 +203,17 @@ onMounted(load)
             </span>
             <div v-if="server.description" class="cell-sub">{{ server.description }}</div>
           </td>
-          <td>
+          <td data-label="Протокол">
             <span class="badge badge-domain">{{ serverType(server.type)?.title ?? server.type }}</span>
             <div class="cell-sub">{{ serverType(server.type)?.subtitle }}</div>
           </td>
-          <td>
+          <td data-label="Адрес">
             <span v-if="address(server)" class="cell-mono">{{ address(server) }}</span>
             <span v-else class="muted">—</span>
             <div v-if="server.tls_server_name" class="cell-sub">SNI: {{ server.tls_server_name }}</div>
             <div v-if="server.tls_insecure" class="cell-sub" style="color: #d29922;">сертификат не проверяется</div>
           </td>
-          <td class="description-cell">
+          <td class="description-cell" data-label="Маршрут">
             <div>{{ server.detour ? `через ${server.detour}` : 'напрямую' }}</div>
             <div v-if="server.domain_resolver" class="cell-sub">адрес узнается через {{ server.domain_resolver }}</div>
             <div v-if="server.extra" class="cell-sub" :title="JSON.stringify(server.extra, null, 2)">+ JSON-параметры</div>

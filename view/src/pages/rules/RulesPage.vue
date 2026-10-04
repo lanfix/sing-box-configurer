@@ -399,7 +399,7 @@ onMounted(load)
   </div>
 
   <div class="data-table">
-    <table class="table">
+    <table class="table table-cards">
       <thead>
         <tr>
           <th>Значение</th>
@@ -421,9 +421,9 @@ onMounted(load)
             <span class="cell-mono">{{ rule.value }}</span>
             <div v-if="rule.description" class="cell-sub">{{ rule.description }}</div>
           </td>
-          <td><span class="badge" :class="`badge-${rule.type}`">{{ ruleTypeLabel(rule.type) }}</span></td>
-          <td><GroupBadge :group="rule.group" /></td>
-          <td><span class="status-badge" :class="statusClass(rule)">{{ statusText(rule) }}</span></td>
+          <td class="card-inline"><span class="badge" :class="`badge-${rule.type}`">{{ ruleTypeLabel(rule.type) }}</span></td>
+          <td class="card-inline"><GroupBadge :group="rule.group" /></td>
+          <td class="card-inline"><span class="status-badge" :class="statusClass(rule)">{{ statusText(rule) }}</span></td>
           <td class="actions-cell">
             <div class="row-actions">
               <IconButton icon="edit" title="Изменить" :disabled="rule.deleted" @click="openEdit(rule)" />

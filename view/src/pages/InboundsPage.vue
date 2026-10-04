@@ -161,7 +161,7 @@ onMounted(load)
   </HelpHint>
 
   <div class="data-table">
-    <table class="table">
+    <table class="table table-cards">
       <thead>
         <tr>
           <th>Тег</th>
@@ -176,8 +176,8 @@ onMounted(load)
         </tr>
         <tr v-for="inbound in mixed" :key="inbound.tag">
           <td><span class="cell-main">{{ inbound.tag }}</span></td>
-          <td><span class="cell-mono">{{ inbound.listen }}:{{ inbound.listen_port }}</span></td>
-          <td>
+          <td data-label="Адрес"><span class="cell-mono">{{ inbound.listen }}:{{ inbound.listen_port }}</span></td>
+          <td data-label="Доступ">
             <span v-if="inbound.users.length">
               По паролю: {{ inbound.users.map((user) => user.username).join(', ') }}
             </span>
@@ -200,7 +200,7 @@ onMounted(load)
   <p class="section-hint">Всегда есть в итоговом конфиге, не настраиваются.</p>
 
   <div class="data-table">
-    <table class="table">
+    <table class="table table-cards">
       <thead>
         <tr>
           <th>Тег</th>
