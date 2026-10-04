@@ -799,6 +799,13 @@
     align-self: flex-start;
 }
 
+/* Отступ 6px рассчитан на подсказку под полем; плашка-предупреждение — отдельный блок, ей нужно больше */
+.setting-control > .callout,
+.setting-control > .form-error,
+.setting-control > .happ-note {
+    margin-top: 6px;
+}
+
 @media (max-width: 820px) {
     .setting-row {
         grid-template-columns: minmax(0, 1fr);

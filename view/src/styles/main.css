@@ -21,13 +21,6 @@ body {
     height: 100dvh;
 }
 
-/* Кнопка меню, крестик и затемнение нужны только на узком экране (responsive.css) */
-.menu-toggle,
-.sidebar-close,
-.sidebar-backdrop {
-    display: none;
-}
-
 /* Левая навигация */
 .sidebar {
     width: 240px;
