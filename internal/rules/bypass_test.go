@@ -2,6 +2,7 @@ package rules
 
 import (
 	"context"
+	"net/netip"
 	"slices"
 	"testing"
 )
@@ -171,5 +172,118 @@ func TestSystemGroups(t *testing.T) {
 
 	if err := manager.AddGroup(Group{Name: "bad name"}); err == nil {
 		t.Error("expected error for invalid group name")
+	}
+}
+
+// TestBypassExcludesBlock проверяет, что из набора bypass убирается все, что покрывает block.
+func TestBypassExcludesBlock(t *testing.T) {
+	manager := newTestManager(
+		[]Rule{
+			{
+				ID:      "1",
+				Type:    "domain_suffix",
+				Value:   "ads.example",
+				Group:   BlockGroupName,
+				Applied: true,
+			},
+			{
+				ID:      "2",
+				Type:    "cidr",
+				Value:   "10.0.1.0/24",
+				Group:   BlockGroupName,
+				Applied: true,
+			},
+		},
+		[]URLSource{
+			{
+				ID:      "src-block",
+				Group:   BlockGroupName,
+				Applied: true,
+			},
+			{
+				ID:      "src-bypass",
+				Group:   BypassGroupName,
+				Applied: true,
+			},
+		},
+		map[string]RuleSet{
+			"src-block": {
+				CidrList:       []string{"192.168.0.0/16", "172.16.5.5"},
+				Domains:        []string{"tracker.yandex.ru"},
+				DomainSuffixes: []string{".sub.local"},
+			},
+			"src-bypass": {
+				CidrList:       []string{"10.0.0.0/22", "192.168.10.0/24", "172.16.5.4/30", "8.8.8.8"},
+				Domains:        []string{"x.ads.example", "tracker.yandex.ru", "sub.local", "a.sub.local"},
+				DomainSuffixes: []string{"ads.example", "deep.ads.example", "yandex.ru", ".x.sub.local", "sub.local"},
+			},
+		},
+	)
+
+	bypass := mustRuleSet(t)(manager.GetBypassRuleSet())
+
+	// Суффикс sub.local остается: «.sub.local» в block не покрывает сам sub.local.
+	if got, want := ruleSetValues(t, bypass, "domain"), []string{"sub.local"}; !slices.Equal(got, want) {
+		t.Errorf("bypass domain = %v, want %v", got, want)
+	}
+
+	if got, want := ruleSetValues(t, bypass, "domain_suffix"), []string{"yandex.ru", "sub.local"}; !slices.Equal(got, want) {
+		t.Errorf("bypass domain_suffix = %v, want %v", got, want)
+	}
+
+	want := []string{
+		"10.0.0.0/24", "10.0.2.0/23",
+		"172.16.5.4/32", "172.16.5.6/31",
+		"8.8.8.8",
+	}
+
+	if got := ruleSetValues(t, bypass, "ip_cidr"); !slices.Equal(got, want) {
+		t.Errorf("bypass ip_cidr = %v, want %v", got, want)
+	}
+
+	if matches := manager.MatchGroup(BypassGroupName, RuleSetKindAll, "tracker.yandex.ru", nil); len(matches) != 0 {
+		t.Errorf("bypass matches for blocked domain = %+v, want none", matches)
+	}
+
+	if matches := manager.MatchGroup(BypassGroupName, RuleSetKindAll, "music.yandex.ru", nil); len(matches) != 1 {
+		t.Errorf("bypass matches for music.yandex.ru = %+v, want yandex.ru", matches)
+	}
+
+	if matches := manager.MatchGroup(BypassGroupName, RuleSetKindAll, "", []netip.Addr{netip.MustParseAddr("10.0.1.7")}); len(matches) != 0 {
+		t.Errorf("bypass matches for blocked IP = %+v, want none", matches)
+	}
+
+	if matches := manager.MatchGroup(BypassGroupName, RuleSetKindAll, "", []netip.Addr{netip.MustParseAddr("10.0.2.7")}); len(matches) != 1 {
+		t.Errorf("bypass matches for 10.0.2.7 = %+v, want 10.0.0.0/22", matches)
+	}
+}
+
+// TestBypassFullyBlocked проверяет, что набор bypass, целиком покрытый block, остается пустым.
+func TestBypassFullyBlocked(t *testing.T) {
+	manager := newTestManager(
+		[]Rule{
+			{
+				ID:      "1",
+				Type:    "cidr",
+				Value:   "10.0.0.0/8",
+				Group:   BlockGroupName,
+				Applied: true,
+			},
+			{
+				ID:      "2",
+				Type:    "cidr",
+				Value:   "10.1.0.0/16",
+				Group:   BypassGroupName,
+				Applied: true,
+			},
+		},
+		[]URLSource{},
+		map[string]RuleSet{},
+	)
+
+	bypass := mustRuleSet(t)(manager.GetBypassRuleSet())
+
+	if len(bypass.Rules) != 0 {
+		t.Errorf("bypass rules = %v, want empty", bypass.Rules)
 	}
 }

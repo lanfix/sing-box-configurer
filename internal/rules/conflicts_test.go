@@ -158,9 +158,9 @@ func TestCheckRulesSourceShadows(t *testing.T) {
 		{"domain", "cdn.music.net", "first", ""},
 		{"ip", "198.51.100.1", "first", ""},
 
-		// block срабатывает раньше пользовательских групп, bypass — раньше всех.
+		// block срабатывает раньше всех групп, в том числе bypass.
 		{"domain", "tracker.ads.example", "first", "группы block"},
-		{"domain", "tracker.ads.example", BypassGroupName, ""},
+		{"domain", "tracker.ads.example", BypassGroupName, "группы block"},
 	}
 
 	for _, tc := range cases {

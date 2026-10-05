@@ -2,6 +2,7 @@ package rules
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -79,7 +80,6 @@ func (rm *Manager) MatchGroup(groupName string, kind RuleSetKind, domain string,
 	}
 
 	rm.urlRulesMu.RLock()
-	defer rm.urlRulesMu.RUnlock()
 
 	for _, source := range rm.data.URLSources {
 		if len(matches) >= maxMatches {
@@ -96,6 +96,17 @@ func (rm *Manager) MatchGroup(groupName string, kind RuleSetKind, domain string,
 		}
 
 		matches = append(matches, matchURLRuleSet(ruleSet, source.Description, kind, domain, ips, manualDomains, manualSuffixes)...)
+	}
+
+	rm.urlRulesMu.RUnlock()
+
+	// Домен и адреса, которые отклоняет block, в набор bypass не попадают: block срабатывает раньше.
+	if groupName == BypassGroupName {
+		if filter, err := rm.newBlockFilterLocked(); err == nil {
+			matches = slices.DeleteFunc(matches, func(match Match) bool {
+				return filter.coversMatch(match, domain, ips)
+			})
+		}
 	}
 
 	if len(matches) > maxMatches {

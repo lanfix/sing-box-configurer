@@ -382,6 +382,15 @@ func (r *renderer) renderRoute(config map[string]any) {
 	for _, item := range baseRules {
 		rule := item.(map[string]any)
 
+		// block срабатывает раньше bypass: IP block отклоняются до правила bypass. Домены block отклоняются
+		// после sniff, а их адреса не резолвятся DNS-правилом block и не попадают в исключения туннеля.
+		if jsonmap.String(rule, "action") == "bypass" {
+			routeRules = append(routeRules, map[string]any{
+				"action":   "reject",
+				"rule_set": []any{IPRuleSetTag(rules.BlockGroupName)},
+			})
+		}
+
 		// Mixed-прокси получает домены: резолвим их до правил, иначе IP-правила групп не сработают.
 		if jsonmap.Bool(rule, "ip_is_private") && len(r.in.Mixed) > 0 {
 			routeRules = append(routeRules, map[string]any{
@@ -453,7 +462,15 @@ func (r *renderer) renderDNS(config map[string]any) {
 		servers = append(servers, server.Config())
 	}
 
-	dnsRules := make([]any, 0)
+	// Домены block не резолвятся раньше всех правил: иначе адреса доменов под суффиксами bypass попали бы
+	// в исключения туннеля, и соединения с ними прошли бы мимо reject.
+	dnsRules := []any{
+		map[string]any{
+			"rule_set": RuleSetTag(rules.BlockGroupName),
+			"action":   "predefined",
+			"rcode":    "NXDOMAIN",
+		},
+	}
 
 	if len(r.in.DNSRecords) > 0 {
 		server, rule := hostsEntries(r.in.DNSRecords)

@@ -164,6 +164,7 @@ func TestRenderRoute(t *testing.T) {
 	routeRules := field(t, result.Config, "route", "rules").([]any)
 
 	want := []string{
+		`{"action":"reject","rule_set":["configurer-block@ip"]}`,
 		`{"action":"bypass","rule_set":"configurer-bypass"}`,
 		`{"action":"sniff","timeout":"500ms"}`,
 		`{"action":"hijack-dns","port":53,"protocol":"dns"}`,
@@ -214,6 +215,7 @@ func TestRenderDNS(t *testing.T) {
 	dnsRules := field(t, result.Config, "dns", "rules").([]any)
 
 	want := []string{
+		`{"action":"predefined","rcode":"NXDOMAIN","rule_set":"configurer-block"}`,
 		`{"domain":["ha.home.lab"],"server":"configurer-hosts"}`,
 		`{"action":"predefined","query_type":["HTTPS"],"rcode":"NOERROR"}`,
 		`{"rule_set":"configurer-default","server":"cloudflare"}`,

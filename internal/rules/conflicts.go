@@ -206,14 +206,14 @@ func isIPRule(ruleType string) bool {
 	return ruleType == "ip" || ruleType == "cidr"
 }
 
-// groupPriority возвращает место группы в порядке срабатывания: bypass (мимо туннеля, до маршрутизации),
-// block, затем пользовательские группы в порядке создания. Меньше — раньше.
+// groupPriority возвращает место группы в порядке срабатывания: block (отклоняется раньше всего), bypass
+// (мимо туннеля), затем пользовательские группы в порядке создания. Меньше — раньше.
 func (rm *Manager) groupPriority(name string) int {
 	switch name {
-	case BypassGroupName:
+	case BlockGroupName:
 		return 0
 
-	case BlockGroupName:
+	case BypassGroupName:
 		return 1
 	}
 

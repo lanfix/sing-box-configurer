@@ -529,9 +529,23 @@ func (rm *Manager) GetRuleSetByGroup(groupName string, kind RuleSetKind) (SingBo
 	return rm.getRuleSetLocked(kind, groupName)
 }
 
-// GetBypassRuleSet РІРѕР·РІСЂР°С‰Р°РµС‚ РЅР°Р±РѕСЂ РїСЂР°РІРёР» СЃРёСЃС‚РµРјРЅРѕР№ РіСЂСѓРїРїС‹ bypass (РјРёРјРѕ С‚СѓРЅРЅРµР»СЏ).
+// GetBypassRuleSet возвращает набор правил системной группы bypass (мимо туннеля) без значений, которые
+// покрывает группа block: она срабатывает раньше bypass.
 func (rm *Manager) GetBypassRuleSet() (SingBoxRuleSet, error) {
-	return rm.GetRuleSetByGroup(BypassGroupName, RuleSetKindAll)
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	ruleSet, err := rm.getRuleSetLocked(RuleSetKindAll, BypassGroupName)
+	if err != nil {
+		return SingBoxRuleSet{}, err
+	}
+
+	filter, err := rm.newBlockFilterLocked()
+	if err != nil {
+		return SingBoxRuleSet{}, err
+	}
+
+	return filter.apply(ruleSet), nil
 }
 
 // getRuleSetLocked СЃРѕР±РёСЂР°РµС‚ РЅР°Р±РѕСЂ РІРёРґР° kind РёР· РїСЂРёРјРµРЅРµРЅРЅС‹С… РїСЂР°РІРёР» Рё РёСЃС‚РѕС‡РЅРёРєРѕРІ РіСЂСѓРїРїС‹ groupName

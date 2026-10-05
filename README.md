@@ -101,8 +101,8 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
 |---|---|
 | `inbounds` | встроенные `tun-in` (tun0, 198.18.0.1/30, auto_redirect) и `dns-in` (0.0.0.0:53), mixed-прокси со страницы Inbounds, служебный `configurer-sources` (пользователь на каждый outbound, кроме block) для загрузки источников через outbound-ы и теста скорости |
 | `outbounds`, `endpoints` | outbound-ы, добавленные вручную, серверы подписок Happ и Amnezia, urltest-ы со страницы Outbounds → URLTest, встроенные `direct`, `block` и selector-ы групп `select-<группа>` |
-| `route` | служебные правила (bypass, sniff, hijack-dns, resolve для mixed-прокси, private → direct), `reject` для группы block, правила групп; `final: direct` |
-| `dns` | DNS-серверы, DNS-записи (`configurer-hosts`), правила групп с DNS-сервером, фильтр HTTPS-записей, пользовательские DNS-правила, общие параметры |
+| `route` | служебные правила (`reject` по IP группы block, bypass, sniff, hijack-dns, resolve для mixed-прокси, private → direct), `reject` для группы block, правила групп; `final: direct` |
+| `dns` | DNS-серверы, отказ в резолве доменов группы block, DNS-записи (`configurer-hosts`), правила групп с DNS-сервером, фильтр HTTPS-записей, пользовательские DNS-правила, общие параметры |
 | `experimental` | cache_file и Clash API на `0.0.0.0:9090` с токеном и CORS-origin-ами |
 | `log` | уровень логов из общих настроек |
 
@@ -110,6 +110,7 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
 
 ```json
 [
+  {"action": "reject", "rule_set": ["configurer-block@ip"]},
   {"action": "bypass", "rule_set": "configurer-bypass"},
   {"action": "sniff", "timeout": "500ms"},
   {"action": "hijack-dns", "port": 53, "protocol": "dns"},
@@ -152,7 +153,7 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
     битами хоста). Пересекаться ручные правила не могут ни в одной группе: повтор, домен под суффиксом, суффиксы
     друг под другом, адрес в подсети и вложенные подсети отклоняются, а форма показывает пересечение еще до
     добавления. Пересечение со значением URL-источника разрешено; если группа источника стоит выше (порядок:
-    bypass, block, группы в порядке создания), форма предупреждает, что для этого значения сработает источник.
+    block, bypass, группы в порядке создания), форма предупреждает, что для этого значения сработает источник.
   - **Источники URL** — списки правил, которые конфигуратор периодически загружает. Загруженные списки
     хранятся на диске (`url-sources` рядом с `app.json`): после перезапуска rule-set-ы готовы сразу, даже если
     источник недоступен. Список с заблокированного сайта можно загружать через outbound или группу («Загружать
@@ -228,12 +229,17 @@ tun-inbound-а и отсекаются в nftables, домены матчатс�
 `dns.reverse_mapping`, поэтому клиенты должны резолвить имена через DNS sing-box. Работает на Linux
 с `auto_redirect` (sing-box 1.13+).
 
+Группа block срабатывает раньше bypass. Подсети block вычитаются из IP-набора bypass, а домены и суффиксы
+bypass, целиком покрытые block, из набора убираются: такие адреса остаются в туннеле и отклоняются. Домены
+block не резолвятся (DNS-правило `predefined` с `NXDOMAIN` первым в `dns.rules`), поэтому их адреса не попадают
+в исключения туннеля, даже если домен лежит под суффиксом bypass.
+
 ### DNS-правила групп
 
 Для группы с DNS-сервером в начале `dns.rules` создается правило `{"rule_set": "configurer-<группа>", "server": ...}`,
 а первым — фильтр HTTPS-записей (без ECH-ключей клиенты отправляют настоящий SNI, и sniff видит домен).
-Порядок: DNS-записи, фильтр HTTPS, правила групп, пользовательские правила. Пользовательские правила
-не должны использовать legacy address filter (`ip_cidr`/`ip_is_private` без `match_response`).
+Порядок: отказ для доменов block, DNS-записи, фильтр HTTPS, правила групп, пользовательские правила.
+Пользовательские правила не должны использовать legacy address filter (`ip_cidr`/`ip_is_private` без `match_response`).
 
 Пока URL-источники группы не загружены после старта, эндпоинты rule-set-ов отвечают `503`: sing-box
 оставляет закэшированный набор, а не получает неполный.
