@@ -187,6 +187,7 @@ export interface Settings {
     auto_apply: boolean
   }
   speed_test: SpeedTestSettings
+  updates: UpdateSettings
 }
 
 export interface SpeedTestServer {
@@ -362,6 +363,15 @@ export interface UpdateCheck {
   platform?: string
   // unsupported — почему обновление через интерфейс недоступно (например, локальная сборка).
   unsupported?: string
+  // auto_check — конфигуратор сам проверяет обновления, next_check_at — время следующей проверки.
+  auto_check?: boolean
+  next_check_at?: string
+}
+
+export interface UpdateSettings {
+  auto_check: boolean
+  // interval_hours — интервал автоматической проверки, ч.
+  interval_hours: number
 }
 
 export interface UpdateStep {

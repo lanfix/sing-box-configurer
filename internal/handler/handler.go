@@ -218,6 +218,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/update/check", h.CheckUpdates)
 	mux.HandleFunc("POST /api/update/start", h.StartUpdate)
 	mux.HandleFunc("GET /api/update/status", h.UpdateStatus)
+	mux.HandleFunc("GET /api/update/settings", h.GetUpdateSettings)
+	mux.HandleFunc("POST /api/update/settings", h.SaveUpdateSettings)
 
 	mux.HandleFunc("GET /api/amnezia/profiles", h.GetAmneziaProfiles)
 	mux.HandleFunc("POST /api/amnezia/profiles/add", h.AddAmneziaProfile)

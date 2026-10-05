@@ -1,5 +1,5 @@
 // Package settings хранит в app.json общие настройки: уровень логов sing-box, доступ к Clash API,
-// плановую перезагрузку, применение подписок Happ и защиту панели.
+// плановую перезагрузку, применение подписок Happ, защиту панели и автоматическую проверку обновлений.
 package settings
 
 import (
@@ -64,6 +64,7 @@ type Settings struct {
 	Happ      Happ      `json:"happ"`
 	Security  Security  `json:"security"`
 	SpeedTest SpeedTest `json:"speed_test"`
+	Updates   Updates   `json:"updates"`
 }
 
 // appDataSection описывает раздел app.json, которым владеет менеджер.
@@ -113,6 +114,7 @@ func Default() Settings {
 		Happ:      DefaultHapp(),
 		Security:  DefaultSecurity(),
 		SpeedTest: DefaultSpeedTest(),
+		Updates:   DefaultUpdates(),
 	}
 }
 
@@ -213,6 +215,12 @@ func NewManager(appData *appdata.File) (*Manager, error) {
 		changed = true
 	}
 
+	// Настроек проверки обновлений еще нет (данные прежних версий): проверка выключена.
+	if !slices.Contains(UpdateCheckIntervals, m.data.Updates.IntervalHours) {
+		m.data.Updates.IntervalHours = defaultUpdateCheckInterval
+		changed = true
+	}
+
 	// Настроек перезагрузки еще нет: переносим поведение контейнера cron-scheduler (06:00 UTC).
 	if m.data.Restart.Schedule == "" {
 		m.data.Restart = DefaultRestart()
@@ -252,6 +260,20 @@ func (m *Manager) UpdateSpeedTest(speedTest SpeedTest) error {
 	defer m.mu.Unlock()
 
 	m.data.SpeedTest = normalized
+
+	return m.save()
+}
+
+// SetUpdates меняет автоматическую проверку обновлений. Действует сразу.
+func (m *Manager) SetUpdates(updates Updates) error {
+	if err := updates.Validate(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.data.Updates = updates
 
 	return m.save()
 }

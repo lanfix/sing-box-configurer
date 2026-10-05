@@ -3,6 +3,8 @@ package handler
 import (
 	"log"
 	"net/http"
+
+	"github.com/lanfix/sing-box-configurer/internal/settings"
 )
 
 // CheckUpdates возвращает текущую и доступные версии. Параметр force=true сбрасывает кэш проверки.
@@ -59,4 +61,26 @@ func (h *Handler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, status)
+}
+
+// GetUpdateSettings возвращает настройки автоматической проверки обновлений.
+func (h *Handler) GetUpdateSettings(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, h.settingsManager.Get().Updates)
+}
+
+// SaveUpdateSettings сохраняет настройки автоматической проверки обновлений. Действуют сразу.
+func (h *Handler) SaveUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	var req settings.Updates
+
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if err := h.settingsManager.SetUpdates(req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	writeSuccess(w, "Настройки проверки обновлений сохранены")
 }

@@ -39,6 +39,7 @@ export async function checkUpdates(force: boolean): Promise<void> {
       latest_version: '',
       available: [],
       error: error instanceof Error ? error.message : String(error),
+      auto_check: updates.check?.auto_check,
     }
   } finally {
     updates.checking = false
@@ -110,7 +111,11 @@ export async function startUpdate(version: string): Promise<void> {
   startUpdatePolling()
 }
 
+// autoCheckPollInterval — как часто интерфейс забирает результат автоматической проверки с сервера, мс.
+const autoCheckPollInterval = 5 * 60 * 1000
+
 // initUpdates проверяет обновления при загрузке приложения и продолжает следить за начатым обновлением.
+// Если включена автоматическая проверка, периодически забирает ее результат: сервер отдает его из кэша.
 export async function initUpdates(): Promise<void> {
   await checkUpdates(false)
   await refreshUpdateStatus()
@@ -118,4 +123,10 @@ export async function initUpdates(): Promise<void> {
   if (updates.status?.running) {
     startUpdatePolling()
   }
+
+  setInterval(() => {
+    if (updates.check?.auto_check && !updates.checking && !updateInProgress.value) {
+      void checkUpdates(false)
+    }
+  }, autoCheckPollInterval)
 }

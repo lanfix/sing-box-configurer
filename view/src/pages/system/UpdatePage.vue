@@ -1,14 +1,21 @@
 <script setup lang="ts">
-// Обновление конфигуратора: доступные версии, список изменений и журнал последнего обновления.
-import { computed, ref, watch } from 'vue'
+// Обновление конфигуратора: доступные версии, список изменений, журнал последнего обновления
+// и автоматическая проверка обновлений.
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 
+import { get, post } from '../../api/client'
+import type { UpdateSettings } from '../../api/types'
 import SvgIcon from '../../components/SvgIcon.vue'
 import FormField from '../../components/ui/FormField.vue'
+import SaveBar from '../../components/ui/SaveBar.vue'
+import SettingRow from '../../components/ui/SettingRow.vue'
+import ToggleSwitch from '../../components/ui/ToggleSwitch.vue'
+import { useLeaveGuard, useSavedState } from '../../composables/useSavedState'
 import { icons } from '../../icons'
 import { confirmAction } from '../../stores/confirm'
-import { showError } from '../../stores/toast'
+import { showError, showMessage } from '../../stores/toast'
 import { checkUpdates, startUpdate, updateInProgress, updates } from '../../stores/updates'
-import { formatAgo } from '../../utils/format'
+import { formatAgo, formatDateTime } from '../../utils/format'
 
 const stepTitles: Record<string, string> = {
   start: 'Запуск',
@@ -132,6 +139,69 @@ async function update(): Promise<void> {
   }
 }
 
+// checkIntervals — интервалы автоматической проверки, ч.
+const checkIntervals = [
+  { hours: 1, label: 'Каждый час' },
+  { hours: 3, label: 'Каждые 3 часа' },
+  { hours: 6, label: 'Каждые 6 часов' },
+  { hours: 12, label: 'Каждые 12 часов' },
+  { hours: 24, label: 'Раз в сутки' },
+]
+
+const savingSettings = ref(false)
+
+const autoCheck = reactive<UpdateSettings>({
+  auto_check: false,
+  interval_hours: 6,
+})
+
+const autoCheckState = useSavedState(autoCheck)
+
+useLeaveGuard(() => autoCheckState.dirty.value)
+
+// nextCheckText — когда сервер проверит обновления в следующий раз (для сохраненных настроек).
+const nextCheckText = computed(() => {
+  const next = updates.check?.next_check_at
+
+  if (autoCheckState.dirty.value || !updates.check?.auto_check || !next) {
+    return 'Обновление не устанавливается само — только по кнопке «Обновить».'
+  }
+
+  const at = new Date(next).getTime() <= Date.now() ? 'в ближайшую минуту' : formatDateTime(next)
+
+  return `Следующая проверка — ${at}. Обновление не устанавливается само — только по кнопке «Обновить».`
+})
+
+// loadSettings загружает настройки автоматической проверки.
+async function loadSettings(): Promise<void> {
+  try {
+    Object.assign(autoCheck, await get<UpdateSettings>('/api/update/settings'))
+    autoCheckState.markSaved()
+  } catch (error) {
+    showError(error, 'Ошибка загрузки настроек проверки обновлений')
+  }
+}
+
+// saveSettings сохраняет настройки автоматической проверки: они действуют сразу.
+async function saveSettings(): Promise<void> {
+  savingSettings.value = true
+
+  try {
+    await post('/api/update/settings', autoCheck)
+    showMessage('Настройки проверки обновлений сохранены')
+    autoCheckState.markSaved()
+
+    // Обновляем время следующей проверки: результат берется из кэша сервера.
+    await checkUpdates(false)
+  } catch (error) {
+    showError(error)
+  } finally {
+    savingSettings.value = false
+  }
+}
+
+onMounted(() => void loadSettings())
+
 // stepLevel возвращает класс строки журнала.
 function stepLevel(level: string): string {
   if (level === 'ERROR') {
@@ -197,6 +267,29 @@ function stepLevel(level: string): string {
         </template>
       </div>
     </div>
+
+    <form class="settings-card" @submit.prevent="saveSettings">
+      <div class="settings-card-head">
+        <div class="settings-card-title">Автоматическая проверка</div>
+        <p class="settings-card-description">
+          Конфигуратор сам проверяет новые версии, даже если панель не открыта, и пишет о новой версии в свой
+          журнал. В открытой панели у пункта «Система» появляется точка без перезагрузки страницы. Настройка
+          действует сразу после сохранения.
+        </p>
+      </div>
+
+      <SettingRow title="Проверять обновления в фоне" :description="nextCheckText">
+        <ToggleSwitch v-model="autoCheck.auto_check" :label="autoCheck.auto_check ? 'Включено' : 'Выключено'" />
+      </SettingRow>
+
+      <SettingRow v-if="autoCheck.auto_check" title="Как часто" input-id="updateCheckInterval">
+        <select id="updateCheckInterval" v-model.number="autoCheck.interval_hours" class="form-select">
+          <option v-for="interval in checkIntervals" :key="interval.hours" :value="interval.hours">{{ interval.label }}</option>
+        </select>
+      </SettingRow>
+
+      <SaveBar :dirty="autoCheckState.dirty.value" :saving="savingSettings" @reset="autoCheckState.reset" />
+    </form>
 
     <div v-if="updates.status?.exists" class="settings-card">
       <div class="settings-card-head">

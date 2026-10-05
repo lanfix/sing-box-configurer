@@ -281,6 +281,12 @@ func serve(cfg *config.AppConfig, configPath string) {
 	})
 	restartTask.Start(context.Background())
 
+	// Проверка обновлений: по запросу интерфейса и, если включено в настройках, в фоне.
+	updateService := update.NewService(host)
+	updateService.StartAutoCheck(context.Background(), func() settings.Updates {
+		return settingsManager.Get().Updates
+	})
+
 	// Адреса из конфига сервиса, по которым к конфигуратору обращаются sing-box и сам сервис, разрешены всегда.
 	guard := security.NewGuard(func() settings.Security {
 		return settingsManager.Get().Security
@@ -309,7 +315,7 @@ func serve(cfg *config.AppConfig, configPath string) {
 		SingBox:        singBoxService,
 		ClashAPI:       clashAPI,
 		TrafficMonitor: trafficMonitor,
-		Update:         update.NewService(host),
+		Update:         updateService,
 		Logs:           host.Logs,
 		AppBackup:      appBackup,
 		SpeedTest:      speedTest,

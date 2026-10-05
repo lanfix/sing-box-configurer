@@ -14,6 +14,7 @@ import (
 
 	"github.com/lanfix/sing-box-configurer/internal/platform"
 	"github.com/lanfix/sing-box-configurer/internal/semver"
+	"github.com/lanfix/sing-box-configurer/internal/settings"
 	"github.com/lanfix/sing-box-configurer/internal/version"
 )
 
@@ -27,6 +28,12 @@ const (
 
 	// Сколько последних релизов показывать со списком изменений.
 	maxChangelogReleases = 10
+
+	// Через сколько повторить автоматическую проверку после ошибки, если интервал проверки больше.
+	autoCheckRetry = 10 * time.Minute
+
+	// Сколько ждать ответа при автоматической проверке.
+	autoCheckTimeout = 2 * time.Minute
 )
 
 // CheckResult — результат проверки обновлений.
@@ -43,6 +50,10 @@ type CheckResult struct {
 	// Unsupported — почему обновление через интерфейс недоступно (например, локальная сборка). Это не ошибка:
 	// версии для справки все равно проверяются, но Available остается пустым.
 	Unsupported string `json:"unsupported,omitempty"`
+
+	// AutoCheck — включена автоматическая проверка, NextCheckAt — когда она выполнится.
+	AutoCheck   bool       `json:"auto_check"`
+	NextCheckAt *time.Time `json:"next_check_at,omitempty"`
 }
 
 // StatusStep — строка прогресса updater.
@@ -76,6 +87,9 @@ type Service struct {
 
 	mu        sync.Mutex
 	lastCheck *CheckResult
+
+	// autoCheck возвращает настройки автоматической проверки, nil — проверка не запущена.
+	autoCheck func() settings.Updates
 }
 
 // NewService создает сервис обновлений для платформы установки.
@@ -85,19 +99,142 @@ func NewService(p platform.Platform) *Service {
 		updates:   p.Updates,
 		mu:        sync.Mutex{},
 		lastCheck: nil,
+		autoCheck: nil,
 	}
 }
 
-// Check возвращает доступные обновления. Автоматическая проверка берет результат из кэша (успешный — на час,
-// ошибку — на минуту), ручная (force) всегда проверяет заново.
+// Check возвращает доступные обновления. Проверка без force берет результат из кэша (успешный — на час
+// или на интервал автоматической проверки, если он больше; ошибку — на минуту), force всегда проверяет заново.
 func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !force && s.lastCheck != nil && time.Since(s.lastCheck.CheckedAt) < s.lastCheck.cacheTTL() {
-		return s.lastCheck
+	if force || s.lastCheck == nil || time.Since(s.lastCheck.CheckedAt) >= s.cacheTTLLocked(s.lastCheck) {
+		s.fetchLocked(ctx)
 	}
 
+	return s.withScheduleLocked(s.lastCheck)
+}
+
+// StartAutoCheck запускает автоматическую проверку обновлений с настройками из getter. Настройки
+// перечитываются каждую минуту, поэтому изменения действуют сразу.
+func (s *Service) StartAutoCheck(ctx context.Context, getter func() settings.Updates) {
+	s.mu.Lock()
+	s.autoCheck = getter
+	s.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+
+		// Версия, о которой уже написано в журнале.
+		var notified string
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+
+			case <-ticker.C:
+			}
+
+			result := s.autoCheckTick(ctx)
+			if result == nil {
+				continue
+			}
+
+			if result.Error != "" {
+				log.Printf("Automatic update check failed: %s", result.Error)
+
+				continue
+			}
+
+			if len(result.Available) > 0 && result.LatestVersion != notified {
+				notified = result.LatestVersion
+				log.Printf("Update available: %s (current %s)", result.LatestVersion, result.CurrentVersion)
+			}
+		}
+	}()
+}
+
+// autoCheckTick проверяет обновления, если автоматическая проверка включена и подошло ее время. Возвращает
+// результат проверки или nil, если проверки не было.
+func (s *Service) autoCheckTick(ctx context.Context) *CheckResult {
+	s.mu.Lock()
+	next, enabled := s.nextCheckLocked()
+	s.mu.Unlock()
+
+	if !enabled || time.Now().Before(next) {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, autoCheckTimeout)
+	defer cancel()
+
+	return s.Check(ctx, true)
+}
+
+// nextCheckLocked возвращает время следующей автоматической проверки и признак, что она включена.
+// Вызывается под s.mu.
+func (s *Service) nextCheckLocked() (time.Time, bool) {
+	if s.autoCheck == nil {
+		return time.Time{}, false
+	}
+
+	config := s.autoCheck()
+
+	if !config.AutoCheck {
+		return time.Time{}, false
+	}
+
+	// Проверок еще не было — проверяем сразу.
+	if s.lastCheck == nil {
+		return time.Now(), true
+	}
+
+	interval := config.Interval()
+
+	if s.lastCheck.Error != "" {
+		interval = min(interval, autoCheckRetry)
+	}
+
+	return s.lastCheck.CheckedAt.Add(interval), true
+}
+
+// cacheTTLLocked возвращает, сколько хранить результат проверки: неудачную — минуту, успешную — час или
+// интервал автоматической проверки, если он больше. Вызывается под s.mu.
+func (s *Service) cacheTTLLocked(result *CheckResult) time.Duration {
+	if result.Error != "" {
+		return checkErrorCacheTTL
+	}
+
+	if s.autoCheck != nil {
+		if config := s.autoCheck(); config.AutoCheck {
+			return max(checkCacheTTL, config.Interval())
+		}
+	}
+
+	return checkCacheTTL
+}
+
+// withScheduleLocked возвращает копию результата с состоянием автоматической проверки. Вызывается под s.mu.
+func (s *Service) withScheduleLocked(result *CheckResult) *CheckResult {
+	copied := *result
+
+	next, enabled := s.nextCheckLocked()
+
+	copied.AutoCheck = enabled
+	copied.NextCheckAt = nil
+
+	if enabled {
+		copied.NextCheckAt = &next
+	}
+
+	return &copied
+}
+
+// fetchLocked запрашивает релизы у платформы и сохраняет результат в кэш. Вызывается под s.mu.
+func (s *Service) fetchLocked(ctx context.Context) {
 	result := &CheckResult{
 		CurrentVersion: version.Version,
 		LatestVersion:  "",
@@ -106,6 +243,8 @@ func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 		Error:          "",
 		Platform:       s.platform,
 		Unsupported:    s.updates.Unsupported(ctx),
+		AutoCheck:      false,
+		NextCheckAt:    nil,
 	}
 
 	s.lastCheck = result
@@ -114,7 +253,7 @@ func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 	if err != nil {
 		result.Error = err.Error()
 
-		return result
+		return
 	}
 
 	// Обновление через интерфейс недоступно: показываем только последний релиз для справки.
@@ -125,7 +264,7 @@ func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 			}
 		}
 
-		return result
+		return
 	}
 
 	for _, release := range releases {
@@ -157,8 +296,6 @@ func (s *Service) Check(ctx context.Context, force bool) *CheckResult {
 	if len(result.Available) > 0 {
 		result.LatestVersion = result.Available[0].Version
 	}
-
-	return result
 }
 
 // Start запускает обновление до версии target.
@@ -278,13 +415,4 @@ func lastLines(text string, n int) string {
 	}
 
 	return strings.Join(lines, "\n")
-}
-
-// cacheTTL возвращает, сколько хранить результат проверки: неудачную — минуту, успешную — час.
-func (r *CheckResult) cacheTTL() time.Duration {
-	if r.Error != "" {
-		return checkErrorCacheTTL
-	}
-
-	return checkCacheTTL
 }
