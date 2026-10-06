@@ -1,6 +1,3 @@
-| GET/POST | `/api/update/check`, `/api/update/start`, `/api/update/status` | Обновления (в ответе check — также `platform`, `auto_check` и `next_check_at`) |
-| GET/POST | `/api/update/settings` | Автоматическая проверка обновлений: `{"auto_check", "interval_hours"}`, интервал — 1, 3, 6, 12 или 24 ч |# Sing-Box Конфигуратор
-
 Веб-приложение на Go и Vue 3 для управления sing-box: правилами маршрутизации, группами, DNS, outbound-ами,
 inbound-ами и подписками.
 
@@ -402,4 +399,5 @@ git tag v1.2.3 && git push origin v1.2.3
 | GET | `/api/topology` | Карта трафика рабочего конфига: `{"nodes", "edges", "warnings"}` |
 | GET | `/api/topology/connections` | Соединения Clash API, привязанные к карте (inbound, строка маршрутизатора, цепочка outbound-ов) |
 | GET | `/api/topology/trace?query=<домен или IP>&inbound=<тег>` | Путь соединения: сработавшее правило, совпавшие правила групп, DNS-сервер, цепочка outbound-ов |
-| GET/POST | `/api/update/check`, `/api/update/start`, `/api/update/status` | Обновления (в ответе check — также `platform`) |
+| GET/POST | `/api/update/check`, `/api/update/start`, `/api/update/status` | Обновления (в ответе check — также `platform`, `auto_check` и `next_check_at`) |
+| GET/POST | `/api/update/settings` | Автоматическая проверка обновлений: `{"auto_check", "interval_hours"}`, интервал — 1, 3, 6, 12 или 24 ч |# Sing-Box Конфигуратор
