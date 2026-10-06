@@ -22,7 +22,13 @@ var (
 
 	// checkCommand проверяет конфиг, переданный на стандартный ввод.
 	checkCommand = []string{"sing-box", "check", "--disable-color", "-c", "stdin"}
+
+	// networkCommand читает сеть хоста из контейнера sing-box (он работает в сети хоста).
+	networkCommand = []string{"sh", "-c", "ip -o addr show && echo " + networkSeparator + " && ip -4 neigh show && { ip -6 neigh show 2>/dev/null || true; }"}
 )
+
+// networkSeparator разделяет вывод адресов и таблицы соседей в networkCommand.
+const networkSeparator = "=====neighbors====="
 
 // Options — параметры платформы docker.
 type Options struct {
@@ -54,6 +60,35 @@ func New(opts Options) (platform.Platform, error) {
 			docker:  manager,
 			singBox: runtime,
 		},
+		Network: runtime,
+	}, nil
+}
+
+// Read читает адреса интерфейсов и таблицу соседей хоста через exec в контейнере sing-box.
+func (s *singBox) Read(ctx context.Context) (platform.NetworkOutput, error) {
+	container, err := s.find(ctx)
+	if err != nil {
+		return platform.NetworkOutput{}, err
+	}
+
+	if !container.Running || container.Restarting {
+		return platform.NetworkOutput{}, fmt.Errorf("%w: контейнер %s не запущен", platform.ErrNotRunning, container.Name)
+	}
+
+	result, err := s.docker.Exec(ctx, container.ID, networkCommand, nil)
+	if err != nil {
+		return platform.NetworkOutput{}, err
+	}
+
+	if result.ExitCode != 0 {
+		return platform.NetworkOutput{}, fmt.Errorf("ip в контейнере %s завершился с кодом %d: %s", container.Name, result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+
+	addresses, neighbors, _ := strings.Cut(result.Stdout, networkSeparator)
+
+	return platform.NetworkOutput{
+		Addresses: addresses,
+		Neighbors: neighbors,
 	}, nil
 }
 

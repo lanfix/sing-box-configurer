@@ -1,12 +1,16 @@
+# Sing-Box Конфигуратор
+
 Веб-приложение на Go и Vue 3 для управления sing-box: правилами маршрутизации, группами, DNS, outbound-ами,
-inbound-ами и подписками.
+inbound-ами, подписками и профилями устройств сети.
 
 ![Страница «Обзор»: трафик, память sing-box и карта трафика](docs/overview.png)
 
 ## Установка
 
 Конфигуратор ставится на Linux-сервер или роутер (amd64, arm64, armv7) вместе с sing-box
-([sing-box-lx](https://github.com/Leadaxe/sing-box-lx) — сборка с поддержкой AmneziaWG) одной командой.
+([sing-box-lx](https://github.com/lanfix/sing-box-lx) — сборка форка [Leadaxe/sing-box-lx](https://github.com/Leadaxe/sing-box-lx)
+с поддержкой AmneziaWG и правил по MAC-адресам устройств) одной командой. Типовая схема — сервер в локальной сети
+как шлюз и DNS для устройств: [docs/typical-use.md](docs/typical-use.md).
 Есть два варианта с одинаковыми возможностями, включая обновление конфигуратора из интерфейса:
 
 - **[Docker](docs/install-docker.md)** — sing-box и конфигуратор в контейнерах docker compose:
@@ -88,8 +92,9 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
   - `systemd` — `sing-box check` бинарником sing-box, `systemctl restart`, логи из journald.
 
   Новый способ установки — еще одна реализация `platform.SingBox`, `platform.Updates` и `updater.Target`.
-- **Правила групп — remote rule-set-ы.** sing-box забирает их у конфигуратора (`/api/ruleset/...`)
-  каждые 30 секунд, поэтому добавление правил и URL-источников не требует перезапуска sing-box.
+- **Правила групп и профили устройств — remote rule-set-ы.** sing-box забирает их у конфигуратора
+  (`/api/ruleset/...`) каждые 30 секунд, поэтому добавление правил, URL-источников и устройств не требует
+  перезапуска sing-box.
 - **Интерфейс** (`view/`) — Vue 3 и vue-router: каждая страница загружается по требованию,
   CodeMirror подгружается только на страницах с редактором и diff.
 
@@ -99,8 +104,8 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
 |---|---|
 | `inbounds` | встроенные `tun-in` (tun0, 198.18.0.1/30, auto_redirect) и `dns-in` (0.0.0.0:53), mixed-прокси со страницы Inbounds, служебный `configurer-sources` (пользователь на каждый outbound, кроме block) для загрузки источников через outbound-ы и теста скорости |
 | `outbounds`, `endpoints` | outbound-ы, добавленные вручную, серверы подписок Happ и Amnezia, urltest-ы со страницы Outbounds → URLTest, встроенные `direct`, `block` и selector-ы групп `select-<группа>` |
-| `route` | служебные правила (`reject` по IP группы block, bypass, sniff, hijack-dns, resolve для mixed-прокси, private → direct), `reject` для группы block, правила групп; `final: direct` |
-| `dns` | DNS-серверы, отказ в резолве доменов группы block, DNS-записи (`configurer-hosts`), правила групп с DNS-сервером, фильтр HTTPS-записей, пользовательские DNS-правила, общие параметры |
+| `route` | `reject` для устройств без интернета, служебные правила (`reject` по IP группы block, bypass, sniff, hijack-dns, resolve для mixed-прокси, private → direct), `reject` для группы block, устройства без обхода → direct, правила групп; `final: direct`; `find_neighbor` |
+| `dns` | DNS-серверы, отказ в резолве доменов группы block, DNS-записи (`configurer-hosts`), DNS-сервер устройств без обхода, правила групп с DNS-сервером, фильтр HTTPS-записей, пользовательские DNS-правила, общие параметры |
 | `experimental` | cache_file и Clash API на `0.0.0.0:9090` с токеном и CORS-origin-ами |
 | `log` | уровень логов из общих настроек |
 
@@ -116,6 +121,9 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
   {"ip_is_private": true, "outbound": "direct"}
 ]
 ```
+
+Правила профилей устройств (если sing-box их поддерживает, см. [Профили устройств](#профили-устройств)) стоят
+первым (`reject` для `devices@blocked`) и сразу после `reject` группы block (`devices@direct` → direct).
 
 ## Интерфейс
 
@@ -139,7 +147,10 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
 - **Соединения** — активные соединения sing-box: хост, устройство-источник, группа и цепочка outbound-ов, скорость,
   трафик и длительность. Поиск и фильтры по группе, outbound-у и сети, пауза обновления. Соединение можно закрыть
   (по одному, найденные фильтром или все), а его домен или IP — добавить в группу правил с проверкой пересечений
-  и применением в один шаг.
+  и применением в один шаг. Устройство-источник подписано MAC-адресом и именем со страницы «Устройства».
+- **Устройства** — профили устройств сети по MAC-адресам: обход, без обхода или без интернета, и профиль
+  по умолчанию для остальных. Устройства, найденные в таблице соседей хоста, добавляются в один клик; точка
+  в меню показывает новые устройства без профиля. Подробнее — [Профили устройств](#профили-устройств).
 - **Правила**
   - **Группы.** Каждая группа создает rule-set-ы `configurer-<группа>` (домены) и `configurer-<группа>@ip` (IP/CIDR)
     и selector `select-<группа>` с outbound-ом по умолчанию. Если у группы задан DNS-сервер, домены группы
@@ -244,6 +255,36 @@ block не резолвятся (DNS-правило `predefined` с `NXDOMAIN` �
 Пока URL-источники группы не загружены после старта, эндпоинты rule-set-ов отвечают `503`: sing-box
 оставляет закэшированный набор, а не получает неполный.
 
+### Профили устройств
+
+Профиль задается устройству LAN по MAC-адресу:
+
+- **обход** — обычная маршрутизация по группам;
+- **без обхода** — весь трафик напрямую, мимо правил групп (block для них действует); домены резолвит выбранный
+  DNS-сервер, без него — общие DNS-правила;
+- **без интернета** — соединения и DNS-запросы отклоняются первым правилом маршрутизации.
+
+Устройствам без своего профиля действует профиль по умолчанию (в новой инсталляции — обход, как раньше), но только
+в сетях LAN: адреса самого хоста и исключения из настроек (VPN-клиенты, серверы) под него не попадают.
+
+Конфигуратор раз в минуту читает адреса хоста и таблицу соседей (`ip -o addr show`, `ip neigh show`; в docker —
+через exec в контейнере sing-box, он работает в сети хоста). Сети LAN — подсети интерфейсов, где есть соседи
+(docker, туннели и VPN не учитываются), их можно дополнить вручную. sing-box узнает MAC источника соединения сам
+(`route.find_neighbor`) и забирает списки у конфигуратора rule-set-ами `devices@direct` и `devices@blocked`
+(`/api/ruleset/devices?profile=`), поэтому устройства и политика меняются без перезапуска sing-box. Rule-set-ы
+появляются в рабочем конфиге после первого применения конфига.
+
+Нужен sing-box-lx 1.14.2-lx.11-mac.1 или новее: `source_mac_address` в rule-set
+([SPEC 113](https://github.com/lanfix/sing-box-lx/blob/v1.14.2-lx.11-mac.1/SPECS/TASKS/113-NEIGHBOR_RULE_SET/SPEC.md)). Поддержку
+конфигуратор проверяет командой `sing-box check` с пробным конфигом: при запуске, при смене версии sing-box и раз
+в минуту, пока Clash API недоступен. Без подтвержденной поддержки профили не рендерятся, а rule-set-ы устройств
+пустые — sing-box без поддержки отверг бы набор с MAC-адресами и не запустился. Если sing-box заменили старым
+бинарником, его запрос rule-set-а после неудачной проверки перепроверяет поддержку, и sing-box запускается
+с пустым набором.
+
+Ограничения: MAC-адрес можно подменить, телефоны используют случайный MAC для каждой сети Wi-Fi, а устройства
+за другим роутером видны с MAC-адресом этого роутера.
+
 ## Конфигурация
 
 Конфиг сервиса передается флагом `-config` (по умолчанию `config.json` в рабочем каталоге) и необязателен:
@@ -288,14 +329,22 @@ block не резолвятся (DNS-правило `predefined` с `NXDOMAIN` �
 - **sources_proxy_port**, **sources_proxy_listen** — порт (9091) и адрес служебного inbound-а sing-box для загрузки
   источников через outbound-ы: `0.0.0.0` в docker (конфигуратор подключается из своей сети по хосту
   `clash_api_base_url`, доступ закрыт паролем) и `127.0.0.1` в systemd.
-- **systemd** — службы sing-box и конфигуратора, бинарник sing-box для `sing-box check` и репозиторий
-  GitHub, из релизов которого загружаются обновления.
+- **systemd** — службы sing-box и конфигуратора, бинарник sing-box (для `sing-box check` и обновления
+  sing-box вместе с конфигуратором) и репозиторий GitHub, из релизов которого загружаются обновления.
 
 ## Обновления
 
 Версия приложения равна тегу релиза. Обновление запускается на странице «Система → Обновление» и выполняется
 атомарно: либо новая версия запускается и проходит проверку, либо всё возвращается в исходное состояние.
-sing-box во время обновления не перезапускается и продолжает работать; недоступен только веб-интерфейс.
+sing-box во время обновления конфигуратора продолжает работать; недоступен только веб-интерфейс.
+
+Вместе с конфигуратором updater обновляет sing-box-lx до версии, которая нужна новой версии конфигуратора
+(`version.SingBoxVersion`, сейчас `v1.14.2-lx.11-mac.1`), если установлен sing-box-lx старше нее. Свой образ,
+официальный sing-box и более новые версии не трогаются. Новый sing-box загружается заранее (docker — образ
+`lanfix/sing-box-lx`, systemd — архив релиза [lanfix/sing-box-lx](https://github.com/lanfix/sing-box-lx/releases)
+с проверкой по `SHA256SUMS`), а заменяется после проверки новой версии конфигуратора. Рабочий конфиг при этом
+не меняется. Если новый sing-box упал в первые 10 секунд, возвращается прежний: обновление конфигуратора
+не откатывается, он работает и с прежним sing-box.
 
 1. Конфигуратор запускает updater **целевой** версии, поэтому логика обновления всегда соответствует версии,
    на которую выполняется обновление:
@@ -306,8 +355,10 @@ sing-box во время обновления не перезапускаетс�
 2. Updater сохраняет бэкап данных в `.updates/<id>/backup/` (docker — смонтированные в конфигуратор файлы
    и compose-файл, systemd — `app.json`, конфиг сервиса и рабочий конфиг sing-box), затем заменяет версию:
    - docker — старый контейнер останавливается и переименовывается (не удаляется), новый создается с теми же
-     томами, портами, сетями и лейблами; после проверки новый тег прописывается в `docker-compose.yaml`;
-   - systemd — прежний бинарник сохраняется, новый атомарно встает на его место, служба перезапускается.
+     томами, портами, сетями и лейблами; после проверки новый тег прописывается в `docker-compose.yaml`
+     (так же updater заменяет контейнер sing-box и его тег);
+   - systemd — прежний бинарник сохраняется, новый атомарно встает на его место, служба перезапускается
+     (так же заменяется бинарник sing-box).
 3. Updater ждет `/api/health` новой версии: сервер отвечает только после успешных миграций данных.
    При любой ошибке новая версия убирается, файлы восстанавливаются из бэкапа, прежняя версия запускается.
    Причина и последние строки логов новой версии показываются в UI.
@@ -376,6 +427,7 @@ git tag v1.2.3 && git push origin v1.2.3
 | GET/POST | `/api/auth/settings` | Вход в панель: `{"enabled", "username", "password", "current_password"}` |
 | GET | `/api/ruleset/domain?group=`, `/api/ruleset/ip?group=`, `/api/ruleset/group?group=` | Rule-set группы: домены, IP или все значения (ETag, 304, 503 до загрузки источников; публичный) |
 | GET | `/api/ruleset/bypass` | Rule-set группы bypass (публичный) |
+| GET | `/api/ruleset/devices?profile=direct\|blocked` | Rule-set профиля устройств; пустой, если sing-box не поддерживает MAC-адреса в rule-set-ах (публичный) |
 | GET/POST | `/api/rules`, `/api/rules/add`, `/api/rules/add-bulk`, `/api/rules/edit`, `/api/rules/delete`, `/api/apply` | Правила |
 | GET/POST | `/api/groups`, `/api/groups/add`, `/api/groups/edit`, `/api/groups/delete` | Группы (системные — с `"system": true`) |
 | GET/POST | `/api/url-sources`, `.../add`, `.../edit`, `.../delete`, `.../refresh`, `.../apply`, `.../validate`, `/api/url-sources/rules?id=` | URL-источники |
@@ -384,6 +436,11 @@ git tag v1.2.3 && git push origin v1.2.3
 | GET/POST | `/api/outbounds`, `.../add` (share-ссылка), `.../add-json`, `.../edit`, `.../delete` | Outbound-ы |
 | GET/POST | `/api/urltests`, `.../add`, `.../edit`, `.../delete`, `.../preview` | urltest-ы (preview подбирает состав без сохранения) |
 | GET/POST | `/api/inbounds`, `/api/inbounds/mixed/add`, `.../edit`, `.../delete` | Mixed-прокси |
+| GET | `/api/devices` | Устройства с профилем и найденные в сети, политика для неизвестных, найденные сети LAN, поддержка sing-box (`support`) и `in_config` |
+| POST | `/api/devices/scan` | Перечитать таблицу соседей хоста и проверить поддержку sing-box |
+| POST | `/api/devices/add`, `/api/devices/edit`, `/api/devices/delete` | Устройство: `{"mac", "name", "profile"}`, профиль — `default`, `proxy`, `direct` или `blocked` |
+| POST | `/api/devices/settings` | Политика: `{"default_profile", "auto_networks", "networks", "exclude", "direct_dns_server"}` |
+| GET | `/api/devices/alerts` | `{"unknown"}` — число новых устройств без профиля (точка в меню) |
 | GET/POST | `/api/settings`, `/api/settings/regenerate-secret` | Уровень логов, токен и CORS Clash API |
 | GET/POST | `/api/settings/restart` | Плановая перезагрузка: `{"enabled", "schedule", "timezone"}`, в ответе GET — также `next_run`, `last_run`, `last_error` |
 | POST | `/api/settings/happ` | Применение обновлений подписок Happ: `{"auto_apply"}` |
@@ -400,4 +457,4 @@ git tag v1.2.3 && git push origin v1.2.3
 | GET | `/api/topology/connections` | Соединения Clash API, привязанные к карте (inbound, строка маршрутизатора, цепочка outbound-ов) |
 | GET | `/api/topology/trace?query=<домен или IP>&inbound=<тег>` | Путь соединения: сработавшее правило, совпавшие правила групп, DNS-сервер, цепочка outbound-ов |
 | GET/POST | `/api/update/check`, `/api/update/start`, `/api/update/status` | Обновления (в ответе check — также `platform`, `auto_check` и `next_check_at`) |
-| GET/POST | `/api/update/settings` | Автоматическая проверка обновлений: `{"auto_check", "interval_hours"}`, интервал — 1, 3, 6, 12 или 24 ч |# Sing-Box Конфигуратор
+| GET/POST | `/api/update/settings` | Автоматическая проверка обновлений: `{"auto_check", "interval_hours"}`, интервал — 1, 3, 6, 12 или 24 ч |

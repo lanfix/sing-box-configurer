@@ -55,7 +55,7 @@ func TestExtractBinaries(t *testing.T) {
 
 	dir := t.TempDir()
 
-	if err := extractBinaries(archive, dir); err != nil {
+	if err := extractBinaries(archive, dir, releaseBinaries); err != nil {
 		t.Fatal(err)
 	}
 
@@ -74,7 +74,7 @@ func TestExtractBinaries(t *testing.T) {
 		"updater": "updater",
 	})
 
-	if err := extractBinaries(incomplete, t.TempDir()); err == nil {
+	if err := extractBinaries(incomplete, t.TempDir(), releaseBinaries); err == nil {
 		t.Error("archive without configurer binary must be rejected")
 	}
 }

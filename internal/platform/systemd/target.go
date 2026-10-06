@@ -37,6 +37,10 @@ type TargetOptions struct {
 
 	// BackupPaths — абсолютные пути файлов и каталогов данных для бэкапа.
 	BackupPaths []string
+
+	// SingBoxUnit и SingBoxBinary — служба и бинарник sing-box, который обновляется вместе с конфигуратором.
+	SingBoxUnit   string
+	SingBoxBinary string
 }
 
 // Target заменяет бинарник конфигуратора новой версией и перезапускает его службу. Прежний бинарник
@@ -54,6 +58,14 @@ func NewTarget(opts TargetOptions, logger *slog.Logger) (*Target, error) {
 
 	if !filepath.IsAbs(opts.Binary) {
 		return nil, fmt.Errorf("configurer binary %q must be an absolute path", opts.Binary)
+	}
+
+	if opts.SingBoxUnit == "" {
+		opts.SingBoxUnit = defaultSingBoxUnit
+	}
+
+	if opts.SingBoxBinary == "" {
+		opts.SingBoxBinary = defaultSingBoxBinary
 	}
 
 	return &Target{
@@ -93,6 +105,8 @@ func (t *Target) Prepare(ctx context.Context, journal *updater.Journal) ([]strin
 		}
 	}
 
+	t.prepareSingBox(ctx, journal)
+
 	return files, nil
 }
 
@@ -107,7 +121,7 @@ func (t *Target) Download(ctx context.Context, journal *updater.Journal) error {
 		return fmt.Errorf("new binary reports version %s, want %s", got, journal.ToVersion)
 	}
 
-	return nil
+	return t.downloadSingBox(ctx, journal)
 }
 
 // Replace сохраняет прежний бинарник, устанавливает новый и перезапускает службу конфигуратора.
@@ -160,9 +174,9 @@ func (t *Target) Logs(ctx context.Context, journal *updater.Journal) string {
 	return logs
 }
 
-// Finish ничего не делает: служба уже запущена с новым бинарником.
-func (t *Target) Finish(_ context.Context, _ *updater.Journal) error {
-	return nil
+// Finish обновляет sing-box, если его версия старше нужной: служба конфигуратора уже запущена с новым бинарником.
+func (t *Target) Finish(ctx context.Context, journal *updater.Journal) error {
+	return t.upgradeSingBox(ctx, journal)
 }
 
 // Restore возвращает прежний бинарник.
@@ -188,6 +202,8 @@ func (t *Target) Commit(_ context.Context, journal *updater.Journal) error {
 			errs = append(errs, err)
 		}
 	}
+
+	errs = append(errs, t.commitSingBox(journal))
 
 	return errors.Join(errs...)
 }

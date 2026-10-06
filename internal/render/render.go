@@ -34,6 +34,14 @@ const (
 
 	// ruleSetUpdateInterval — как часто sing-box проверяет rule-set-ы (ответ 304, если набор не изменился).
 	ruleSetUpdateInterval = "30s"
+
+	// deviceRuleSetTagPrefix — префикс тегов rule-set-ов профилей устройств. Символа @ нет в именах групп,
+	// поэтому теги не пересекаются с rule-set-ами групп.
+	deviceRuleSetTagPrefix = "devices@"
+
+	// Профили устройств, для которых рендерятся rule-set-ы (devices.ProfileDirect и devices.ProfileBlocked).
+	deviceProfileDirect  = "direct"
+	deviceProfileBlocked = "blocked"
 )
 
 // baseTemplate — постоянная часть конфига: tun и dns inbound-ы, встроенные outbound-ы, служебные
@@ -63,6 +71,19 @@ type Input struct {
 
 	// SourcesProxy — служебный inbound для загрузки URL-источников через outbound-ы.
 	SourcesProxy SourcesProxy
+
+	// Devices — профили устройств по MAC-адресам.
+	Devices Devices
+}
+
+// Devices — профили устройств: устройства без обхода идут в direct, без интернета — в reject. Списки
+// устройств sing-box получает rule-set-ами, поэтому их изменения не требуют перезапуска.
+type Devices struct {
+	// Enabled — sing-box поддерживает MAC-адреса в rule-set-ах.
+	Enabled bool
+
+	// DirectDNSServer — DNS-сервер для устройств без обхода (пусто — общие DNS-правила).
+	DirectDNSServer string
 }
 
 // SourcesProxyTag — тег служебного mixed-inbound-а, через который конфигуратор загружает URL-источники с detour.
@@ -379,6 +400,20 @@ func (r *renderer) renderRoute(config map[string]any) {
 		})
 	}
 
+	// Устройства без интернета отклоняются раньше всех правил, включая bypass и DNS-запросы.
+	if r.in.Devices.Enabled {
+		route["find_neighbor"] = true
+
+		for _, profile := range []string{deviceProfileDirect, deviceProfileBlocked} {
+			ruleSets = append(ruleSets, r.remoteRuleSet(DeviceRuleSetTag(profile), "/api/ruleset/devices?profile="+profile))
+		}
+
+		routeRules = append(routeRules, map[string]any{
+			"action":   "reject",
+			"rule_set": DeviceRuleSetTag(deviceProfileBlocked),
+		})
+	}
+
 	for _, item := range baseRules {
 		rule := item.(map[string]any)
 
@@ -409,6 +444,14 @@ func (r *renderer) renderRoute(config map[string]any) {
 			IPRuleSetTag(rules.BlockGroupName),
 		},
 	})
+
+	// Устройства без обхода идут напрямую мимо правил групп; block для них действует, как для всех.
+	if r.in.Devices.Enabled {
+		routeRules = append(routeRules, map[string]any{
+			"rule_set": DeviceRuleSetTag(deviceProfileDirect),
+			"outbound": "direct",
+		})
+	}
 
 	for _, group := range r.in.Groups {
 		ruleSets = append(ruleSets,
@@ -477,6 +520,18 @@ func (r *renderer) renderDNS(config map[string]any) {
 
 		servers = append(servers, server)
 		dnsRules = append(dnsRules, rule)
+	}
+
+	// Устройства без обхода резолвят все домены своим DNS-сервером, мимо DNS-серверов групп.
+	if server := r.in.Devices.DirectDNSServer; r.in.Devices.Enabled && server != "" {
+		if r.hasDNSServer(server) {
+			dnsRules = append(dnsRules, map[string]any{
+				"rule_set": DeviceRuleSetTag(deviceProfileDirect),
+				"server":   server,
+			})
+		} else {
+			r.warn("устройства: DNS-сервер %s для устройств без обхода не найден, DNS-правило пропущено", server)
+		}
 	}
 
 	groupRules := make([]any, 0)
@@ -610,6 +665,18 @@ func ParseRuleSetTag(tag string) (groupName string, ip bool, ok bool) {
 	}
 
 	return name, false, true
+}
+
+// DeviceRuleSetTag возвращает тег rule-set-а устройств с профилем profile.
+func DeviceRuleSetTag(profile string) string {
+	return deviceRuleSetTagPrefix + profile
+}
+
+// ParseDeviceRuleSetTag возвращает профиль rule-set-а устройств с тегом tag.
+func ParseDeviceRuleSetTag(tag string) (string, bool) {
+	profile, found := strings.CutPrefix(tag, deviceRuleSetTagPrefix)
+
+	return profile, found && profile != ""
 }
 
 // SelectorTag возвращает тег selector-а группы.

@@ -36,6 +36,19 @@ type Platform struct {
 	SingBox SingBox
 	Updates Updates
 	Logs    Logs
+	Network Network
+}
+
+// Network читает сеть хоста, на котором работает sing-box: адреса интерфейсов и таблицу соседей.
+type Network interface {
+	// Read возвращает вывод ip -o addr show и ip neigh show (IPv4 и IPv6).
+	Read(ctx context.Context) (NetworkOutput, error)
+}
+
+// NetworkOutput — вывод команд ip на хосте sing-box.
+type NetworkOutput struct {
+	Addresses string
+	Neighbors string
 }
 
 // Logs читает журналы sing-box и конфигуратора: логи контейнеров в docker, journald в systemd.

@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/i
 | `PORT` | `8080` | Порт панели на хосте |
 | `INSTALL_DIR` | `/opt/sing-box-configurer` | Папка проекта compose |
 | `VERSION` | последний релиз | Версия конфигуратора |
-| `SING_BOX_VERSION` | `v1.14.1-lx.8` | Версия образа [sing-box-lx](https://github.com/Leadaxe/sing-box-lx) |
+| `SING_BOX_VERSION` | `v1.14.2-lx.11-mac.1` | Версия образа [sing-box-lx](https://github.com/lanfix/sing-box-lx) |
 | `INSTALL_DOCKER=0` | — | Не ставить Docker, а завершиться с ошибкой, если его нет |
 | `KEEP_RESOLVED=1` | — | Не отключать DNS-заглушку systemd-resolved |
 
@@ -73,7 +73,7 @@ sudo rm -f /etc/resolv.conf && printf 'nameserver 127.0.0.1\nnameserver 1.1.1.1\
 ```yaml
 services:
   sing-box-configurer:
-    image: docker.io/lanfix/sing-box-configurer:v0.11.0
+    image: docker.io/lanfix/sing-box-configurer:v0.15.0
     container_name: sing-box-configurer
     restart: always
     ports:
@@ -90,7 +90,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
   sing-box:
-    image: docker.io/lanfix/sing-box-lx:v1.14.1-lx.8
+    image: docker.io/lanfix/sing-box-lx:v1.14.2-lx.11-mac.1
     container_name: sing-box
     restart: always
     network_mode: host
@@ -114,7 +114,8 @@ volumes:
 ```
 
 Каталоги `data` и `sing-box` монтируются целиком: так файлы заменяются атомарно (временный файл и rename).
-Теги образов записаны явно: при обновлении из интерфейса updater прописывает здесь новый тег конфигуратора.
+Теги образов записаны явно: при обновлении из интерфейса updater прописывает здесь новые теги конфигуратора
+и sing-box.
 
 | Путь | Что там |
 |---|---|
@@ -128,7 +129,11 @@ volumes:
 
 ## Обновление
 
-Конфигуратор обновляется из интерфейса: «Система → Обновление». Если меняете `docker-compose.yaml` вручную
+Конфигуратор обновляется из интерфейса: «Система → Обновление». Если образ `lanfix/sing-box-lx` старше версии,
+которая нужна новому конфигуратору, updater заранее загружает новый образ и после проверки конфигуратора пересоздает
+контейнер sing-box (если новый sing-box не запустился, возвращается прежний). Свой образ sing-box не трогается.
+
+Если меняете `docker-compose.yaml` вручную
 (например, версию sing-box), не останавливайте весь проект (`docker compose down`): пока sing-box выключен, хост
 может остаться без DNS и VPN и не скачает образы. Загрузите образы заранее и пересоздайте только изменившиеся
 контейнеры:

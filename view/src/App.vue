@@ -8,6 +8,7 @@ import SvgIcon from './components/SvgIcon.vue'
 import { icons } from './icons'
 import { auth } from './stores/auth'
 import { configChanged, startConfigStatusPolling } from './stores/configStatus'
+import { startDeviceAlertsPolling, unknownDevices } from './stores/deviceAlerts'
 import { alertLevel, alertsOf, startSubscriptionAlertsPolling } from './stores/subscriptionAlerts'
 import { hideToast, toast } from './stores/toast'
 import { initUpdates, updateAvailable } from './stores/updates'
@@ -33,7 +34,7 @@ const menuAttention = computed<'' | 'warn' | 'bad'>(() => {
     return 'bad'
   }
 
-  return alertLevel(alertsOf())
+  return alertLevel(alertsOf()) || (unknownDevices.value > 0 ? 'warn' : '')
 })
 
 let pollingStarted = false
@@ -46,6 +47,7 @@ watch(unlocked, (value) => {
   pollingStarted = true
   startConfigStatusPolling()
   startSubscriptionAlertsPolling()
+  startDeviceAlertsPolling()
   void initUpdates()
 }, { immediate: true })
 

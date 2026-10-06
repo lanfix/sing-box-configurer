@@ -19,6 +19,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/amnezia"
 	"github.com/lanfix/sing-box-configurer/internal/appbackup"
 	"github.com/lanfix/sing-box-configurer/internal/auth"
+	"github.com/lanfix/sing-box-configurer/internal/devices"
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
 	"github.com/lanfix/sing-box-configurer/internal/handler"
@@ -216,6 +217,18 @@ func serve(cfg *config.AppConfig, configPath string) {
 
 	amneziaManager.Start(context.Background())
 
+	// Устройства LAN находятся по таблице соседей хоста sing-box, поддержка проверяется командой sing-box check.
+	devicesManager, err := devices.NewManager(appData, devices.Options{
+		Network:  host.Network,
+		SingBox:  host.SingBox,
+		Versions: clashAPI,
+	})
+	if err != nil {
+		log.Fatal(fmt.Errorf("failed to initialize devices manager: %w", err))
+	}
+
+	devicesManager.Start(context.Background())
+
 	// Данные для рендера конфига sing-box собираются из менеджеров при каждом рендере.
 	renderInput := func() (render.Input, error) {
 		amneziaSubscriptions, amneziaWarnings := amneziaManager.Subscriptions()
@@ -238,6 +251,10 @@ func serve(cfg *config.AppConfig, configPath string) {
 				Listen:  cfg.SourcesProxyListen,
 				Port:    cfg.SourcesProxyPort,
 				Detours: rulesManager.Detours(),
+			},
+			Devices: render.Devices{
+				Enabled:         devicesManager.Enabled(),
+				DirectDNSServer: devicesManager.Settings().DirectDNSServer,
 			},
 		}, nil
 	}
@@ -308,6 +325,7 @@ func serve(cfg *config.AppConfig, configPath string) {
 		DNSRecords:     dnsRecordsManager,
 		Outbounds:      outboundManager,
 		Inbounds:       inboundsManager,
+		Devices:        devicesManager,
 		Settings:       settingsManager,
 		RestartTask:    restartTask,
 		Happ:           happManager,
@@ -440,6 +458,10 @@ func validateAppData(path string) error {
 
 	if _, err = amnezia.NewManager(appData, nil, nil); err != nil {
 		return fmt.Errorf("конфигурации Amnezia: %w", err)
+	}
+
+	if _, err = devices.NewManager(appData, devices.Options{}); err != nil {
+		return fmt.Errorf("устройства: %w", err)
 	}
 
 	return nil

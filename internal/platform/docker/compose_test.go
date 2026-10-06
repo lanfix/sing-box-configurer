@@ -119,3 +119,34 @@ func TestDockerHubRepository(t *testing.T) {
 		}
 	}
 }
+
+// TestSetComposeSingBoxTag проверяет замену тега образа sing-box-lx, не задевая образ конфигуратора.
+func TestSetComposeSingBoxTag(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "docker-compose.yaml")
+	original := `services:
+  sing-box-configurer:
+    image: docker.io/lanfix/sing-box-configurer:v0.14.0
+  sing-box:
+    image: docker.io/lanfix/sing-box-lx:v1.14.1-lx.8
+`
+
+	if err := os.WriteFile(file, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := setComposeImageTag(file, "docker.io/lanfix/sing-box-lx", "v1.14.2-lx.11-mac.1")
+	if err != nil || !changed {
+		t.Fatalf("sing-box: changed=%v err=%v", changed, err)
+	}
+
+	want := `services:
+  sing-box-configurer:
+    image: docker.io/lanfix/sing-box-configurer:v0.14.0
+  sing-box:
+    image: docker.io/lanfix/sing-box-lx:v1.14.2-lx.11-mac.1
+`
+
+	if got, _ := os.ReadFile(file); string(got) != want {
+		t.Errorf("unexpected compose file:\n%s", got)
+	}
+}

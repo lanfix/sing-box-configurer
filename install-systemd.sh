@@ -8,7 +8,8 @@
 #
 # Переменные окружения:
 #   VERSION           — версия конфигуратора (по умолчанию последний релиз)
-#   SING_BOX_VERSION  — версия sing-box-lx (по умолчанию v1.14.1-lx.8)
+#   SING_BOX_VERSION  — версия sing-box-lx (по умолчанию v1.14.2-lx.11-mac.1)
+#   SING_BOX_REPO     — репозиторий GitHub с релизами sing-box-lx (по умолчанию lanfix/sing-box-lx)
 #   SKIP_SING_BOX=1   — не устанавливать sing-box (он уже есть в /usr/local/bin/sing-box)
 #   LISTEN_ADDR       — адрес панели для новой установки (по умолчанию :8080)
 #   ADMIN_USER, ADMIN_PASSWORD — сразу закрыть панель логином и паролем
@@ -17,8 +18,8 @@
 set -euo pipefail
 
 REPO="lanfix/sing-box-configurer"
-SING_BOX_REPO="Leadaxe/sing-box-lx"
-SING_BOX_VERSION="${SING_BOX_VERSION:-v1.14.1-lx.8}"
+SING_BOX_REPO="${SING_BOX_REPO:-lanfix/sing-box-lx}"
+SING_BOX_VERSION="${SING_BOX_VERSION:-v1.14.2-lx.11-mac.1}"
 LISTEN_ADDR="${LISTEN_ADDR:-:8080}"
 
 BIN_DIR="/usr/local/bin"

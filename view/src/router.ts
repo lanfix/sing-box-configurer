@@ -38,6 +38,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Соединения' },
   },
   {
+    path: '/devices',
+    name: 'devices',
+    component: () => import('./pages/DevicesPage.vue'),
+    meta: { title: 'Устройства' },
+  },
+  {
     path: '/rules/groups',
     name: 'groups',
     component: () => import('./pages/rules/GroupsPage.vue'),

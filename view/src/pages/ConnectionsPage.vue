@@ -119,7 +119,7 @@ const filtered = computed(() => {
       return true
     }
 
-    return [conn.host, conn.destination, conn.source, conn.rule, conn.outbound, conn.process ?? '', ...conn.chain]
+    return [conn.host, conn.destination, conn.source, conn.source_name ?? '', conn.source_mac ?? '', conn.rule, conn.outbound, conn.process ?? '', ...conn.chain]
       .some((value) => value.toLowerCase().includes(query))
   })
 
@@ -319,6 +319,9 @@ function resetFilters(): void {
           </td>
           <td data-label="Источник">
             <span class="cell-mono">{{ conn.source || '—' }}</span>
+            <div v-if="conn.source_mac" class="cell-sub" :title="conn.source_mac">
+              {{ conn.source_name || conn.source_mac }}
+            </div>
             <div class="cell-sub">
               <template v-if="conn.inbound === serviceInbound">служебное: конфигуратор</template>
               <template v-else>{{ conn.inbound }}</template>

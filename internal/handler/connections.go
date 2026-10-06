@@ -24,6 +24,10 @@ type connectionView struct {
 	Inbound     string `json:"inbound"`
 	Rule        string `json:"rule"`
 
+	// SourceMAC и SourceName — устройство-источник из таблицы соседей хоста и его имя на странице «Устройства».
+	SourceMAC  string `json:"source_mac,omitempty"`
+	SourceName string `json:"source_name,omitempty"`
+
 	// Group — группа правил, в selector которой ушло соединение. Пусто, если соединение ушло не в группу.
 	Group string `json:"group,omitempty"`
 
@@ -61,6 +65,8 @@ func (h *Handler) GetConnections(w http.ResponseWriter, _ *http.Request) {
 			Source:      conn.Metadata.SourceIP,
 			Inbound:     topology.InboundTag(conn.Metadata.Type),
 			Rule:        conn.Rule,
+			SourceMAC:   "",
+			SourceName:  "",
 			Group:       "",
 			Chain:       chain,
 			Outbound:    "",
@@ -76,6 +82,11 @@ func (h *Handler) GetConnections(w http.ResponseWriter, _ *http.Request) {
 
 		if conn.Metadata.SourceIP != "" && conn.Metadata.SourcePort != "" {
 			view.Source = net.JoinHostPort(conn.Metadata.SourceIP, conn.Metadata.SourcePort)
+		}
+
+		if mac, name, ok := h.devicesManager.LookupIP(conn.Metadata.SourceIP); ok {
+			view.SourceMAC = mac
+			view.SourceName = name
 		}
 
 		if len(chain) > 0 {

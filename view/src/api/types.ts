@@ -531,6 +531,9 @@ export interface Connection {
   source: string
   inbound: string
   rule: string
+  // source_mac и source_name — устройство-источник из таблицы соседей хоста и его имя.
+  source_mac?: string
+  source_name?: string
   // group — группа правил, в selector которой ушло соединение.
   group?: string
   chain: string[]
@@ -578,4 +581,44 @@ export interface ImportResult {
   to_version: number
   migrations: string[]
   backup: string
+}
+
+// DeviceProfile — профиль устройства: default — профиль по умолчанию для неизвестных устройств.
+export type DeviceProfile = 'default' | 'proxy' | 'direct' | 'blocked'
+
+// Device — устройство с профилем или найденное в таблице соседей хоста.
+export interface Device {
+  mac: string
+  name: string
+  profile: DeviceProfile
+  added_at?: string
+  ips: string[]
+  interface: string
+  first_seen?: string
+  last_seen?: string
+  online: boolean
+}
+
+// DeviceSettings — политика для устройств без своего профиля.
+export interface DeviceSettings {
+  default_profile: Exclude<DeviceProfile, 'default'>
+  auto_networks: boolean
+  networks: string[]
+  exclude: string[]
+  direct_dns_server: string
+}
+
+// DevicesState — данные страницы «Устройства».
+export interface DevicesState {
+  devices: Device[]
+  unknown: Device[]
+  settings: DeviceSettings
+  detected: { networks: string[]; host_addresses: string[]; updated_at: string }
+  networks: string[]
+  exclusions: string[]
+  scanned_at?: string
+  scan_error?: string
+  support: { known: boolean; supported: boolean; version: string; error?: string; checked_at: string }
+  // in_config — rule-set-ы устройств есть в рабочем конфиге sing-box.
+  in_config: boolean
 }

@@ -11,7 +11,7 @@
 # Переменные окружения:
 #   INSTALL_DIR       — папка проекта compose (по умолчанию /opt/sing-box-configurer)
 #   VERSION           — версия конфигуратора для новой установки (по умолчанию последний релиз)
-#   SING_BOX_VERSION  — версия образа sing-box-lx для новой установки (по умолчанию v1.14.1-lx.8)
+#   SING_BOX_VERSION  — версия образа sing-box-lx для новой установки (по умолчанию v1.14.2-lx.11-mac.1)
 #   PORT              — порт панели на хосте для новой установки (по умолчанию 8080)
 #   ADMIN_USER, ADMIN_PASSWORD — сразу закрыть панель логином и паролем
 #   INSTALL_DOCKER=0  — не устанавливать Docker, если его нет (по умолчанию ставится скриптом get.docker.com)
@@ -22,7 +22,7 @@ set -euo pipefail
 REPO="lanfix/sing-box-configurer"
 IMAGE="docker.io/lanfix/sing-box-configurer"
 SING_BOX_IMAGE="docker.io/lanfix/sing-box-lx"
-SING_BOX_VERSION="${SING_BOX_VERSION:-v1.14.1-lx.8}"
+SING_BOX_VERSION="${SING_BOX_VERSION:-v1.14.2-lx.11-mac.1}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/sing-box-configurer}"
 PORT="${PORT:-8080}"
 

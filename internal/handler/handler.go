@@ -9,6 +9,7 @@ import (
 	"github.com/lanfix/sing-box-configurer/internal/amnezia"
 	"github.com/lanfix/sing-box-configurer/internal/appbackup"
 	"github.com/lanfix/sing-box-configurer/internal/auth"
+	"github.com/lanfix/sing-box-configurer/internal/devices"
 	"github.com/lanfix/sing-box-configurer/internal/dnsconfig"
 	"github.com/lanfix/sing-box-configurer/internal/dnsrecords"
 	"github.com/lanfix/sing-box-configurer/internal/happ"
@@ -38,6 +39,7 @@ type Deps struct {
 	DNSRecords     *dnsrecords.Manager
 	Outbounds      *outbound.Manager
 	Inbounds       *inbounds.Manager
+	Devices        *devices.Manager
 	Settings       *settings.Manager
 	RestartTask    *scheduler.RestartTask
 	Happ           *happ.Manager
@@ -66,6 +68,7 @@ type Handler struct {
 	dnsRecordsManager *dnsrecords.Manager
 	outboundManager   *outbound.Manager
 	inboundsManager   *inbounds.Manager
+	devicesManager    *devices.Manager
 	settingsManager   *settings.Manager
 	restartTask       *scheduler.RestartTask
 	happManager       *happ.Manager
@@ -91,6 +94,7 @@ func NewHandler(deps Deps) *Handler {
 		dnsRecordsManager: deps.DNSRecords,
 		outboundManager:   deps.Outbounds,
 		inboundsManager:   deps.Inbounds,
+		devicesManager:    deps.Devices,
 		settingsManager:   deps.Settings,
 		restartTask:       deps.RestartTask,
 		happManager:       deps.Happ,
@@ -121,6 +125,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/ruleset/domain", h.GetRuleSetByGroupKind(rules.RuleSetKindDomain))
 	mux.HandleFunc("GET /api/ruleset/ip", h.GetRuleSetByGroupKind(rules.RuleSetKindIP))
 	mux.HandleFunc("GET /api/ruleset/bypass", h.GetBypassRuleSet)
+	mux.HandleFunc("GET /api/ruleset/devices", h.GetDeviceRuleSet)
 
 	mux.HandleFunc("GET /api/rules", h.GetRules)
 	mux.HandleFunc("POST /api/rules/check", h.CheckRules)
@@ -177,6 +182,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/inbounds/mixed/add", h.AddMixedInbound)
 	mux.HandleFunc("POST /api/inbounds/mixed/edit", h.EditMixedInbound)
 	mux.HandleFunc("POST /api/inbounds/mixed/delete", h.DeleteMixedInbound)
+
+	mux.HandleFunc("GET /api/devices", h.GetDevices)
+	mux.HandleFunc("GET /api/devices/alerts", h.GetDeviceAlerts)
+	mux.HandleFunc("POST /api/devices/scan", h.ScanDevices)
+	mux.HandleFunc("POST /api/devices/add", h.AddDevice)
+	mux.HandleFunc("POST /api/devices/edit", h.EditDevice)
+	mux.HandleFunc("POST /api/devices/delete", h.DeleteDevice)
+	mux.HandleFunc("POST /api/devices/settings", h.UpdateDeviceSettings)
 
 	mux.HandleFunc("GET /api/settings", h.GetSettings)
 	mux.HandleFunc("POST /api/settings", h.UpdateSettings)

@@ -6,6 +6,7 @@ import { icons } from '../icons'
 import { isNavGroup, navigation, type NavBadge, type NavGroup } from '../navigation'
 import { auth, logout } from '../stores/auth'
 import { configChanged } from '../stores/configStatus'
+import { unknownDevices } from '../stores/deviceAlerts'
 import { alertLevel, alertsOf } from '../stores/subscriptionAlerts'
 import { updateAvailable, updates } from '../stores/updates'
 import SvgIcon from './SvgIcon.vue'
@@ -73,6 +74,9 @@ function badge(source?: NavBadge): { level: '' | 'warn' | 'bad'; title: string }
 
     case 'update':
       return { level: updateAvailable.value ? 'bad' : '', title: 'Доступно обновление' }
+
+    case 'devices':
+      return { level: unknownDevices.value > 0 ? 'warn' : '', title: `Новые устройства без профиля: ${unknownDevices.value}` }
 
     case 'happ':
     case 'amnezia':

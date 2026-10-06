@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -128,16 +129,22 @@ func (t *Target) Prepare(ctx context.Context, journal *updater.Journal) ([]strin
 		}
 	}
 
+	t.prepareSingBox(ctx, journal)
+
 	return files, nil
 }
 
-// Download загружает образ новой версии.
+// Download загружает образы новой версии конфигуратора и, если нужно, sing-box.
 func (t *Target) Download(ctx context.Context, journal *updater.Journal) error {
 	image := journal.State[stateNewImage]
 
 	t.log.Info("pulling image "+image, "step", updater.StepDownload)
 
-	return t.docker.Pull(ctx, image)
+	if err := t.docker.Pull(ctx, image); err != nil {
+		return err
+	}
+
+	return t.downloadSingBox(ctx, journal)
 }
 
 // Replace заменяет контейнер конфигуратора контейнером из нового образа.
@@ -180,8 +187,18 @@ func (t *Target) Logs(ctx context.Context, journal *updater.Journal) string {
 	return logs
 }
 
-// Finish прописывает новый тег образа в compose-файлы, чтобы docker compose up не откатил версию.
+// Finish прописывает новый тег образа в compose-файлы, чтобы docker compose up не откатил версию,
+// и обновляет sing-box, если его версия старше нужной.
 func (t *Target) Finish(ctx context.Context, journal *updater.Journal) error {
+	if err := t.setComposeTag(ctx, journal, journal.State[stateNewImage]); err != nil {
+		return err
+	}
+
+	return t.upgradeSingBox(ctx, journal)
+}
+
+// setComposeTag прописывает образ image в compose-файлы проекта конфигуратора.
+func (t *Target) setComposeTag(ctx context.Context, journal *updater.Journal, image string) error {
 	info, err := t.docker.Inspect(ctx, journal.State[stateName])
 	if err != nil {
 		return err
@@ -191,7 +208,7 @@ func (t *Target) Finish(ctx context.Context, journal *updater.Journal) error {
 		hostDir: journal.State[stateHostDir],
 	}
 
-	repository, tag := splitImage(journal.State[stateNewImage])
+	repository, tag := splitImage(image)
 
 	for _, file := range composeFiles(info.Labels) {
 		rel, ok := paths.relative(file)
@@ -207,7 +224,7 @@ func (t *Target) Finish(ctx context.Context, journal *updater.Journal) error {
 		}
 
 		if changed {
-			t.log.Info("compose file updated", "step", updater.StepFinish, "file", rel, "image", journal.State[stateNewImage])
+			t.log.Info("compose file updated", "step", updater.StepFinish, "file", rel, "image", image)
 		}
 	}
 
@@ -224,7 +241,7 @@ func (t *Target) StartPrevious(ctx context.Context, journal *updater.Journal) er
 	return t.docker.Start(ctx, journal.State[stateName])
 }
 
-// Commit удаляет прежний контейнер, сохраненный для отката.
+// Commit удаляет прежние контейнеры конфигуратора и sing-box, сохраненные для отката.
 func (t *Target) Commit(ctx context.Context, journal *updater.Journal) error {
 	name, rollbackName := journal.State[stateName], journal.State[stateRollbackName]
 
@@ -232,7 +249,7 @@ func (t *Target) Commit(ctx context.Context, journal *updater.Journal) error {
 		return err
 	}
 
-	return t.docker.Remove(ctx, rollbackName)
+	return errors.Join(t.docker.Remove(ctx, rollbackName), t.commitSingBox(ctx, journal))
 }
 
 // splitImage разделяет образ на репозиторий и тег.

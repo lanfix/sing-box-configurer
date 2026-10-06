@@ -537,6 +537,12 @@ func (t *tracer) matchRuleSets(tags []string, dnsQuery bool) ([]rules.Match, []s
 	}
 
 	for _, tag := range tags {
+		if _, device := render.ParseDeviceRuleSetTag(tag); device {
+			appendUnique(&t.result.Notes, "Профили устройств не проверяются: путь показан для устройства с обходом")
+
+			continue
+		}
+
 		group, ip, ok := render.ParseRuleSetTag(tag)
 		if !ok {
 			continue

@@ -39,6 +39,8 @@ const (
 	EnvConfigurerBinary = "CONFIGURER_BINARY"
 	EnvBackupPaths      = "BACKUP_PATHS"
 	EnvUpdatesDir       = "UPDATES_DIR"
+	EnvSingBoxUnit      = "SING_BOX_UNIT"
+	EnvSingBoxBinary    = "SING_BOX_BINARY"
 )
 
 // jobInfo — описание обновления, которое конфигуратор записывает перед запуском updater.
@@ -131,6 +133,8 @@ func (u *updates) Start(ctx context.Context, updateID, target string) (time.Time
 		"--setenv=" + EnvConfigurerUnit + "=" + u.opts.ConfigurerUnit,
 		"--setenv=" + EnvConfigurerBinary + "=" + binary,
 		"--setenv=" + EnvBackupPaths + "=" + strings.Join(u.opts.BackupPaths, string(os.PathListSeparator)),
+		"--setenv=" + EnvSingBoxUnit + "=" + u.opts.SingBoxUnit,
+		"--setenv=" + EnvSingBoxBinary + "=" + u.opts.SingBoxBinary,
 		filepath.Join(releaseDir, "updater"),
 	}
 

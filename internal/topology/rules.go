@@ -326,6 +326,10 @@ func ruleSetNames(tags []string) ([]string, []string) {
 	for _, tag := range tags {
 		name := tag
 
+		if profile, ok := render.ParseDeviceRuleSetTag(tag); ok {
+			name = deviceProfileLabel(profile)
+		}
+
 		if group, _, ok := render.ParseRuleSetTag(tag); ok {
 			name = group
 
@@ -340,6 +344,19 @@ func ruleSetNames(tags []string) ([]string, []string) {
 	}
 
 	return names, groupNames
+}
+
+// deviceProfileLabel возвращает подпись rule-set-а устройств с профилем profile.
+func deviceProfileLabel(profile string) string {
+	switch profile {
+	case "direct":
+		return "устройства без обхода"
+
+	case "blocked":
+		return "устройства без интернета"
+	}
+
+	return "устройства " + profile
 }
 
 // groupsDetail возвращает размеры наборов групп groupNames.

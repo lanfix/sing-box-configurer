@@ -428,3 +428,80 @@ func TestRenderSourcesProxy(t *testing.T) {
 		t.Errorf("missing detour must produce a warning: %v", result.Warnings)
 	}
 }
+
+func TestRenderDevices(t *testing.T) {
+	input := testInput()
+	input.Devices = Devices{
+		Enabled:         true,
+		DirectDNSServer: "yandex",
+	}
+
+	result, err := Render(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routeRules := field(t, result.Config, "route", "rules").([]any)
+
+	want := []string{
+		`{"action":"reject","rule_set":"devices@blocked"}`,
+		`{"action":"reject","rule_set":["configurer-block@ip"]}`,
+		`{"action":"bypass","rule_set":"configurer-bypass"}`,
+		`{"action":"sniff","timeout":"500ms"}`,
+		`{"action":"hijack-dns","port":53,"protocol":"dns"}`,
+		`{"action":"resolve","inbound":"mixed-proxy"}`,
+		`{"ip_is_private":true,"outbound":"direct"}`,
+		`{"action":"reject","rule_set":["configurer-block","configurer-block@ip"]}`,
+		`{"outbound":"direct","rule_set":"devices@direct"}`,
+		`{"outbound":"select-default","rule_set":["configurer-default","configurer-default@ip"]}`,
+		`{"outbound":"select-claude","rule_set":["configurer-claude","configurer-claude@ip"]}`,
+	}
+
+	got := make([]string, 0, len(routeRules))
+
+	for _, rule := range routeRules {
+		got = append(got, toJSON(t, rule))
+	}
+
+	if !slices.Equal(got, want) {
+		t.Errorf("route rules:\n got %v\nwant %v", got, want)
+	}
+
+	if field(t, result.Config, "route", "find_neighbor") != true {
+		t.Error("find_neighbor must be enabled")
+	}
+
+	ruleSets := field(t, result.Config, "route", "rule_set").([]any)
+
+	if url := byTag(ruleSets, "devices@blocked")["url"]; url != "http://127.0.0.1:8080/api/ruleset/devices?profile=blocked" {
+		t.Errorf("devices rule set url = %v", url)
+	}
+
+	dnsRules := field(t, result.Config, "dns", "rules").([]any)
+
+	if got := toJSON(t, dnsRules[2]); got != `{"rule_set":"devices@direct","server":"yandex"}` {
+		t.Errorf("devices dns rule = %s", got)
+	}
+
+	// Неизвестный DNS-сервер — правило пропускается с предупреждением.
+	input.Devices.DirectDNSServer = "missing"
+
+	result, err = Render(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(field(t, result.Config, "dns", "rules").([]any)) != len(dnsRules)-1 || !slices.ContainsFunc(result.Warnings, func(warning string) bool {
+		return strings.Contains(warning, "DNS-сервер missing")
+	}) {
+		t.Errorf("missing direct dns server: warnings %v", result.Warnings)
+	}
+
+	if profile, ok := ParseDeviceRuleSetTag("devices@direct"); !ok || profile != "direct" {
+		t.Errorf("ParseDeviceRuleSetTag = %s %v", profile, ok)
+	}
+
+	if _, _, ok := ParseRuleSetTag("devices@direct"); ok {
+		t.Error("device rule set must not parse as a group rule set")
+	}
+}

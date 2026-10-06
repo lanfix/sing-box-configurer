@@ -104,9 +104,11 @@ func newTarget(ctx context.Context, platformName string, logger *slog.Logger) (u
 	}
 
 	return systemd.NewTarget(systemd.TargetOptions{
-		Unit:        os.Getenv(systemd.EnvConfigurerUnit),
-		Binary:      os.Getenv(systemd.EnvConfigurerBinary),
-		BackupPaths: backupPaths,
+		Unit:          os.Getenv(systemd.EnvConfigurerUnit),
+		Binary:        os.Getenv(systemd.EnvConfigurerBinary),
+		BackupPaths:   backupPaths,
+		SingBoxUnit:   os.Getenv(systemd.EnvSingBoxUnit),
+		SingBoxBinary: os.Getenv(systemd.EnvSingBoxBinary),
 	}, logger)
 }
 

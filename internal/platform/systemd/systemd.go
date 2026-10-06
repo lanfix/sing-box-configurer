@@ -61,6 +61,7 @@ func New(opts Options) platform.Platform {
 				platform.LogSourceConfigurer: opts.ConfigurerUnit,
 			},
 		},
+		Network: network{},
 	}
 }
 
@@ -125,6 +126,32 @@ func (s *singBox) State(ctx context.Context) (platform.State, error) {
 // Logs возвращает последние строки журнала службы sing-box.
 func (s *singBox) Logs(ctx context.Context, lines int) (string, error) {
 	return unitLogs(ctx, s.unit, lines, time.Time{})
+}
+
+// network читает сеть хоста командой ip (конфигуратор работает на том же хосте, что и sing-box).
+type network struct{}
+
+// Read возвращает адреса интерфейсов и таблицу соседей хоста.
+func (network) Read(ctx context.Context) (platform.NetworkOutput, error) {
+	addresses, err := run(ctx, "ip", "-o", "addr", "show")
+	if err != nil {
+		return platform.NetworkOutput{}, err
+	}
+
+	neighbors, err := run(ctx, "ip", "-4", "neigh", "show")
+	if err != nil {
+		return platform.NetworkOutput{}, err
+	}
+
+	// Без IPv6 на хосте таблицы соседей IPv6 нет — это не ошибка.
+	if neighbors6, err := run(ctx, "ip", "-6", "neigh", "show"); err == nil {
+		neighbors += "\n" + neighbors6
+	}
+
+	return platform.NetworkOutput{
+		Addresses: addresses,
+		Neighbors: neighbors,
+	}, nil
 }
 
 // restartUnit перезапускает службу.

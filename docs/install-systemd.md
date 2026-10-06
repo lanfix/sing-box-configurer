@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/i
 
 Скрипт [`install-systemd.sh`](../install-systemd.sh):
 
-1. Скачивает [sing-box-lx](https://github.com/Leadaxe/sing-box-lx) и последний релиз конфигуратора с GitHub.
+1. Скачивает [sing-box-lx](https://github.com/lanfix/sing-box-lx) и последний релиз конфигуратора с GitHub.
    Архивы сверяются по `SHA256SUMS` релиза.
 2. Создает конфиг сервиса и службы `sing-box` и `sing-box-configurer`.
 3. Запускает конфигуратор. При первом запуске он записывает стартовый конфиг sing-box.
@@ -37,7 +37,8 @@ curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/i
 | `ADMIN_USER`, `ADMIN_PASSWORD` | — | Логин и пароль панели. Без них панель открыта, пока вход не включат в интерфейсе |
 | `LISTEN_ADDR` | `:8080` | Адрес панели (только при первой установке) |
 | `VERSION` | последний релиз | Версия конфигуратора |
-| `SING_BOX_VERSION` | `v1.14.1-lx.8` | Версия sing-box-lx |
+| `SING_BOX_VERSION` | `v1.14.2-lx.11-mac.1` | Версия sing-box-lx |
+| `SING_BOX_REPO` | `lanfix/sing-box-lx` | Репозиторий GitHub с релизами sing-box-lx (например, `Leadaxe/sing-box-lx` для его версий) |
 | `SKIP_SING_BOX=1` | — | Не ставить sing-box: он уже есть в `/usr/local/bin/sing-box` |
 | `KEEP_RESOLVED=1` | — | Не отключать DNS-заглушку systemd-resolved |
 
@@ -77,8 +78,14 @@ sudo rm -f /etc/resolv.conf && printf 'nameserver 127.0.0.1\nnameserver 1.1.1.1\
 
 ## Обновление
 
-Конфигуратор обновляется из интерфейса: «Система → Обновление». Версию sing-box можно сменить повторным запуском
-скрипта с `SING_BOX_VERSION`: он заменит бинарник и перезапустит службы.
+Конфигуратор обновляется из интерфейса: «Система → Обновление». Если установлен sing-box-lx старше версии, которая
+нужна новому конфигуратору, updater загружает архив [lanfix/sing-box-lx](https://github.com/lanfix/sing-box-lx/releases)
+(проверка по `SHA256SUMS`) и после проверки конфигуратора заменяет `/usr/local/bin/sing-box` и перезапускает
+службу sing-box (если новый sing-box не запустился, возвращается прежний). Официальный sing-box и более новые
+версии не трогаются.
+
+Версию sing-box можно сменить и повторным запуском скрипта с `SING_BOX_VERSION`: он заменит бинарник
+и перезапустит службы.
 
 ## Восстановление доступа
 

@@ -3,7 +3,7 @@
 import { icons } from './icons'
 
 // NavBadge — источник точки у пункта меню.
-export type NavBadge = 'config' | 'update' | 'happ' | 'amnezia' | 'subscriptions'
+export type NavBadge = 'config' | 'update' | 'happ' | 'amnezia' | 'subscriptions' | 'devices'
 
 export interface NavLink {
   route: string
@@ -31,6 +31,7 @@ export const navigation: NavEntry[] = [
   { route: 'overview', title: 'Обзор', icon: icons.overview },
   { route: 'proxies', title: 'Прокси', icon: icons.proxies },
   { route: 'connections', title: 'Соединения', icon: icons.connections },
+  { route: 'devices', title: 'Устройства', icon: icons.devices, badge: 'devices' },
   {
     id: 'rules',
     title: 'Правила',

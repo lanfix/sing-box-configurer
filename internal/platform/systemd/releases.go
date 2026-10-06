@@ -133,31 +133,40 @@ func (r *releases) Download(ctx context.Context, version, dir string) error {
 		return err
 	}
 
-	name := fmt.Sprintf("sing-box-configurer_%s_linux_%s.tar.gz", version, arch)
+	archive, err := r.downloadVerified(ctx, version, fmt.Sprintf("sing-box-configurer_%s_linux_%s.tar.gz", version, arch))
+	if err != nil {
+		return err
+	}
+
+	return extractBinaries(archive, dir, releaseBinaries)
+}
+
+// downloadVerified загружает файл name релиза version и сверяет его SHA-256 с SHA256SUMS релиза.
+func (r *releases) downloadVerified(ctx context.Context, version, name string) ([]byte, error) {
 	base := fmt.Sprintf("https://github.com/%s/releases/download/%s/", r.repository, version)
 
 	checksums, err := r.download(ctx, base+checksumsName, 1<<20)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	want, err := findChecksum(checksums, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	archive, err := r.download(ctx, base+name, maxArchiveSize)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	sum := sha256.Sum256(archive)
 
 	if got := hex.EncodeToString(sum[:]); got != want {
-		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", name, got, want)
+		return nil, fmt.Errorf("checksum mismatch for %s: got %s, want %s", name, got, want)
 	}
 
-	return extractBinaries(archive, dir)
+	return archive, nil
 }
 
 // download загружает файл размером не больше limit байт.
@@ -250,8 +259,8 @@ func findChecksum(checksums []byte, name string) (string, error) {
 	return "", fmt.Errorf("no checksum for %s in %s", name, checksumsName)
 }
 
-// extractBinaries распаковывает из tar.gz бинарники releaseBinaries в dir.
-func extractBinaries(archive []byte, dir string) error {
+// extractBinaries распаковывает из tar.gz файлы с именами names (в любом каталоге архива) в dir.
+func extractBinaries(archive []byte, dir string, names []string) error {
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return fmt.Errorf("cannot open archive: %w", err)
@@ -280,7 +289,7 @@ func extractBinaries(archive []byte, dir string) error {
 
 		name := path.Base(header.Name)
 
-		if header.Typeflag != tar.TypeReg || !slices.Contains(releaseBinaries, name) {
+		if header.Typeflag != tar.TypeReg || !slices.Contains(names, name) {
 			continue
 		}
 
@@ -291,7 +300,7 @@ func extractBinaries(archive []byte, dir string) error {
 		found[name] = true
 	}
 
-	for _, name := range releaseBinaries {
+	for _, name := range names {
 		if !found[name] {
 			return fmt.Errorf("archive has no %s", name)
 		}
