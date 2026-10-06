@@ -366,13 +366,13 @@ usePolling(loadDNS, 300000)
     </table>
   </div>
 
-  <form class="page-narrow" @submit.prevent="saveSettings">
-    <div class="settings-card">
-      <div class="settings-card-head">
-        <div class="settings-card-title">Неизвестные устройства</div>
-        <p class="settings-card-description">Профиль для устройств без своего профиля, в том числе только что подключившихся к сети.</p>
-      </div>
+  <div class="section-head">
+    <h3 class="section-title">Политика для неизвестных устройств</h3>
+  </div>
+  <p class="section-hint">Профиль для устройств без своего профиля, в том числе только что подключившихся к сети.</p>
 
+  <form @submit.prevent="saveSettings">
+    <div class="settings-card">
       <SettingRow title="Профиль по умолчанию">
         <template #description>{{ profileHints[form.default_profile] }}.</template>
         <SegmentedControl v-model="form.default_profile" :options="defaultOptions" aria-label="Профиль по умолчанию" />

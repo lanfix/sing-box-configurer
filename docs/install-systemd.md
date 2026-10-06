@@ -48,6 +48,8 @@ curl -fsSL https://raw.githubusercontent.com/lanfix/sing-box-configurer/master/i
 - `curl`, `tar`, `sha256sum`.
 - Свободные порты 53 (DNS sing-box), 8080 (панель), 9090 (Clash API sing-box) и 9091 (служебный inbound
   для загрузки URL-источников, слушает `127.0.0.1`).
+- Если сервер — шлюз для устройств сети ([типовая схема](typical-use.md)), включите пересылку пакетов
+  `net.ipv4.ip_forward = 1`: скрипт ее не включает (в установке через Docker ее включает сам Docker).
 
 ## Порт 53
 
