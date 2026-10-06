@@ -104,7 +104,7 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
 |---|---|
 | `inbounds` | встроенные `tun-in` (tun0, 198.18.0.1/30, auto_redirect) и `dns-in` (0.0.0.0:53), mixed-прокси со страницы Inbounds, служебный `configurer-sources` (пользователь на каждый outbound, кроме block) для загрузки источников через outbound-ы и теста скорости |
 | `outbounds`, `endpoints` | outbound-ы, добавленные вручную, серверы подписок Happ и Amnezia, urltest-ы со страницы Outbounds → URLTest, встроенные `direct`, `block` и selector-ы групп `select-<группа>` |
-| `route` | `reject` для устройств без интернета, служебные правила (`reject` по IP группы block, bypass, sniff, hijack-dns, resolve для mixed-прокси, private → direct), `reject` для группы block, устройства без обхода → direct, правила групп; `final: direct`; `find_neighbor` |
+| `route` | выход mixed-прокси с явным outbound-ом, `reject` для устройств без интернета, служебные правила (`reject` по IP группы block, bypass, sniff, hijack-dns, resolve для mixed-прокси без явного outbound-а, private → direct), `reject` для группы block, устройства без обхода → direct, правила групп; `final: direct`; `find_neighbor` |
 | `dns` | DNS-серверы, отказ в резолве доменов группы block, DNS-записи (`configurer-hosts`), DNS-сервер устройств без обхода, правила групп с DNS-сервером, фильтр HTTPS-записей, пользовательские DNS-правила, общие параметры |
 | `experimental` | cache_file и Clash API на `0.0.0.0:9090` с токеном и CORS-origin-ами |
 | `log` | уровень логов из общих настроек |
@@ -122,8 +122,12 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
 ]
 ```
 
+Mixed-прокси с явным выходом получают первые правила `{"inbound": "<тег>", "outbound": "<выход>"}`: весь их трафик
+уходит в выбранный outbound мимо остальных правил (групп, block, bypass и профилей устройств). Если выбранного
+outbound-а больше нет, вместо него рендерится block с предупреждением, а не общие правила.
+
 Правила профилей устройств (если sing-box их поддерживает, см. [Профили устройств](#профили-устройств)) стоят
-первым (`reject` для `devices@blocked`) и сразу после `reject` группы block (`devices@direct` → direct).
+перед служебными (`reject` для `devices@blocked`) и сразу после `reject` группы block (`devices@direct` → direct).
 
 ## Интерфейс
 
@@ -196,7 +200,9 @@ sudo sing-box-configurer -config /etc/sing-box-configurer/config.json security r
     плюс явно добавленные, минус исключенные вручную или regexp-ом. Новая инсталляция создает urltest `auto`
     из всех outbound-ов; его можно изменить или удалить. urltest без outbound-ов в конфиг не попадает, группы
     с ним получают block. Удалить urltest, выбранный группой или указанный detour-ом DNS-сервера, нельзя.
-- **Inbounds** — mixed-прокси (HTTP и SOCKS5) с пользователями.
+- **Inbounds** — mixed-прокси (HTTP и SOCKS5) с пользователями. «Выход» направляет весь трафик прокси в выбранный
+  outbound или selector группы первым правилом маршрутизации; по умолчанию он не задан, и трафик идет по общим
+  правилам. urltest и группу, выбранные выходом прокси, удалить нельзя.
 - **Подписки** — Happ и Amnezia. Серверы подписок сразу попадают в итоговый конфиг. Обновленные серверы Happ
   (фоновое обновление не чаще раза в 10 минут или кнопка «Обновить») сразу переносятся и в работающий sing-box,
   если включено «Система → Настройки → Подписки Happ → Применять обновления сразу» (по умолчанию включено);
@@ -262,7 +268,8 @@ block не резолвятся (DNS-правило `predefined` с `NXDOMAIN` �
 - **обход** — обычная маршрутизация по группам;
 - **без обхода** — весь трафик напрямую, мимо правил групп (block для них действует); домены резолвит выбранный
   DNS-сервер, без него — общие DNS-правила;
-- **без интернета** — соединения и DNS-запросы отклоняются первым правилом маршрутизации.
+- **без интернета** — соединения и DNS-запросы отклоняются раньше остальных правил маршрутизации (кроме выхода
+  mixed-прокси, заданного явно).
 
 Устройствам без своего профиля действует профиль по умолчанию (в новой инсталляции — обход, как раньше), но только
 в сетях LAN: адреса самого хоста и исключения из настроек (VPN-клиенты, серверы) под него не попадают.
@@ -435,7 +442,7 @@ git tag v1.2.3 && git push origin v1.2.3
 | GET/POST | `/api/dns-records`, `.../add`, `.../edit`, `.../delete` | DNS-записи |
 | GET/POST | `/api/outbounds`, `.../add` (share-ссылка), `.../add-json`, `.../edit`, `.../delete` | Outbound-ы |
 | GET/POST | `/api/urltests`, `.../add`, `.../edit`, `.../delete`, `.../preview` | urltest-ы (preview подбирает состав без сохранения) |
-| GET/POST | `/api/inbounds`, `/api/inbounds/mixed/add`, `.../edit`, `.../delete` | Mixed-прокси |
+| GET/POST | `/api/inbounds`, `/api/inbounds/mixed/add`, `.../edit`, `.../delete` | Mixed-прокси: `{"tag", "listen", "listen_port", "users", "outbound"}`, `outbound` — выход всего трафика прокси (пусто — по правилам) |
 | GET | `/api/devices` | Устройства с профилем и найденные в сети, политика для неизвестных, найденные сети LAN, поддержка sing-box (`support`) и `in_config` |
 | POST | `/api/devices/scan` | Перечитать таблицу соседей хоста и проверить поддержку sing-box |
 | POST | `/api/devices/add`, `/api/devices/edit`, `/api/devices/delete` | Устройство: `{"mac", "name", "profile"}`, профиль — `default`, `proxy`, `direct` или `blocked` |

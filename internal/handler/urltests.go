@@ -188,9 +188,13 @@ func (h *Handler) DeleteURLTest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// checkOutboundUnused проверяет, что outbound с тегом tag не выбран группами по умолчанию и не указан
-// detour-ом DNS-серверов.
+// checkOutboundUnused проверяет, что outbound с тегом tag не выбран группами по умолчанию, не указан
+// detour-ом DNS-серверов и не задан outbound-ом mixed-прокси.
 func (h *Handler) checkOutboundUnused(tag string) error {
+	if mixed := h.inboundsManager.UsingOutbound(tag); len(mixed) > 0 {
+		return fmt.Errorf("%s выбран outbound-ом mixed-прокси: %s", tag, strings.Join(mixed, ", "))
+	}
+
 	groups := make([]string, 0)
 
 	for _, group := range h.rulesManager.GetGroups() {

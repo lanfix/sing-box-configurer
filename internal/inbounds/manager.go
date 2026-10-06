@@ -37,11 +37,15 @@ type User struct {
 
 // Mixed — mixed-прокси (HTTP и SOCKS на одном порту).
 type Mixed struct {
-	Tag        string         `json:"tag"`
-	Listen     string         `json:"listen"`
-	ListenPort int            `json:"listen_port"`
-	Users      []User         `json:"users"`
-	Extra      map[string]any `json:"extra,omitempty"`
+	Tag        string `json:"tag"`
+	Listen     string `json:"listen"`
+	ListenPort int    `json:"listen_port"`
+	Users      []User `json:"users"`
+
+	// Outbound — куда уходит весь трафик прокси первым правилом маршрутизации. Пусто — по общим правилам.
+	Outbound string `json:"outbound,omitempty"`
+
+	Extra map[string]any `json:"extra,omitempty"`
 }
 
 // Data — раздел "inbounds" файла app.json.
@@ -88,6 +92,7 @@ func MixedFromConfig(config map[string]any) Mixed {
 		Listen:     jsonmap.String(config, "listen"),
 		ListenPort: jsonmap.Int(config, "listen_port"),
 		Users:      []User{},
+		Outbound:   "",
 		Extra:      jsonmap.Without(config, "type", "tag", "listen", "listen_port", "users"),
 	}
 
@@ -116,6 +121,7 @@ func MixedFromConfig(config map[string]any) Mixed {
 func (m *Mixed) normalize() {
 	m.Tag = strings.TrimSpace(m.Tag)
 	m.Listen = strings.TrimSpace(m.Listen)
+	m.Outbound = strings.TrimSpace(m.Outbound)
 
 	if m.Listen == "" {
 		m.Listen = "0.0.0.0"
@@ -260,6 +266,22 @@ func (m *Manager) DeleteMixed(tag string) error {
 	m.data.Mixed = slices.Delete(m.data.Mixed, index, index+1)
 
 	return m.save()
+}
+
+// UsingOutbound возвращает теги mixed-inbound-ов, весь трафик которых уходит в outbound с тегом tag.
+func (m *Manager) UsingOutbound(tag string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]string, 0)
+
+	for _, mixed := range m.data.Mixed {
+		if tag != "" && mixed.Outbound == tag {
+			result = append(result, mixed.Tag)
+		}
+	}
+
+	return result
 }
 
 // indexLocked возвращает индекс inbound-а с тегом tag или -1 (без блокировки).

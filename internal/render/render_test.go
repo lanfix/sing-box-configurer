@@ -505,3 +505,67 @@ func TestRenderDevices(t *testing.T) {
 		t.Error("device rule set must not parse as a group rule set")
 	}
 }
+
+func TestRenderMixedOutbound(t *testing.T) {
+	input := testInput()
+	input.Devices = Devices{
+		Enabled:         true,
+		DirectDNSServer: "",
+	}
+	input.Mixed = []inbounds.Mixed{
+		{Tag: "mixed-proxy", Listen: "0.0.0.0", ListenPort: 1080},
+		{Tag: "mixed-vpn", Listen: "0.0.0.0", ListenPort: 1081, Outbound: "select-default"},
+		{Tag: "mixed-lost", Listen: "0.0.0.0", ListenPort: 1082, Outbound: "removed"},
+	}
+
+	result, err := Render(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routeRules := field(t, result.Config, "route", "rules").([]any)
+
+	// Явный outbound — первыми правилами, раньше устройств и block; пропавший outbound заменяется block.
+	want := []string{
+		`{"inbound":"mixed-vpn","outbound":"select-default"}`,
+		`{"inbound":"mixed-lost","outbound":"block"}`,
+		`{"action":"reject","rule_set":"devices@blocked"}`,
+	}
+
+	for i, rule := range want {
+		if got := toJSON(t, routeRules[i]); got != rule {
+			t.Errorf("route rule %d = %s, want %s", i, got, rule)
+		}
+	}
+
+	// resolve нужен только прокси, трафик которого идет по правилам.
+	if !slices.ContainsFunc(routeRules, func(rule any) bool {
+		return toJSON(t, rule) == `{"action":"resolve","inbound":"mixed-proxy"}`
+	}) {
+		t.Errorf("resolve rule for mixed-proxy only is missing: %v", routeRules)
+	}
+
+	if !slices.ContainsFunc(result.Warnings, func(warning string) bool {
+		return strings.Contains(warning, "inbound mixed-lost: outbound removed не найден")
+	}) {
+		t.Errorf("missing outbound must produce a warning: %v", result.Warnings)
+	}
+
+	// Поле outbound не попадает в inbound sing-box.
+	if inbound := byTag(field(t, result.Config, "inbounds").([]any), "mixed-vpn"); inbound == nil || inbound["outbound"] != nil {
+		t.Errorf("mixed-vpn inbound = %v", inbound)
+	}
+
+	// Если у всех прокси явный outbound, правила resolve нет.
+	input.Mixed = input.Mixed[1:2]
+
+	if result, err = Render(input); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rule := range field(t, result.Config, "route", "rules").([]any) {
+		if strings.Contains(toJSON(t, rule), `"resolve"`) {
+			t.Errorf("unexpected resolve rule: %s", toJSON(t, rule))
+		}
+	}
+}

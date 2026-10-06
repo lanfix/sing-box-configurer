@@ -389,7 +389,28 @@ func (r *renderer) renderRoute(config map[string]any) {
 		r.remoteRuleSet(IPRuleSetTag(rules.BlockGroupName), groupRuleSetPath("ip", rules.BlockGroupName)),
 	}
 
-	routeRules := make([]any, 0, len(baseRules)+len(r.in.Groups)+2)
+	routeRules := make([]any, 0, len(baseRules)+len(r.in.Groups)+len(r.in.Mixed)+2)
+
+	// Mixed-прокси с явным outbound-ом — первыми правилами: весь их трафик уходит в него мимо остальных правил.
+	for _, mixed := range r.in.Mixed {
+		if mixed.Outbound == "" {
+			continue
+		}
+
+		target := mixed.Outbound
+
+		// Без выбранного outbound-а трафик прокси блокируется, а не уходит по общим правилам мимо него.
+		if !slices.Contains(r.outboundTags, target) {
+			r.warn("inbound %s: outbound %s не найден, трафик прокси отклоняется (block)", mixed.Tag, target)
+
+			target = outbound.BlockTag
+		}
+
+		routeRules = append(routeRules, map[string]any{
+			"inbound":  mixed.Tag,
+			"outbound": target,
+		})
+	}
 
 	// Служебный inbound (загрузка источников и тест скорости): правила первыми, до bypass и sniff — они ему не нужны.
 	for _, detour := range r.sourceDetours {
@@ -427,10 +448,10 @@ func (r *renderer) renderRoute(config map[string]any) {
 		}
 
 		// Mixed-прокси получает домены: резолвим их до правил, иначе IP-правила групп не сработают.
-		if jsonmap.Bool(rule, "ip_is_private") && len(r.in.Mixed) > 0 {
+		if tags := r.routedMixedTags(); jsonmap.Bool(rule, "ip_is_private") && tags != nil {
 			routeRules = append(routeRules, map[string]any{
 				"action":  "resolve",
-				"inbound": r.mixedTags(),
+				"inbound": tags,
 			})
 		}
 
@@ -480,16 +501,23 @@ func (r *renderer) renderRoute(config map[string]any) {
 	}
 }
 
-// mixedTags возвращает теги mixed-inbound-ов: строкой, если он один, иначе списком.
-func (r *renderer) mixedTags() any {
-	if len(r.in.Mixed) == 1 {
-		return r.in.Mixed[0].Tag
-	}
-
+// routedMixedTags возвращает теги mixed-inbound-ов без явного outbound-а (их трафик идет по правилам): строкой,
+// если он один, иначе списком. Без таких inbound-ов возвращает nil.
+func (r *renderer) routedMixedTags() any {
 	tags := make([]any, 0, len(r.in.Mixed))
 
 	for _, mixed := range r.in.Mixed {
-		tags = append(tags, mixed.Tag)
+		if mixed.Outbound == "" {
+			tags = append(tags, mixed.Tag)
+		}
+	}
+
+	switch len(tags) {
+	case 0:
+		return nil
+
+	case 1:
+		return tags[0]
 	}
 
 	return tags

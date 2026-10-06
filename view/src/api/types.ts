@@ -174,6 +174,8 @@ export interface MixedInbound {
   listen: string
   listen_port: number
   users: MixedUser[]
+  // outbound — куда уходит весь трафик прокси первым правилом; пусто — по общим правилам.
+  outbound?: string
   extra?: Record<string, unknown> | null
 }
 

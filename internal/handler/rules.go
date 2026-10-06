@@ -364,7 +364,8 @@ func (h *Handler) EditGroup(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, "Группа обновлена")
 }
 
-// DeleteGroup удаляет пустую группу. Группу, selector которой используется DNS-сервером, удалить нельзя.
+// DeleteGroup удаляет пустую группу. Группу, selector которой используется DNS-сервером или mixed-прокси,
+// удалить нельзя.
 func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	var req groupRequest
 
@@ -373,6 +374,12 @@ func (h *Handler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	selector := render.SelectorTag(req.Name)
+
+	if mixed := h.inboundsManager.UsingOutbound(selector); len(mixed) > 0 {
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("selector %s выбран outbound-ом mixed-прокси: %s", selector, strings.Join(mixed, ", ")))
+
+		return
+	}
 
 	for _, server := range h.dnsManager.Get().Servers {
 		if server.Detour == selector {

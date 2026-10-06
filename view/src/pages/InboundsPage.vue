@@ -2,12 +2,14 @@
 import { computed, onMounted, ref } from 'vue'
 
 import { get, post } from '../api/client'
-import type { MixedInbound } from '../api/types'
+import type { MixedInbound, OutboundView } from '../api/types'
 import ModalDialog from '../components/ModalDialog.vue'
+import OutboundSelect from '../components/OutboundSelect.vue'
 import SvgIcon from '../components/SvgIcon.vue'
 import FormField from '../components/ui/FormField.vue'
 import HelpHint from '../components/ui/HelpHint.vue'
 import IconButton from '../components/ui/IconButton.vue'
+import { useGroups } from '../composables/useGroups'
 import { icons } from '../icons'
 import { confirmAction } from '../stores/confirm'
 import { showError, showMessage } from '../stores/toast'
@@ -19,23 +21,44 @@ const listenPresets = [
   { value: '127.0.0.1', label: 'Только этот хост' },
 ]
 
+const { groups, loadGroups } = useGroups()
+
 const mixed = ref<MixedInbound[]>([])
+const outbounds = ref<OutboundView[]>([])
 const loaded = ref(false)
 
+// outboundOptions — куда можно направить весь трафик прокси: selector-ы групп и outbound-ы.
+const outboundOptions = computed<OutboundView[]>(() => [
+  ...groups.value
+    .filter((group) => !group.system)
+    .map((group) => ({ tag: `select-${group.name}`, type: 'selector', source: 'group' as const, source_name: group.description || group.name })),
+  ...outbounds.value,
+])
+
+// missingOutbound — выбранного outbound-а больше нет: трафик прокси отклоняется.
+function missingOutbound(inbound: MixedInbound): boolean {
+  return Boolean(inbound.outbound) && loaded.value && !outboundOptions.value.some((option) => option.tag === inbound.outbound)
+}
+
 // Редактор mixed-inbound-а: editing — тег редактируемого или пустая строка для нового.
-const editor = ref<{ editing: string; value: MixedInbound; error: string; saving: boolean } | null>(null)
+const editor = ref<{ editing: string; value: MixedInbound & { outbound: string }; error: string; saving: boolean } | null>(null)
 
 // visiblePasswords — индексы пользователей, у которых пароль показан.
 const visiblePasswords = ref<number[]>([])
 
 const tagProblem = computed(() => tagError(editor.value?.value.tag ?? ''))
 
-// load загружает mixed-inbound-ы.
+// load загружает mixed-inbound-ы, outbound-ы и группы для выбора выхода прокси.
 async function load(): Promise<void> {
   try {
-    const data = await get<{ mixed: MixedInbound[] }>('/api/inbounds')
+    const [data, outboundsData] = await Promise.all([
+      get<{ mixed: MixedInbound[] }>('/api/inbounds'),
+      get<{ outbounds: OutboundView[] }>('/api/outbounds'),
+      loadGroups(),
+    ])
 
     mixed.value = data.mixed ?? []
+    outbounds.value = outboundsData.outbounds ?? []
   } catch (error) {
     showError(error, 'Ошибка загрузки inbound-ов')
   } finally {
@@ -49,8 +72,8 @@ function openEditor(inbound?: MixedInbound): void {
   editor.value = {
     editing: inbound?.tag ?? '',
     value: inbound
-      ? { ...inbound, users: inbound.users.map((user) => ({ ...user })) }
-      : { tag: 'mixed-proxy', listen: '0.0.0.0', listen_port: 1080, users: [], extra: null },
+      ? { ...inbound, users: inbound.users.map((user) => ({ ...user })), outbound: inbound.outbound ?? '' }
+      : { tag: 'mixed-proxy', listen: '0.0.0.0', listen_port: 1080, users: [], outbound: '', extra: null },
     error: '',
     saving: false,
   }
@@ -157,6 +180,10 @@ onMounted(load)
       HTTP и SOCKS5 работают на одном порту. Домены, полученные через прокси, резолвятся до маршрутизации (правило
       <code>resolve</code>), поэтому для них действуют и IP-правила групп.
     </p>
+    <p>
+      <strong>Выход</strong> направляет весь трафик прокси в выбранный outbound первым правилом маршрутизации — раньше
+      групп, block, bypass и профилей устройств. Если выход не задан, трафик идет по общим правилам.
+    </p>
     <p>Без пользователей прокси открыт всем, кто может подключиться к порту.</p>
   </HelpHint>
 
@@ -166,17 +193,30 @@ onMounted(load)
         <tr>
           <th>Тег</th>
           <th>Адрес</th>
+          <th>Выход</th>
           <th>Доступ</th>
           <th class="col-actions"></th>
         </tr>
       </thead>
       <tbody>
         <tr v-if="loaded && mixed.length === 0">
-          <td colspan="4" class="empty-state">Прокси нет. Добавьте, если нужен HTTP/SOCKS5-доступ.</td>
+          <td colspan="5" class="empty-state">Прокси нет. Добавьте, если нужен HTTP/SOCKS5-доступ.</td>
         </tr>
         <tr v-for="inbound in mixed" :key="inbound.tag">
           <td><span class="cell-main">{{ inbound.tag }}</span></td>
           <td data-label="Адрес"><span class="cell-mono">{{ inbound.listen }}:{{ inbound.listen_port }}</span></td>
+          <td data-label="Выход">
+            <template v-if="inbound.outbound">
+              <span class="cell-mono">{{ inbound.outbound }}</span>
+              <span
+                v-if="missingOutbound(inbound)"
+                class="status-badge status-error"
+                style="margin-left: 6px;"
+                title="Outbound не найден: трафик прокси отклоняется (block)"
+              >не найден</span>
+            </template>
+            <span v-else class="cell-sub">по правилам</span>
+          </td>
           <td data-label="Доступ">
             <span v-if="inbound.users.length">
               По паролю: {{ inbound.users.map((user) => user.username).join(', ') }}
@@ -271,6 +311,13 @@ onMounted(load)
           <input id="inboundPort" v-model.number="editor.value.listen_port" class="form-input" type="number" min="1" max="65535" required>
         </FormField>
       </div>
+
+      <FormField label="Выход" input-id="inboundOutbound">
+        <OutboundSelect v-model="editor.value.outbound" :outbounds="outboundOptions" input-id="inboundOutbound" empty-label="По правилам маршрутизации" />
+        <template #hint>
+          Весь трафик прокси уйдет в выбранный outbound мимо остальных правил: групп, block, bypass и профилей устройств.
+        </template>
+      </FormField>
 
       <div class="field">
         <span class="field-label">Пользователи <span class="field-optional">необязательно</span></span>
