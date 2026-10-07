@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/lanfix/sing-box-configurer/internal/platform"
 	"github.com/lanfix/sing-box-configurer/internal/repository/appdata"
@@ -349,5 +354,108 @@ func TestSupport(t *testing.T) {
 	// Без sing-box профили не рендерятся.
 	if newTestManager(t, Options{Network: nil, SingBox: nil, Versions: nil}).Enabled() {
 		t.Error("enabled without sing-box")
+	}
+}
+
+// fakeNames отдает имена по адресам и считает запросы.
+type fakeNames struct {
+	mu      sync.Mutex
+	names   map[string]string
+	gateway netip.Addr
+	queries int
+}
+
+// Resolve возвращает заданное имя адреса.
+func (n *fakeNames) Resolve(_ context.Context, ip, gateway netip.Addr) (string, string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	n.queries++
+	n.gateway = gateway
+
+	return n.names[ip.String()], NameSourceRouter
+}
+
+// waitNames ждет окончания фонового опроса имен.
+func waitNames(t *testing.T, manager *Manager) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for manager.resolving.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("names are still resolving")
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestNames(t *testing.T) {
+	network := &fakeNetwork{
+		output: platform.NetworkOutput{
+			Addresses: iproute2Addresses,
+			Neighbors: busyboxNeighbors,
+			Routes:    "default via 192.168.50.1 dev br-lan\n",
+		},
+		err: nil,
+	}
+	names := &fakeNames{
+		mu:      sync.Mutex{},
+		names:   map[string]string{"192.168.50.10": "Ivans-iPhone"},
+		gateway: netip.Addr{},
+		queries: 0,
+	}
+	manager := newTestManager(t, Options{Network: network, SingBox: supportedSingBox(), Versions: nil, Names: names})
+
+	if err := manager.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	waitNames(t, manager)
+
+	// Оба устройства опрошены через роутер; для первого найдено имя, у него есть и IPv6, но спрашивается IPv4.
+	if names.queries != 2 || names.gateway.String() != "192.168.50.1" || manager.Gateway() != "192.168.50.1" {
+		t.Fatalf("queries=%d gateway=%s", names.queries, names.gateway)
+	}
+
+	state := manager.State()
+
+	if len(state.Unknown) != 2 || !slices.ContainsFunc(state.Unknown, func(device DeviceView) bool {
+		return device.MAC == "aa:bb:cc:dd:ee:01" && device.Hostname == "Ivans-iPhone" && device.NameSource == NameSourceRouter
+	}) {
+		t.Errorf("unknown = %+v", state.Unknown)
+	}
+
+	if _, name, _ := manager.LookupIP("192.168.50.10"); name != "Ivans-iPhone" {
+		t.Errorf("LookupIP name = %q", name)
+	}
+
+	// Имя, заданное вручную, важнее найденного.
+	if err := manager.Add(Device{MAC: "aa:bb:cc:dd:ee:01", Name: "Телефон Ивана", Profile: ProfileProxy, AddedAt: time.Time{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, name, _ := manager.LookupIP("192.168.50.10"); name != "Телефон Ивана" {
+		t.Errorf("LookupIP name = %q", name)
+	}
+
+	// Повторное чтение сети не опрашивает устройства, пока имя не устарело; новый адрес — опрашивает.
+	if err := manager.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	waitNames(t, manager)
+
+	network.output.Neighbors = strings.Replace(busyboxNeighbors, "192.168.50.11 ", "192.168.50.31 ", 1)
+
+	if err := manager.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	waitNames(t, manager)
+
+	if names.queries != 3 {
+		t.Errorf("queries = %d, want 3", names.queries)
 	}
 }

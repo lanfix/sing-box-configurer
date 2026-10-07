@@ -26,10 +26,17 @@ type InterfaceAddress struct {
 	Prefix    netip.Prefix
 }
 
-// HostNetwork — снимок сети хоста: адреса интерфейсов и соседи.
+// Route — маршрут по умолчанию хоста.
+type Route struct {
+	Gateway   netip.Addr
+	Interface string
+}
+
+// HostNetwork — снимок сети хоста: адреса интерфейсов, соседи и маршруты по умолчанию.
 type HostNetwork struct {
 	Addresses []InterfaceAddress
 	Neighbors []Neighbor
+	Routes    []Route
 }
 
 // ParseAddresses разбирает вывод ip -o addr show (iproute2 и busybox).
@@ -104,6 +111,41 @@ func ParseNeighbors(output string) []Neighbor {
 	return result
 }
 
+// ParseRoutes разбирает вывод ip -4 route show default: "default via 192.168.1.1 dev eth0 ...".
+func ParseRoutes(output string) []Route {
+	result := make([]Route, 0)
+	scanner := bufio.NewScanner(strings.NewReader(output))
+
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+
+		if len(fields) == 0 || fields[0] != "default" {
+			continue
+		}
+
+		route := Route{
+			Gateway:   netip.Addr{},
+			Interface: "",
+		}
+
+		for i := 1; i+1 < len(fields); i++ {
+			switch fields[i] {
+			case "via":
+				route.Gateway, _ = netip.ParseAddr(fields[i+1])
+
+			case "dev":
+				route.Interface = fields[i+1]
+			}
+		}
+
+		if route.Gateway.IsValid() && route.Interface != "" {
+			result = append(result, route)
+		}
+	}
+
+	return result
+}
+
 // NormalizeMAC приводит MAC-адрес к виду aa:bb:cc:dd:ee:ff. Для некорректного адреса возвращает пустую строку.
 func NormalizeMAC(value string) string {
 	mac, err := net.ParseMAC(strings.TrimSpace(value))
@@ -163,6 +205,24 @@ func (n HostNetwork) Detect() ([]string, []string) {
 	slices.Sort(hostAddresses)
 
 	return networks, hostAddresses
+}
+
+// Gateway возвращает роутер сети: шлюз по умолчанию на интерфейсе LAN, лежащий в одной из сетей networks.
+// Если шлюза в сетях LAN нет, возвращает пустую строку.
+func (n HostNetwork) Gateway(networks []string) string {
+	for _, route := range n.Routes {
+		if isVirtualInterface(route.Interface) {
+			continue
+		}
+
+		for _, network := range networks {
+			if prefix, err := netip.ParsePrefix(network); err == nil && prefix.Contains(route.Gateway) {
+				return route.Gateway.String()
+			}
+		}
+	}
+
+	return ""
 }
 
 // appendUnique добавляет value в список, если его там еще нет.

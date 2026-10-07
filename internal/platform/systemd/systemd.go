@@ -148,9 +148,13 @@ func (network) Read(ctx context.Context) (platform.NetworkOutput, error) {
 		neighbors += "\n" + neighbors6
 	}
 
+	// Без маршрута по умолчанию имена устройств не запрашиваются у роутера — это не ошибка.
+	routes, _ := run(ctx, "ip", "-4", "route", "show", "default")
+
 	return platform.NetworkOutput{
 		Addresses: addresses,
 		Neighbors: neighbors,
+		Routes:    routes,
 	}, nil
 }
 

@@ -109,6 +109,9 @@ async function scan(): Promise<void> {
   try {
     state.value = await postQuiet<DevicesState>('/api/devices/scan')
     void refreshDeviceAlerts()
+
+    // Имена новых устройств запрашиваются в фоне за несколько секунд.
+    setTimeout(() => void load(), 5000)
   } catch (error) {
     showError(error)
   } finally {
@@ -116,12 +119,64 @@ async function scan(): Promise<void> {
   }
 }
 
-// openEditor открывает форму устройства: добавленного или найденного в сети.
+// nameSources — откуда известно имя устройства.
+const nameSources: Record<NonNullable<Device['name_source']>, string> = {
+  router: 'имя от роутера (DHCP)',
+  mdns: 'имя от самого устройства (mDNS)',
+  netbios: 'имя компьютера (NetBIOS)',
+}
+
+// deviceTitle возвращает подпись устройства: заданное имя, найденное в сети, производителя или MAC.
+function deviceTitle(device: Device): string {
+  return device.name || device.hostname || device.vendor || device.mac
+}
+
+// deviceDetails возвращает вторую строку: MAC, найденное имя, производителя и интерфейс, если их нет в подписи.
+function deviceDetails(device: Device): string {
+  const title = deviceTitle(device)
+  const parts: string[] = []
+
+  if (device.mac !== title) {
+    parts.push(device.mac)
+  }
+
+  if (device.hostname && device.hostname !== title) {
+    parts.push(device.hostname)
+  }
+
+  if (device.vendor && device.vendor !== title) {
+    parts.push(device.vendor)
+  }
+
+  if (device.interface) {
+    parts.push(device.interface)
+  }
+
+  return parts.join(' · ')
+}
+
+// deviceHint возвращает подсказку к подписи: откуда имя и что за случайный MAC.
+function deviceHint(device: Device): string {
+  const hints: string[] = []
+
+  if (!device.name && device.hostname && device.name_source) {
+    hints.push(`Найдено в сети: ${nameSources[device.name_source]}`)
+  }
+
+  if (device.random_mac) {
+    hints.push('Случайный MAC: телефон или ноутбук скрывает заводской адрес в этой сети Wi-Fi, производитель по нему не определяется')
+  }
+
+  return hints.join('. ')
+}
+
+// openEditor открывает форму устройства: добавленного или найденного в сети. Новому устройству
+// подставляется имя, найденное в сети.
 function openEditor(device: Device, added: boolean): void {
   editor.value = {
     editing: added,
     mac: device.mac,
-    name: device.name,
+    name: added ? device.name : device.hostname ?? '',
     profile: device.profile,
     error: '',
     saving: false,
@@ -166,7 +221,7 @@ async function saveDevice(): Promise<void> {
 async function setProfile(device: Device, profile: DeviceProfile): Promise<void> {
   try {
     await post('/api/devices/edit', { mac: device.mac, name: device.name, profile })
-    showMessage(`${device.name || device.mac}: профиль начнет действовать в течение 30 секунд`)
+    showMessage(`${deviceTitle(device)}: профиль начнет действовать в течение 30 секунд`)
     await load()
   } catch (error) {
     showError(error)
@@ -176,7 +231,7 @@ async function setProfile(device: Device, profile: DeviceProfile): Promise<void>
 // remove удаляет устройство: к нему снова применяется профиль по умолчанию.
 async function remove(device: Device): Promise<void> {
   const confirmed = await confirmAction({
-    title: `Удалить ${device.name || device.mac}?`,
+    title: `Удалить ${deviceTitle(device)}?`,
     message: `Устройство станет неизвестным: к нему будет применяться профиль по умолчанию (${defaultLabel.value}).`,
     confirmText: 'Удалить',
     danger: true,
@@ -273,6 +328,11 @@ usePolling(loadDNS, 300000)
       мимо правил групп; домены резолвит выбранный ниже DNS-сервер. <strong>Без интернета</strong> — соединения
       и DNS-запросы отклоняются (адреса группы bypass исключены из туннеля и остаются доступны).
     </p>
+    <p>
+      Имена устройств конфигуратор узнает сам: у роутера (имя, которое устройство сообщило DHCP), у самого устройства
+      по mDNS (Apple, Linux, принтеры) и NetBIOS (Windows). Если имени нет, показывается производитель по MAC-адресу.
+      Имена от роутера приходят через DNS sing-box, поэтому начинают находиться после применения конфига.
+    </p>
     <p>MAC-адрес можно подменить, а телефоны используют случайный MAC для каждой сети Wi-Fi: профиль привязан к нему.</p>
   </HelpHint>
 
@@ -296,8 +356,9 @@ usePolling(loadDNS, 300000)
         </tr>
         <tr v-for="device in state?.devices ?? []" :key="device.mac">
           <td>
-            <span class="cell-main">{{ device.name || device.mac }}</span>
-            <div class="cell-sub cell-mono">{{ device.mac }}<template v-if="device.interface"> · {{ device.interface }}</template></div>
+            <span class="cell-main" :title="deviceHint(device) || undefined">{{ deviceTitle(device) }}</span>
+            <span v-if="device.random_mac" class="status-badge status-pending device-badge" :title="deviceHint(device)">случайный MAC</span>
+            <div class="cell-sub">{{ deviceDetails(device) }}</div>
           </td>
           <td data-label="Адрес">
             <span class="cell-mono">{{ device.ips.join(', ') || '—' }}</span>
@@ -307,7 +368,7 @@ usePolling(loadDNS, 300000)
             <select
               class="form-select"
               :value="device.profile"
-              :aria-label="`Профиль ${device.name || device.mac}`"
+              :aria-label="`Профиль ${deviceTitle(device)}`"
               @change="setProfile(device, ($event.target as HTMLSelectElement).value as DeviceProfile)"
             >
               <option v-for="option in profileOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
@@ -336,7 +397,7 @@ usePolling(loadDNS, 300000)
     <table class="table table-cards">
       <thead>
         <tr>
-          <th>MAC</th>
+          <th>Устройство</th>
           <th>Адрес</th>
           <th>Впервые</th>
           <th class="col-actions"></th>
@@ -348,8 +409,11 @@ usePolling(loadDNS, 300000)
         </tr>
         <tr v-for="device in state?.unknown ?? []" :key="device.mac">
           <td>
-            <span class="cell-main cell-mono">{{ device.mac }}</span>
-            <div class="cell-sub">{{ device.interface }}</div>
+            <span class="cell-main" :class="{ 'cell-mono': deviceTitle(device) === device.mac }" :title="deviceHint(device) || undefined">
+              {{ deviceTitle(device) }}
+            </span>
+            <span v-if="device.random_mac" class="status-badge status-pending device-badge" :title="deviceHint(device)">случайный MAC</span>
+            <div class="cell-sub">{{ deviceDetails(device) }}</div>
           </td>
           <td data-label="Адрес">
             <span class="cell-mono">{{ device.ips.join(', ') || '—' }}</span>
@@ -382,7 +446,7 @@ usePolling(loadDNS, 300000)
       <SettingRow title="Находить сети LAN">
         <template #description>
           Профиль по умолчанию действует только для адресов из сетей LAN: подсетей интерфейсов, где есть соседи
-          (кроме docker, VPN и туннелей). Найдено: {{ state?.detected.networks.join(', ') || 'ничего' }}.
+          (кроме docker, VPN и туннелей). Найдено: {{ state?.detected.networks.join(', ') || 'ничего' }}.<template v-if="state?.detected.gateway"> Роутер: {{ state.detected.gateway }}.</template>
         </template>
         <ToggleSwitch v-model="form.auto_networks" :label="form.auto_networks ? 'Автоматически' : 'Только заданные'" />
       </SettingRow>
@@ -457,5 +521,9 @@ usePolling(loadDNS, 300000)
 <style scoped>
 .page-callout {
   margin-bottom: 16px;
+}
+
+.device-badge {
+  margin-left: 6px;
 }
 </style>

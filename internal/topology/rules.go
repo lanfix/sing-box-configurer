@@ -198,9 +198,14 @@ func parseDNSRules(dns map[string]any, groups map[string]GroupInfo) []parsedRule
 		label, detail, groupNames := describeRule(raw, groups)
 		server := jsonmap.String(raw, "server")
 
-		if server == render.HostsServerTag {
+		switch server {
+		case render.HostsServerTag:
 			label = "DNS-записи"
 			detail = plural(len(jsonmap.Strings(raw, "domain")), "домен", "домена", "доменов")
+
+		case render.LANServerTag:
+			label = "Имена устройств сети"
+			detail = "обратные запросы для частных адресов — роутеру"
 		}
 
 		row := Row{

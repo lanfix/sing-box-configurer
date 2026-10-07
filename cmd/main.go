@@ -222,6 +222,7 @@ func serve(cfg *config.AppConfig, configPath string) {
 		Network:  host.Network,
 		SingBox:  host.SingBox,
 		Versions: clashAPI,
+		Names:    devices.NetNameResolver{},
 	})
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize devices manager: %w", err))
@@ -255,6 +256,7 @@ func serve(cfg *config.AppConfig, configPath string) {
 			Devices: render.Devices{
 				Enabled:         devicesManager.Enabled(),
 				DirectDNSServer: devicesManager.Settings().DirectDNSServer,
+				Router:          devicesManager.Gateway(),
 			},
 		}, nil
 	}

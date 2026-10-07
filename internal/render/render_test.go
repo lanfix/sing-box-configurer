@@ -569,3 +569,37 @@ func TestRenderMixedOutbound(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderLANReverseDNS(t *testing.T) {
+	input := testInput()
+	input.Devices.Router = "192.168.50.1"
+
+	result, err := Render(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := byTag(field(t, result.Config, "dns", "servers").([]any), LANServerTag)
+
+	if toJSON(t, server) != `{"server":"192.168.50.1","tag":"configurer-lan","type":"udp"}` {
+		t.Errorf("lan dns server = %v", server)
+	}
+
+	// Правило — сразу после DNS-записей: обратные запросы для частных адресов уходят роутеру.
+	rule := field(t, result.Config, "dns", "rules").([]any)[2].(map[string]any)
+
+	if rule["server"] != LANServerTag || !slices.Contains(rule["domain_suffix"].([]any), any("168.192.in-addr.arpa")) {
+		t.Errorf("lan dns rule = %v", rule)
+	}
+
+	// Без адреса роутера правила нет.
+	input.Devices.Router = ""
+
+	if result, err = Render(input); err != nil {
+		t.Fatal(err)
+	}
+
+	if byTag(field(t, result.Config, "dns", "servers").([]any), LANServerTag) != nil {
+		t.Error("lan dns server without router")
+	}
+}

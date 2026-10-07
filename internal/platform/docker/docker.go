@@ -24,11 +24,15 @@ var (
 	checkCommand = []string{"sing-box", "check", "--disable-color", "-c", "stdin"}
 
 	// networkCommand читает сеть хоста из контейнера sing-box (он работает в сети хоста).
-	networkCommand = []string{"sh", "-c", "ip -o addr show && echo " + networkSeparator + " && ip -4 neigh show && { ip -6 neigh show 2>/dev/null || true; }"}
+	networkCommand = []string{"sh", "-c", "ip -o addr show && echo " + neighborsSeparator + " && ip -4 neigh show && " +
+		"{ ip -6 neigh show 2>/dev/null || true; } && echo " + routesSeparator + " && { ip -4 route show default 2>/dev/null || true; }"}
 )
 
-// networkSeparator разделяет вывод адресов и таблицы соседей в networkCommand.
-const networkSeparator = "=====neighbors====="
+// Разделители вывода адресов, таблицы соседей и маршрута по умолчанию в networkCommand.
+const (
+	neighborsSeparator = "=====neighbors====="
+	routesSeparator    = "=====routes====="
+)
 
 // Options — параметры платформы docker.
 type Options struct {
@@ -84,11 +88,13 @@ func (s *singBox) Read(ctx context.Context) (platform.NetworkOutput, error) {
 		return platform.NetworkOutput{}, fmt.Errorf("ip в контейнере %s завершился с кодом %d: %s", container.Name, result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
 
-	addresses, neighbors, _ := strings.Cut(result.Stdout, networkSeparator)
+	addresses, rest, _ := strings.Cut(result.Stdout, neighborsSeparator)
+	neighbors, routes, _ := strings.Cut(rest, routesSeparator)
 
 	return platform.NetworkOutput{
 		Addresses: addresses,
 		Neighbors: neighbors,
+		Routes:    routes,
 	}, nil
 }
 

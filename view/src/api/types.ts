@@ -599,6 +599,12 @@ export interface Device {
   first_seen?: string
   last_seen?: string
   online: boolean
+  // hostname — имя от роутера, mDNS или NetBIOS (источник — name_source), vendor — производитель по MAC.
+  hostname?: string
+  name_source?: 'router' | 'mdns' | 'netbios'
+  vendor?: string
+  // random_mac — случайный адрес Wi-Fi: телефон или ноутбук скрывает заводской MAC.
+  random_mac: boolean
 }
 
 // DeviceSettings — политика для устройств без своего профиля.
@@ -615,7 +621,7 @@ export interface DevicesState {
   devices: Device[]
   unknown: Device[]
   settings: DeviceSettings
-  detected: { networks: string[]; host_addresses: string[]; updated_at: string }
+  detected: { networks: string[]; host_addresses: string[]; gateway?: string; updated_at: string }
   networks: string[]
   exclusions: string[]
   scanned_at?: string

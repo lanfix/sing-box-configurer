@@ -39,9 +39,10 @@ type Platform struct {
 	Network Network
 }
 
-// Network читает сеть хоста, на котором работает sing-box: адреса интерфейсов и таблицу соседей.
+// Network читает сеть хоста, на котором работает sing-box: адреса интерфейсов, таблицу соседей и маршрут
+// по умолчанию.
 type Network interface {
-	// Read возвращает вывод ip -o addr show и ip neigh show (IPv4 и IPv6).
+	// Read возвращает вывод ip -o addr show, ip neigh show (IPv4 и IPv6) и ip -4 route show default.
 	Read(ctx context.Context) (NetworkOutput, error)
 }
 
@@ -49,6 +50,7 @@ type Network interface {
 type NetworkOutput struct {
 	Addresses string
 	Neighbors string
+	Routes    string
 }
 
 // Logs читает журналы sing-box и конфигуратора: логи контейнеров в docker, journald в systemd.

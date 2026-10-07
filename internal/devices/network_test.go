@@ -92,3 +92,27 @@ func TestNormalizeMAC(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRoutesAndGateway(t *testing.T) {
+	routes := ParseRoutes("default via 172.17.0.1 dev docker0\ndefault via 192.168.50.1 dev br-lan proto static metric 100\n10.0.0.0/8 dev wg0 scope link\n")
+
+	if len(routes) != 2 || routes[1].Gateway.String() != "192.168.50.1" || routes[1].Interface != "br-lan" {
+		t.Fatalf("routes = %+v", routes)
+	}
+
+	network := HostNetwork{
+		Addresses: nil,
+		Neighbors: nil,
+		Routes:    routes,
+	}
+
+	// Шлюз docker пропускается, роутер — шлюз в сети LAN.
+	if gateway := network.Gateway([]string{"192.168.50.0/24"}); gateway != "192.168.50.1" {
+		t.Errorf("gateway = %q", gateway)
+	}
+
+	// Шлюз вне сетей LAN (например, провайдера на WAN) — не роутер сети.
+	if gateway := network.Gateway([]string{"10.10.0.0/16"}); gateway != "" {
+		t.Errorf("gateway outside LAN = %q", gateway)
+	}
+}

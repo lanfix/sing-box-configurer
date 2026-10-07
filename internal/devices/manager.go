@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/netip"
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lanfix/sing-box-configurer/internal/platform"
@@ -25,6 +27,11 @@ const (
 	// seenTTL и maxSeen ограничивают список найденных устройств.
 	seenTTL = 30 * 24 * time.Hour
 	maxSeen = 300
+
+	// nameRefresh — как часто перепроверяется имя устройства в сети, nameWorkers — сколько устройств опрашивается
+	// одновременно.
+	nameRefresh = time.Hour
+	nameWorkers = 8
 )
 
 // ErrUnknownProfile — rule-set для такого профиля не отдается.
@@ -36,11 +43,12 @@ type appDataSection struct {
 }
 
 // Options — зависимости менеджера. Без Network устройства не находятся, без SingBox поддержка не проверяется
-// и профили не рендерятся.
+// и профили не рендерятся, без Names имена устройств не запрашиваются.
 type Options struct {
 	Network  platform.Network
 	SingBox  platform.SingBox
 	Versions VersionSource
+	Names    NameResolver
 }
 
 // DeviceView — устройство для интерфейса: профиль и последние сведения из таблицы соседей.
@@ -54,6 +62,12 @@ type DeviceView struct {
 	FirstSeen *time.Time `json:"first_seen,omitempty"`
 	LastSeen  *time.Time `json:"last_seen,omitempty"`
 	Online    bool       `json:"online"`
+
+	// Hostname — имя, которое сообщило устройство или роутер, Vendor — производитель по MAC-адресу.
+	Hostname   string `json:"hostname,omitempty"`
+	NameSource string `json:"name_source,omitempty"`
+	Vendor     string `json:"vendor,omitempty"`
+	RandomMAC  bool   `json:"random_mac"`
 }
 
 // State — данные страницы «Устройства».
@@ -79,6 +93,10 @@ type Manager struct {
 	appData *appdata.File
 	network platform.Network
 	support *supportChecker
+	names   NameResolver
+
+	// resolving — идет опрос имен (следующий не запускается, пока не закончится этот).
+	resolving atomic.Bool
 
 	mu   sync.RWMutex
 	data Data
@@ -102,13 +120,16 @@ func NewManager(appData *appdata.File, opts Options) (*Manager, error) {
 			support:   Support{},
 			attemptAt: time.Time{},
 		},
-		mu: sync.RWMutex{},
+		names:     opts.Names,
+		resolving: atomic.Bool{},
+		mu:        sync.RWMutex{},
 		data: Data{
 			Devices:  []Device{},
 			Settings: DefaultSettings(),
 			Detected: Detected{
 				Networks:      []string{},
 				HostAddresses: []string{},
+				Gateway:       "",
 				UpdatedAt:     time.Time{},
 			},
 			Seen: []Seen{},
@@ -158,6 +179,7 @@ func (m *Manager) load(data Data) {
 		m.data.Detected.HostAddresses = data.Detected.HostAddresses
 	}
 
+	m.data.Detected.Gateway = data.Detected.Gateway
 	m.data.Detected.UpdatedAt = data.Detected.UpdatedAt
 
 	if data.Seen != nil {
@@ -213,16 +235,39 @@ func (m *Manager) Scan(ctx context.Context) error {
 
 	output, err := m.network.Read(ctx)
 
+	targets, gateway, err := m.applyScan(output, err)
+
+	// Имена запрашиваются в фоне: опрос устройств занимает секунды.
+	if len(targets) > 0 && m.resolving.CompareAndSwap(false, true) {
+		go func() {
+			defer m.resolving.Store(false)
+
+			m.resolveNames(context.Background(), targets, gateway)
+		}()
+	}
+
+	return err
+}
+
+// nameTarget — устройство, имя которого пора запросить.
+type nameTarget struct {
+	mac string
+	ip  netip.Addr
+}
+
+// applyScan обновляет найденные устройства, сети LAN и адреса хоста по выводу команд ip. Возвращает устройства,
+// имена которых пора запросить, и адрес роутера.
+func (m *Manager) applyScan(output platform.NetworkOutput, readErr error) ([]nameTarget, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	now := time.Now()
 	m.scannedAt = now
 
-	if err != nil {
-		m.scanError = err.Error()
+	if readErr != nil {
+		m.scanError = readErr.Error()
 
-		return err
+		return nil, "", readErr
 	}
 
 	m.scanError = ""
@@ -230,16 +275,118 @@ func (m *Manager) Scan(ctx context.Context) error {
 	network := HostNetwork{
 		Addresses: ParseAddresses(output.Addresses),
 		Neighbors: ParseNeighbors(output.Neighbors),
+		Routes:    ParseRoutes(output.Routes),
 	}
 
 	changed := m.updateDetectedLocked(network, now)
 	changed = m.updateSeenLocked(network.lanNeighbors(), now) || changed
+	targets := m.nameTargetsLocked(now)
 
 	if !changed && time.Since(m.savedAt) < seenSaveInterval {
+		return targets, m.data.Detected.Gateway, nil
+	}
+
+	return targets, m.data.Detected.Gateway, m.saveLocked()
+}
+
+// nameTargetsLocked возвращает устройства в сети, имя которых еще не запрашивалось или запрашивалось давно.
+func (m *Manager) nameTargetsLocked(now time.Time) []nameTarget {
+	if m.names == nil {
 		return nil
 	}
 
-	return m.saveLocked()
+	targets := make([]nameTarget, 0)
+
+	for _, seen := range m.data.Seen {
+		if !m.online[seen.MAC] || now.Sub(seen.NameCheckedAt) < nameRefresh {
+			continue
+		}
+
+		if ip, ok := preferredIP(seen.IPs); ok {
+			targets = append(targets, nameTarget{
+				mac: seen.MAC,
+				ip:  ip,
+			})
+		}
+	}
+
+	return targets
+}
+
+// resolveNames запрашивает имена устройств targets и сохраняет найденные. Если имя не нашлось,
+// остается прежнее: устройство могло просто не ответить.
+func (m *Manager) resolveNames(ctx context.Context, targets []nameTarget, gateway string) {
+	router, _ := netip.ParseAddr(gateway)
+	results := make([][2]string, len(targets))
+	slots := make(chan struct{}, nameWorkers)
+
+	var wg sync.WaitGroup
+
+	for i, target := range targets {
+		wg.Add(1)
+
+		slots <- struct{}{}
+
+		go func() {
+			defer wg.Done()
+			defer func() {
+				<-slots
+			}()
+
+			name, source := m.names.Resolve(ctx, target.ip, router)
+			results[i] = [2]string{name, source}
+		}()
+	}
+
+	wg.Wait()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+
+	for i, target := range targets {
+		index := slices.IndexFunc(m.data.Seen, func(seen Seen) bool {
+			return seen.MAC == target.mac
+		})
+		if index < 0 {
+			continue
+		}
+
+		seen := &m.data.Seen[index]
+		seen.NameCheckedAt = now
+
+		if name, source := results[i][0], results[i][1]; name != "" {
+			seen.Hostname = name
+			seen.NameSource = source
+		}
+	}
+
+	if err := m.saveLocked(); err != nil {
+		log.Printf("Devices: %v", err)
+	}
+}
+
+// preferredIP возвращает адрес для запроса имени: первый IPv4, иначе первый адрес.
+func preferredIP(ips []string) (netip.Addr, bool) {
+	var fallback netip.Addr
+
+	for _, value := range ips {
+		ip, err := netip.ParseAddr(value)
+		if err != nil {
+			continue
+		}
+
+		if ip.Is4() {
+			return ip, true
+		}
+
+		if !fallback.IsValid() {
+			fallback = ip
+		}
+	}
+
+	return fallback, fallback.IsValid()
 }
 
 // updateDetectedLocked запоминает найденные сети LAN и адреса хоста. Пустой результат не затирает прежний:
@@ -255,6 +402,11 @@ func (m *Manager) updateDetectedLocked(network HostNetwork, now time.Time) bool 
 
 	if len(hostAddresses) > 0 && !slices.Equal(hostAddresses, m.data.Detected.HostAddresses) {
 		m.data.Detected.HostAddresses = hostAddresses
+		changed = true
+	}
+
+	if gateway := network.Gateway(m.data.Detected.Networks); gateway != "" && gateway != m.data.Detected.Gateway {
+		m.data.Detected.Gateway = gateway
 		changed = true
 	}
 
@@ -274,11 +426,14 @@ func (m *Manager) updateSeenLocked(neighbors []Neighbor, now time.Time) bool {
 		entry, ok := current[neighbor.MAC]
 		if !ok {
 			entry = &Seen{
-				MAC:       neighbor.MAC,
-				IPs:       []string{},
-				Interface: neighbor.Interface,
-				FirstSeen: now,
-				LastSeen:  now,
+				MAC:           neighbor.MAC,
+				IPs:           []string{},
+				Interface:     neighbor.Interface,
+				FirstSeen:     now,
+				LastSeen:      now,
+				Hostname:      "",
+				NameSource:    "",
+				NameCheckedAt: time.Time{},
 			}
 			current[neighbor.MAC] = entry
 		}
@@ -306,9 +461,11 @@ func (m *Manager) updateSeenLocked(neighbors []Neighbor, now time.Time) bool {
 
 		seen := &m.data.Seen[index]
 
+		// С новым адресом имя запрашивается заново: адрес мог перейти к другому устройству.
 		if !slices.Equal(seen.IPs, entry.IPs) || seen.Interface != entry.Interface {
 			seen.IPs = entry.IPs
 			seen.Interface = entry.Interface
+			seen.NameCheckedAt = time.Time{}
 			changed = true
 		}
 
@@ -396,15 +553,19 @@ func (m *Manager) State() State {
 // viewLocked возвращает устройство mac со сведениями из таблицы соседей.
 func (m *Manager) viewLocked(mac string) DeviceView {
 	view := DeviceView{
-		MAC:       mac,
-		Name:      "",
-		Profile:   "",
-		AddedAt:   nil,
-		IPs:       []string{},
-		Interface: "",
-		FirstSeen: nil,
-		LastSeen:  nil,
-		Online:    m.online[mac],
+		MAC:        mac,
+		Name:       "",
+		Profile:    "",
+		AddedAt:    nil,
+		IPs:        []string{},
+		Interface:  "",
+		FirstSeen:  nil,
+		LastSeen:   nil,
+		Online:     m.online[mac],
+		Hostname:   "",
+		NameSource: "",
+		Vendor:     Vendor(mac),
+		RandomMAC:  IsRandomMAC(mac),
 	}
 
 	for _, seen := range m.data.Seen {
@@ -418,6 +579,8 @@ func (m *Manager) viewLocked(mac string) DeviceView {
 		view.Interface = seen.Interface
 		view.FirstSeen = &firstSeen
 		view.LastSeen = &lastSeen
+		view.Hostname = seen.Hostname
+		view.NameSource = seen.NameSource
 	}
 
 	return view
@@ -557,7 +720,8 @@ func (m *Manager) RuleSet(ctx context.Context, profile string) (rules.SingBoxRul
 	return m.data.ruleSet(profile), nil
 }
 
-// LookupIP возвращает MAC-адрес и имя устройства с адресом ip из последнего чтения таблицы соседей.
+// LookupIP возвращает MAC-адрес и имя устройства с адресом ip из последнего чтения таблицы соседей:
+// заданное на странице «Устройства», иначе найденное в сети.
 func (m *Manager) LookupIP(ip string) (string, string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -567,9 +731,9 @@ func (m *Manager) LookupIP(ip string) (string, string, bool) {
 			continue
 		}
 
-		name := ""
+		name := seen.Hostname
 
-		if index := m.indexLocked(seen.MAC); index >= 0 {
+		if index := m.indexLocked(seen.MAC); index >= 0 && m.data.Devices[index].Name != "" {
 			name = m.data.Devices[index].Name
 		}
 
@@ -577,6 +741,14 @@ func (m *Manager) LookupIP(ip string) (string, string, bool) {
 	}
 
 	return "", "", false
+}
+
+// Gateway возвращает адрес роутера сети: ему уходят обратные DNS-запросы для частных адресов.
+func (m *Manager) Gateway() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.data.Detected.Gateway
 }
 
 // indexLocked возвращает индекс устройства с MAC-адресом mac или -1 (без блокировки).

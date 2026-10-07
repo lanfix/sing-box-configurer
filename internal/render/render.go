@@ -29,6 +29,9 @@ const (
 	// HostsServerTag — тег DNS-сервера с DNS-записями конфигуратора.
 	HostsServerTag = RuleSetTagPrefix + "-hosts"
 
+	// LANServerTag — DNS-сервер роутера для обратных запросов по частным адресам.
+	LANServerTag = RuleSetTagPrefix + "-lan"
+
 	// httpClientTag — HTTP-клиент, через который sing-box загружает rule-set-ы.
 	httpClientTag = "default_http_client"
 
@@ -43,6 +46,17 @@ const (
 	deviceProfileDirect  = "direct"
 	deviceProfileBlocked = "blocked"
 )
+
+// privateReverseZones — зоны обратного DNS частных адресов (RFC 1918 и IPv6 ULA): имена в них знает только роутер.
+var privateReverseZones = []any{
+	"10.in-addr.arpa",
+	"16.172.in-addr.arpa", "17.172.in-addr.arpa", "18.172.in-addr.arpa", "19.172.in-addr.arpa",
+	"20.172.in-addr.arpa", "21.172.in-addr.arpa", "22.172.in-addr.arpa", "23.172.in-addr.arpa",
+	"24.172.in-addr.arpa", "25.172.in-addr.arpa", "26.172.in-addr.arpa", "27.172.in-addr.arpa",
+	"28.172.in-addr.arpa", "29.172.in-addr.arpa", "30.172.in-addr.arpa", "31.172.in-addr.arpa",
+	"168.192.in-addr.arpa",
+	"c.f.ip6.arpa", "d.f.ip6.arpa",
+}
 
 // baseTemplate — постоянная часть конфига: tun и dns inbound-ы, встроенные outbound-ы, служебные
 // маршруты, HTTP-клиент и experimental.
@@ -84,6 +98,9 @@ type Devices struct {
 
 	// DirectDNSServer — DNS-сервер для устройств без обхода (пусто — общие DNS-правила).
 	DirectDNSServer string
+
+	// Router — адрес роутера сети: ему уходят обратные DNS-запросы для частных адресов (имена устройств).
+	Router string
 }
 
 // SourcesProxyTag — тег служебного mixed-inbound-а, через который конфигуратор загружает URL-источники с detour.
@@ -548,6 +565,21 @@ func (r *renderer) renderDNS(config map[string]any) {
 
 		servers = append(servers, server)
 		dnsRules = append(dnsRules, rule)
+	}
+
+	// Имена устройств сети знает роутер (из DHCP): публичные DNS-серверы на обратные запросы для частных
+	// адресов отвечают NXDOMAIN.
+	if router := r.in.Devices.Router; router != "" {
+		servers = append(servers, map[string]any{
+			"type":   "udp",
+			"tag":    LANServerTag,
+			"server": router,
+		})
+
+		dnsRules = append(dnsRules, map[string]any{
+			"domain_suffix": privateReverseZones,
+			"server":        LANServerTag,
+		})
 	}
 
 	// Устройства без обхода резолвят все домены своим DNS-сервером, мимо DNS-серверов групп.

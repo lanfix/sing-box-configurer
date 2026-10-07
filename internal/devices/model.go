@@ -68,9 +68,13 @@ type Settings struct {
 // Detected — последние найденные сети LAN и адреса хоста. Хранятся, чтобы политика не пропадала,
 // пока сеть хоста недоступна (например, sing-box перезапускается).
 type Detected struct {
-	Networks      []string  `json:"networks"`
-	HostAddresses []string  `json:"host_addresses"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	Networks      []string `json:"networks"`
+	HostAddresses []string `json:"host_addresses"`
+
+	// Gateway — роутер сети (шлюз по умолчанию в сети LAN): у него запрашиваются имена устройств.
+	Gateway string `json:"gateway,omitempty"`
+
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Seen — устройство, найденное в таблице соседей хоста.
@@ -80,6 +84,11 @@ type Seen struct {
 	Interface string    `json:"interface"`
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
+
+	// Hostname — имя устройства от роутера, mDNS или NetBIOS (источник — NameSource).
+	Hostname      string    `json:"hostname,omitempty"`
+	NameSource    string    `json:"name_source,omitempty"`
+	NameCheckedAt time.Time `json:"name_checked_at"`
 }
 
 // Data — раздел "devices" файла app.json.
